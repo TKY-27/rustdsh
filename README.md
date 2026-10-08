@@ -7,7 +7,7 @@
 [![docs](https://github.com/jimoto-no-llm/rustdsh/actions/workflows/docs.yml/badge.svg)](https://github.com/jimoto-no-llm/rustdsh/actions/workflows/docs.yml)
 [![release](https://img.shields.io/github/v/release/jimoto-no-llm/rustdsh.svg)](https://github.com/jimoto-no-llm/rustdsh/releases)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![rust](https://img.shields.io/badge/rust-1.73%2B-orange.svg)](https://www.rust-lang.org/)
+[![rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org/)
 
 [日本語版](README.ja.md)
 
@@ -118,7 +118,7 @@ you at the DeepSeek prompt: run `rdsh setup` (or `rdsh setup --login` to
 start the Codex/opencode OAuth flow right away).
 
 Or build directly: `cargo build --release` produces `target/release/rdsh`.
-Requires Rust 1.73+.
+Requires Rust 1.85+.
 
 ## Usage
 

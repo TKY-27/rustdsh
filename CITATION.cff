@@ -5,4 +5,5 @@ type: software
 repository-code: https://github.com/jimoto-no-llm/rustdsh
 license: MIT
 authors:
-  - github: sahenjp
+  - name: sahenjp
+    website: https://github.com/sahenjp

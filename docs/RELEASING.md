@@ -52,7 +52,10 @@ Generation failure stops publication.
 
    This generates a local file; it does not create a tag or publish a release.
    Check the PR range, author credits, comparison URL and installation commands.
-   `--previous-tag` is optional; GitHub selects the previous release by default.
+   To select a comparison base, first record `<!-- previous-tag: vPREVIOUS -->`
+   in the authored part of the version's notes. Preview and automated publication
+   both read it. `--previous-tag` may confirm the recorded value, but cannot
+   override it. Without the comment, omit this flag and GitHub selects the base.
 6. From the verified release commit, create and push an annotated tag:
 
    ```sh
@@ -104,8 +107,8 @@ leave a draft. Never manually publish an incomplete draft.
 Branch from the published tag, apply the fix through a reviewed PR, bump the patch
 version, update the CHANGELOG and notes, and create a **new** annotated tag.
 When the release range differs from the previous release, preview using the correct
-`--previous-tag`. The publish API uses GitHub's default previous-release selection;
-check its range before publishing a hotfix on an older release line.
+`previous-tag` comment in the release notes. Preview and publication then use the
+same range even when a newer release already exists.
 
 Never move or delete a published tag. The repository's `Protect release tags`
 ruleset blocks updates and deletion of `v*` tags; it allows creating new tags.

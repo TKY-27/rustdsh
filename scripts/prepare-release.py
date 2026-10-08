@@ -12,6 +12,16 @@ TAG = re.compile(r"v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(alpha|beta|rc)\
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def previous_tag(notes, requested=None):
+    recorded = re.findall(r"<!--\s*previous-tag:\s*(.*?)\s*-->", notes)
+    if len(recorded) > 1 or (recorded and not TAG.fullmatch(recorded[0])):
+        raise ValueError("record one valid previous-tag in release notes")
+    base = recorded[0] if recorded else None
+    if requested is not None and requested != base:
+        raise ValueError("persist --previous-tag as '<!-- previous-tag: vX.Y.Z -->' in release notes")
+    return base
+
+
 def validate(root, tag):
     if not TAG.fullmatch(tag):
         raise ValueError("tag must be vX.Y.Z or vX.Y.Z-{alpha,beta,rc}.N")
@@ -41,6 +51,13 @@ def validate(root, tag):
         raise ValueError("include Unix and Windows installation instructions")
     if "-" in tag and "/releases/latest/" in authored:
         raise ValueError("prerelease installation must use the exact tag URL, not latest")
+    if "-" in tag:
+        installers = re.findall(r"/releases/(latest/download|download/[^/\s`<>]+)/install\.(sh|ps1)", authored)
+        if (not any(asset == "sh" for _, asset in installers)
+                or any(channel != f"download/{tag}" for channel, _ in installers)):
+            raise ValueError("prerelease installer URLs must use this exact tag URL")
+    if previous_tag(authored) == tag:
+        raise ValueError("previous-tag must differ from the release tag")
     return authored
 
 
@@ -66,11 +83,12 @@ def main():
     args = parser.parse_args()
     try:
         authored = validate(args.root, args.tag)
+        base = previous_tag(authored, args.previous_tag)
         if args.output:
             command = ["gh", "api", f"repos/{args.repo}/releases/generate-notes", "--method", "POST",
                        "-f", f"tag_name={args.tag}", "-f", "configuration_file_path=.github/release.yml"]
-            if args.previous_tag:
-                command += ["-f", f"previous_tag_name={args.previous_tag}"]
+            if base:
+                command += ["-f", f"previous_tag_name={base}"]
             generated = json.loads(subprocess.check_output(command, text=True, encoding="utf-8"))["body"]
             args.output.write_text(compose(authored, generated, args.repo), encoding="utf-8")
         print(f"Validated {args.tag} ({'prerelease' if '-' in args.tag else 'stable'})")
