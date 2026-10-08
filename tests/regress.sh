@@ -173,7 +173,7 @@ SWB="$RR_SANDBOX/searchweb"
 mkdir -p $SWB
 printf "%s" "<html><body><article class=\"result\"><h3><a href=\"https://example.com/a\">Alpha result</a></h3><p class=\"content\">first snippet</p></article><article class=\"result\"><h3><a href=\"https://example.com/b\">Beta result</a></h3></article></body></html>" > $SWB/fixture.html
 python3 - "$SWB/fixture.html" "$SWB/port" <<PYEOF >"$SWB/server.log" 2>&1 &
-import http.server, sys
+import http.server, socketserver, sys
 page = open(sys.argv[1], "rb").read()
 class H(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
@@ -185,7 +185,14 @@ class H(http.server.BaseHTTPRequestHandler):
         self.wfile.write(body)
     def log_message(self, *a):
         pass
-server = http.server.HTTPServer(("127.0.0.1", 0), H)
+# HTTPServer normally reverse-resolves its bound address during startup.
+# This loopback fixture needs no DNS and must also work with a stalled resolver.
+class S(http.server.HTTPServer):
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        self.server_name = "localhost"
+        self.server_port = self.server_address[1]
+server = S(("127.0.0.1", 0), H)
 with open(sys.argv[2], "w") as ready:
     ready.write(str(server.server_address[1]))
 server.serve_forever()

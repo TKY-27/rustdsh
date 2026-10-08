@@ -111,8 +111,9 @@ A tracked `dashboard/node_modules` symlink referred to a developer’s absolute
 local checkout, which made dependency installation nonportable. It was removed;
 dependencies remain ignored and are installed through the locked package file.
 The shell web-search fixture now binds port zero, publishes its actual port,
-and records startup/client errors instead of hiding them after a fixed-port
-macOS failure.
+and records startup/client errors instead of hiding them. Its HTTPServer
+subclass avoids reverse DNS during bind; the exact embedded fixture also passed
+with reverse resolution deliberately disabled after a macOS startup failure.
 
 The existing [browser E2E runner](../../tests/e2e/README.md) passed with the final
 local binary: setup persistence, authenticated native tokens/prune/sessions,
@@ -120,3 +121,8 @@ and project MCP questions/browser answers/SSE drafts/restart key revocation.
 It used isolated directories, loopback only, no model or Tailscale, desktop/mobile
 viewports, and reported no page or console errors. See
 [the actual browser result](search-performance/browser-final.json).
+
+The GitHub open CodeQL-alert API returned an empty list. Dependabot alerts
+are disabled, so that API could not establish dependency safety; a fresh
+production `npm audit` for the locked dashboard tree reported zero known
+vulnerabilities. These advisory results do not prove absence of unknown bugs.
