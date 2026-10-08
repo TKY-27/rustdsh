@@ -99,6 +99,40 @@ isolated the test environment, bounded FIFO-test cleanup, and added the
 eleventh regression. No credentials or session transcript are included in
 this report.
 
+## Independent PR re-review
+
+Re-reviewed `be16d68efa511bdaeb52e6b81dbd2321cd12a413`, integrating contributor
+head `c968b8f8b4da812ed26bb29cabc0143a9fec1a12` and current main
+`98abc67d7e5c5d3f2a5321d9a56adb6a83ff93e2`. The merge retains main's
+schema-2 cache and incomplete/stale token flags, no-follow log confinement,
+and the contributor's loopback fixture without reverse-DNS startup.
+
+Addressed the additional `logs --file` review: bare filenames remain relative
+to the logs root; separator-containing relative paths retain their existing
+working-directory meaning, with the same canonical-root and Unix handle
+checks afterward. Four valid selection forms retain exact stdout while an
+absolute outside dummy file is refused. The actual
+[main/candidate output diff](search-performance/rereview-log-compat.json)
+records source commits and binary hashes. The corresponding cross-platform
+regression covers bare names, `dsh/logs/app.log` and `./dsh/logs/app.log`.
+
+An isolated release build of this re-review source passed 103 Rust tests,
+7 benchmark-example tests, 36 Node security tests (zero skips), 53 CLI checks,
+20 settings checks, 21 context checks and 6 release-artifact tests. Formatting
+and all-target release Clippy with warnings denied passed. These are separate
+from the contributor's audited dispatcher, approval and browser evidence above.
+
+Independent three-sample medians on a Ryzen 9 7950X3D WSL host measured the
+dense fixture at 128.802ms before and 4.794ms after, with peak RSS
+132352/3328KiB. The baseline release binary's native sources match main
+`98abc67`; absolute values depend on the host and warm filesystem cache.
+The 12 timing-fixture outputs and all 192 compatibility cases matched under
+default, one-CPU and two-CPU affinity. Full independent raw samples:
+[default](search-performance/rereview-default.json),
+[one CPU](search-performance/rereview-one-cpu.json),
+[two CPUs](search-performance/rereview-two-cpu.json).
+No real models, secrets, paid APIs or production updates were used.
+
 ## Integration with concurrent main changes
 
 Main `98abc67` was merged into this branch before final validation. Cache schema
