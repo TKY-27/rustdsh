@@ -87,7 +87,12 @@ assets and validates them again. Incomplete or corrupt assets stop publication.
 
 Stable versions publish as `latest`. Candidates publish with `prerelease=true`
 and `latest=false`, preserving the current stable installer channel. The workflow
-refuses to overwrite a published release; only drafts can be retried. Concurrent
+refuses to overwrite a published release. Draft retries compare existing assets
+with the verified local set, reuse identical files and upload only missing files.
+Any differing or unexpected asset stops the retry before upload; no asset is
+deleted or overwritten. A rebuilt archive may differ even at the same tag, so
+rerun only failed jobs while the original staged artifacts remain available
+(seven days) rather than rebuilding the successful jobs. Concurrent
 runs for the same tag are serialized and never cancel an upload in progress.
 
 After publication, confirm the body, 12 assets and correct channel in GitHub.

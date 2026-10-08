@@ -119,7 +119,17 @@ jobs:
           else
             gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --draft --title "$RELEASE_TAG" --notes-file "$RUNNER_TEMP/release-notes.md"
           fi
-          gh release upload "$RELEASE_TAG" "$directory"/* --repo "$GITHUB_REPOSITORY" --clobber
+          # Preserve draft assets on retries. Compare all existing bytes first.
+          existing="$RUNNER_TEMP/rdsh-release-existing"
+          mkdir -p "$existing"
+          if [ "$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets | length')" -gt 0 ]; then
+            gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir "$existing"
+          fi
+          python3 scripts/verify-release-assets.py "$directory" --existing-directory "$existing" --missing-output "$RUNNER_TEMP/release-missing"
+          mapfile -t pending < "$RUNNER_TEMP/release-missing"
+          if [ "${#pending[@]}" -gt 0 ]; then
+            gh release upload "$RELEASE_TAG" "${pending[@]}" --repo "$GITHUB_REPOSITORY"
+          fi
           # Re-download and check the actual release assets before publication.
           uploaded="$RUNNER_TEMP/rdsh-release-uploaded"
           mkdir -p "$uploaded"
