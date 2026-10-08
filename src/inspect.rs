@@ -637,15 +637,17 @@ fn session_decompressed_bytes_uncached(
     let mut estimated = false;
     let mut deferred = vec![];
     for e in entries.filter_map(|e| e.ok()) {
-        // Never measure through a link: sizes must describe files inside.
-        if !e.file_type().is_ok_and(|t| t.is_file()) {
-            continue;
-        }
         let p = e.path();
         let Some(name) = p.file_name().map(|s| s.to_string_lossy().into_owned()) else {
             continue;
         };
         if !name.ends_with(".zstd") {
+            continue;
+        }
+        // Never follow linked or unreadable compressed entries. Excluding one
+        // leaves the session total incomplete, so do not promote it to exact.
+        if !e.file_type().is_ok_and(|t| t.is_file()) {
+            estimated = true;
             continue;
         }
         match zstd_frame_content_size(&p) {
