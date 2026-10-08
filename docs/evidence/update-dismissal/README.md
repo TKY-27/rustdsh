@@ -27,7 +27,7 @@ It is not a mockup or a recording of a production account.
 
 - Five browser flows passed without page/console errors; see
   [actual results and source hashes](verification.json).
-- Node plugin/settings/banner/model-fence/security/isolation suites: 48 passes,
+- Node plugin/settings/banner/model-fence/security/isolation suites: 49 passes,
   zero skipped. API cases cover 401/403 before body reads, missing authentication
   service, bounded/malformed bodies, mismatched targets, idempotent concurrent
   requests, private permissions and planted file/directory links.

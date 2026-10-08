@@ -13,8 +13,8 @@
   "before": "Same target with a changed timestamp reappears on the next poll",
   "baseline_commit": "b7120ff2f9d8acbb25664e4efc675c73ca7548c5",
   "source_sha256": {
-    "plugins/rdsh-update-banner/client.js": "3ac326599d204ec6d05210d54d92dbac9692fc4c5ea8d49c53d9da0ca0c8e930",
-    "plugins/rdsh-update-banner/index.js": "9bf681a53f664b5c2d4e5f3ea9c12650d0ab12ff21a425848a545713e57beac1"
+    "plugins/rdsh-update-banner/client.js": "143298cc111de2e4dbed87d7b2724430ff0df04d337cc971a1b6b8909ff1112a",
+    "plugins/rdsh-update-banner/index.js": "11ee199b7cf82467698684fa19dc27b3e3f466d22e2736a727c405f054858d57"
   },
   "review": {
     "reviewer": "user-authorized existing Muse Spark session",

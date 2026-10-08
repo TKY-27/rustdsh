@@ -108,7 +108,9 @@ test('old expired records migrate and corrupt records do not break rendering', a
   const fixture = host({ storage }); fixture.render(); await settle(); assert.equal(fixture.render(), null);
   assert.equal(storage.get(key(update())), '1');
   assert.equal(fixture.posts.length, 1); // Migrated dismissal also reaches the account.
-  await shown({ storage: new Map([['rdsh-update-dismissed', '{broken']]) });
+  for (const raw of ['{broken', JSON.stringify({ key: 'v-nextX' }), 'null', '[]']) {
+    await shown({ storage: new Map([['rdsh-update-dismissed', raw]]) });
+  }
 });
 test('another tab closes an already visible banner immediately and persists on remount', async () => {
   const storage = new Map(); const a = await shown({ storage }); const b = await shown({ storage });
@@ -165,7 +167,7 @@ test('account-wide dismissal API preserves authentication and isolated update st
       assert.equal(result.status, rejection); assert.equal(result.consumed, false);
     }
     assert.equal((await request('/api/rdsh-update/dismiss')).status, 405);
-    for (const body of ['{bad', 'null', '[]', '{}', JSON.stringify({ to: 'x'.repeat(513), kind: 'dsh' }), ' '.repeat(4097)]) {
+    for (const body of ['{bad', 'null', '[]', '{}', JSON.stringify({ to: 'v-next', kind: '' }), JSON.stringify({ to: 'x'.repeat(513), kind: 'dsh' }), ' '.repeat(4097)]) {
       assert.equal((await request('/api/rdsh-update/dismiss', { method: 'POST', body })).status, 400);
     }
     assert.equal((await dismiss(update('wrong'))).status, 409);
@@ -188,6 +190,10 @@ test('account-wide dismissal API preserves authentication and isolated update st
       assert.match(name, /^[a-f0-9]{64}$/);
       if (process.platform !== 'win32') assert.equal((await stat(path.join(markers, name))).mode & 0o777, 0o600);
     }
+    await setState(update('v-without-kind', { kind: '' }));
+    assert.equal((await get()).data.kind, 'update');
+    assert.equal((await dismiss(update('v-without-kind', { kind: 'update' }))).status, 200);
+    assert.equal((await get()).data.dismissed, true);
   });
   if (process.platform !== 'win32') await t.test('planted marker links cannot truncate outside files; linked directories are refused', async () => {
     const outside = path.join(root, 'DUMMY-outside'); await writeFile(outside, 'DUMMY_UNCHANGED');
@@ -202,5 +208,12 @@ test('account-wide dismissal API preserves authentication and isolated update st
     await rm(markers, { recursive: true }); const elsewhere = path.join(root, 'elsewhere'); await mkdir(elsewhere);
     await symlink(elsewhere, markers); assert.equal((await dismiss(value)).status, 500);
     assert.deepEqual(await readdir(elsewhere), []);
+  });
+  await t.test('demo dismissal never writes account state', async () => {
+    const before = await readdir(markers);
+    const disposeDemo = updates.apply(ctx, { demo: true });
+    assert.equal((await dismiss({ kind: 'demo', to: '0.2.1-rc.1' })).status, 200);
+    assert.deepEqual(await readdir(markers), before);
+    disposeDemo();
   });
 });

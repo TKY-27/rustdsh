@@ -155,7 +155,7 @@ export function apply(ctx, config) {
           }
           input = JSON.parse(Buffer.concat(chunks).toString("utf8"));
           if (!input || typeof input.to !== "string" || !input.to || input.to.length > 512 ||
-              typeof input.kind !== "string" || input.kind.length > 64) throw new Error("invalid target");
+              typeof input.kind !== "string" || !input.kind || input.kind.length > 64) throw new Error("invalid target");
         } catch (error) { return json(res, 400, { ok: false, error: "invalid-target" }); }
         try {
           // Demo closes locally without creating any account state.
@@ -185,7 +185,7 @@ async function readState() {
   try {
     const raw = await readFile(join(updateDirectory(), "update-state.json"), "utf8");
     const s = JSON.parse(raw);
-    const state = { ok: true, updated: !!s.updated, kind: typeof s.kind === "string" ? s.kind : "update", from: s.from || null, to: s.to || null, at: s.at || null };
+    const state = { ok: true, updated: !!s.updated, kind: typeof s.kind === "string" && s.kind ? s.kind : "update", from: s.from || null, to: s.to || null, at: s.at || null };
     return { ...state, dismissed: await wasDismissed(state) };
   } catch (e) {
     return { ok: true, updated: false };

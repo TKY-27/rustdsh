@@ -36,7 +36,8 @@ window.__ModuleLoader__.load({
         }
         // Migrate the previous timestamp-based record, including expired ones.
         const old = JSON.parse(localStorage.getItem(DISMISS_KEY) || "null");
-        if (typeof old?.key === "string" && old.key.slice(0, old.key.lastIndexOf("@")) === j.to) {
+        const separator = typeof old?.key === "string" ? old.key.lastIndexOf("@") : -1;
+        if (separator > 0 && old.key.slice(0, separator) === j.to) {
           remember(j);
           return true;
         }
