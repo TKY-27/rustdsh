@@ -1,5 +1,5 @@
 {
-  "source_sha256": "9fbcd147acd5fb0702c3e6df9d207dba75563b76dbf76aaed3deb86dec4dfe60",
+  "source_sha256": "ad3e5003f51188335d5e54b0fa2b636ca37089cfd0d83fb715ef461f17656726",
   "source_preserved_byte_for_byte": true,
   "derived_sizes": [
     256,
@@ -11,13 +11,14 @@
     16
   ],
   "assets": {
-    "icon.png": "9fbcd147acd5fb0702c3e6df9d207dba75563b76dbf76aaed3deb86dec4dfe60",
-    "icon-256.png": "ec78e4af10c359132f45bc854079656110d9d1dabe4d59a913155eedb63e997a",
-    "icon.svg": "1125d8c5ef78a4000278739479d5cc2a7ba76820a88f0c224a818ed88d607545",
-    "icon.ico": "9ccca482a6ffc368f6dda2e7c532c6cc6c687b0157f7528cc0bee773cf7b4bb4"
+    "icon.png": "ad3e5003f51188335d5e54b0fa2b636ca37089cfd0d83fb715ef461f17656726",
+    "icon-256.png": "68015e843f1e901f2adcfd8b87c99ccf6d7e73bf6ea811517b56d34b3e61c6e9",
+    "icon.svg": "d637c2aeff7c73b99500014e528b4dddf2acde2f0d0d1ecab347679b251008aa",
+    "icon.ico": "c8cec5a94bf0a0b81ced74e0489c11e43e0c82070e9aa0f6134280cb2b2c7351"
   },
   "windows_focused_passed": 18,
   "native_static_asset_servers_passed": 2,
   "browser_flows": 8,
-  "historical_assets": "unchanged"
+  "historical_assets": "unchanged",
+  "source_file": "rushDSH.png"
 }

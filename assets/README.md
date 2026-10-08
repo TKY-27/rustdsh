@@ -1,6 +1,6 @@
 # rdsh artwork
 
-`icon.png` is the user-provided 1254 × 1254 transparent PNG, preserved byte for
+`icon.png` is the user-provided rushDSH.png (1254 × 1254 PNG), preserved byte for
 byte. The common artwork is used in README images, browser page headers and
 favicons, the Windows Dashboard notification-area icon, and the Windows
 `rdsh.exe` resource. No external asset host or model call is involved.

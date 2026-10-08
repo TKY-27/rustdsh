@@ -1,6 +1,6 @@
 # Common rdsh icon verification
 
-The supplied PNG is preserved in [assets/icon.png](../../../assets/icon.png).
+The final supplied rushDSH.png is preserved in [assets/icon.png](../../../assets/icon.png).
 README, native serve/setup headers and favicons, the Node Dashboard header and
 favicon, the Windows notification-area helper and Windows executable resource
 use the same artwork. Icon HTTP routes are fixed assets; API authentication
