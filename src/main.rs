@@ -294,8 +294,7 @@ fn main() {
         let raw: Vec<String> = std::env::args().skip(1).collect();
         let first_is_native = raw
             .first()
-            .map(|s| NATIVE_FIRST.contains(&s.as_str()))
-            .unwrap_or(false);
+            .is_some_and(|s| NATIVE_FIRST.contains(&s.as_str()));
         if !first_is_native {
             std::env::set_var("RDSH_SHARED_FILES", "[]");
             let scfg = rdsh_config::load();
