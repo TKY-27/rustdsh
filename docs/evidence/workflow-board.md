@@ -47,3 +47,17 @@ The GIF uses the actual captured before, opened-board and live-update frames:
 ## Scope
 
 This verifies the source preparation toolkit and production-component fixture. It does not install or adopt the patched DSH, run a real model/server workflow, or claim the complete DSH build/GUI/web gates passed. UI projection rules change; the execution engine and persisted events do not. See [tool instructions](../../plugins/workflow-board/README.md).
+
+## Current-main integration, 2026-10-08
+
+Integrated main `98abc67d7e5c5d3f2a5321d9a56adb6a83ff93e2` at
+`06917972415152cdfc7dc1610b365d340ea06ed0`. Native Rust sources are identical
+to that main commit. The CI merge retains both the source-patch checks and
+main's new native E2E, benchmark examples and browser/security jobs.
+Removed main's tracked host-specific `dashboard/node_modules` symlink.
+
+The current Windows Node 22 source-patch run passed 16 tests with one Unix-only
+case skipped. The pinned 18-file patch, manifest and DSH components remain
+unchanged from the 49 focused DSH tests and four browser captures above.
+Those earlier DSH/browser results are not described as newly rerun checks.
+The latest head's shared platform/security CI must pass before merge.
