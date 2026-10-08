@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
-import {mkdtempSync, mkdirSync, writeFileSync, copyFileSync, rmSync, symlinkSync} from 'node:fs';
+import {mkdtempSync, mkdirSync, writeFileSync, copyFileSync, rmSync, symlinkSync, realpathSync} from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -38,7 +38,11 @@ test('metadata delegation uses the selected DSH tree interpreter, resolves alias
     const result=spawnSync(wrapper,['--version'],{env:{...env,RDSH_ORIG_BIN:target},encoding:'utf8'});
     assert.equal(result.status,0,result.stderr);
     const output=JSON.parse(result.stdout);
-    assert.equal(path.normalize(output.node).toLowerCase(),path.normalize(expected).toLowerCase());
+    const canonical=value=>{
+      const resolved=realpathSync.native(value);
+      return process.platform==='win32'?resolved.toLowerCase():resolved;
+    };
+    assert.equal(canonical(output.node),canonical(expected));
     assert.deepEqual(output.args,['--version']);
   }
   check(entry,treeNode);
