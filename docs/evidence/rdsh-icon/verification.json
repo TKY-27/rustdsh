@@ -1,0 +1,23 @@
+{
+  "source_sha256": "9fbcd147acd5fb0702c3e6df9d207dba75563b76dbf76aaed3deb86dec4dfe60",
+  "source_preserved_byte_for_byte": true,
+  "derived_sizes": [
+    256,
+    128,
+    64,
+    48,
+    32,
+    24,
+    16
+  ],
+  "assets": {
+    "icon.png": "9fbcd147acd5fb0702c3e6df9d207dba75563b76dbf76aaed3deb86dec4dfe60",
+    "icon-256.png": "ec78e4af10c359132f45bc854079656110d9d1dabe4d59a913155eedb63e997a",
+    "icon.svg": "1125d8c5ef78a4000278739479d5cc2a7ba76820a88f0c224a818ed88d607545",
+    "icon.ico": "9ccca482a6ffc368f6dda2e7c532c6cc6c687b0157f7528cc0bee773cf7b4bb4"
+  },
+  "windows_focused_passed": 18,
+  "native_static_asset_servers_passed": 2,
+  "browser_flows": 8,
+  "historical_assets": "unchanged"
+}
