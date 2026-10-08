@@ -86,9 +86,14 @@ export async function startWindowsTray({
   let timer, fail;
   try {
     await new Promise((resolve, reject) => {
+      // The launcher allows 60 seconds. Cold PowerShell/WinForms compilation
+      // can exceed 15 seconds; keep a bounded inner deadline with room for IPC.
       timer = setTimeout(
-        () => reject(new Error("Windows tray did not become ready")),
-        15000,
+        () =>
+          reject(
+            new Error("Windows tray did not become ready within 45 seconds"),
+          ),
+        45000,
       );
       fail = () =>
         reject(new Error("Windows notification-area tray is unavailable"));

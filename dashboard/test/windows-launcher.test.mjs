@@ -119,7 +119,9 @@ test(
   "Windows tray launcher detaches only after ready; scoped stop preserves another project",
   {
     skip: process.platform !== "win32",
-    timeout: 60000,
+    // Two sequential launches each have a 60-second readiness deadline, followed
+    // by a verified stop and a liveness check of the other project.
+    timeout: 180000,
   },
   async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "rdsh tray test "));

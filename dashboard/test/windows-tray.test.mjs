@@ -143,6 +143,38 @@ test("failed tray startup cleans only its owned helper", async () => {
   assert.equal(f.server.listenerCount("close"), 0);
 });
 
+test("slow native initialization requires ready and remains bounded before launcher timeout", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let calls = 0;
+  const slow = fixture(async () => {
+    calls++;
+  });
+  let ready = false;
+  slow.pending.then(() => {
+    ready = true;
+  });
+  t.mock.timers.tick(30000);
+  await tick();
+  assert.equal(ready, false);
+  assert.equal(slow.child.killed, undefined);
+  slow.child.stdout.write("ready\n");
+  const tray = await slow.pending;
+  tray.dispose();
+
+  const lost = fixture(async () => {
+    calls++;
+  });
+  const rejected = assert.rejects(lost.pending, /within 45 seconds/);
+  t.mock.timers.tick(44999);
+  await tick();
+  assert.equal(lost.child.killed, undefined);
+  t.mock.timers.tick(1);
+  await rejected;
+  assert.equal(lost.child.killed, true);
+  assert.equal(lost.server.listenerCount("close"), 0);
+  assert.equal(calls, 0);
+});
+
 test("a lost warning pipe cannot leak a rejected stop promise", async () => {
   const f = fixture(async () => {
     throw new Error("unverified");
@@ -162,7 +194,7 @@ test(
   "native Windows menu emits Open and Exit actions",
   {
     skip: process.platform !== "win32",
-    timeout: 25000,
+    timeout: 75000,
   },
   async () => {
     const child = spawn(
@@ -188,7 +220,7 @@ test(
   "native Windows creates a real NotifyIcon and disposes it on server close",
   {
     skip: process.platform !== "win32",
-    timeout: 25000,
+    timeout: 75000,
   },
   async () => {
     const server = new EventEmitter();
