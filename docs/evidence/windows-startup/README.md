@@ -44,3 +44,29 @@ From `dashboard`, reproduce the focused checks with:
 ```powershell
 node --test --test-concurrency=1 test/windows-tray.test.mjs test/windows-launcher.test.mjs test/model-routing.test.mjs
 ```
+
+## Integration with the merged icon
+
+The observations above retain the original `8785f2f` measurement. A second
+series compares actual main `93b3bcaa7759fb27461b02f1dd0b0012e946b329` with
+source `81c4efeed56cafb5fa34ae8a7b185bb29526ba54`; both helpers load the merged
+brand icon. [Current main comparison](windows-main93.json) retains all six
+normal helper exits, alternating samples and each measured file's hash.
+
+| Local Windows / Node 22.23.3           | Main 93b3bca | Current helper |
+| -------------------------------------- | -----------: | -------------: |
+| Ready median, ms                       |       827.51 |         490.88 |
+| Start through observed exit median, ms |     1,054.90 |         666.48 |
+
+The current source passed all 46 Windows process-scope, checkpoint, routing,
+launcher and tray checks without failure, cancellation or skip. Earlier source
+`2283ac1` passed all 198 dashboard tests; this is separate evidence rather than
+a claim that the whole suite ran on `81c4efe`.
+
+The integration also fixes a distinct owned-process observation race seen in
+the Windows `answer-applications` CI: the Job PID list and accounting query can
+disagree while a child exits or spawns. Both must be empty before an
+`exit_confirmed` proof is returned. Contradictions remain `running`, preserving
+the existing stop verification and journal checks. The regression covers both
+query orders without relaxing any startup or stop deadline. Full-suite and
+hosted runner results must still be checked on the final PR head.
