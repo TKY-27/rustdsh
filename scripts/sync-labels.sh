@@ -2,7 +2,7 @@
 # Sync .github/labels.yml to the repo using the gh CLI.
 # Usage: sh scripts/sync-labels.sh   (needs: gh auth login, repo scope)
 set -e
-REPO="${REPO:-sahenjp/rustdsh}"
+REPO="${REPO:-jimoto-no-llm/rustdsh}"
 if ! command -v gh >/dev/null 2>&1; then
   echo "gh CLI not found. See https://cli.github.com/" >&2
   exit 1

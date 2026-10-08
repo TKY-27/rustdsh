@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: Question / Discussion (質問・相談)
-    url: https://github.com/sahenjp/rustdsh/discussions
+    url: https://github.com/jimoto-no-llm/rustdsh/discussions
     about: Usage questions and ideas. Japanese OK.
   - name: Security report (脆弱性の報告)
-    url: https://github.com/sahenjp/rustdsh/security/advisories/new
+    url: https://github.com/jimoto-no-llm/rustdsh/security/advisories/new
     about: Never file vulnerabilities as public issues. See SECURITY.md.
