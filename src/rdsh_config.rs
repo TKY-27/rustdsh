@@ -213,7 +213,7 @@ impl Default for ContextSection {
             working_files: vec![],
             open_tasks: vec![],
             max_code_hits: 20,
-            max_sessions: 10,
+            max_sessions: 0,
             include_git_diff: true,
         }
     }
@@ -282,12 +282,17 @@ pub fn try_load() -> anyhow::Result<RdshSettings> {
         Err(_) if !existed => serde_json::Value::Null,
         Err(e) => {
             return Err(anyhow::anyhow!(
-                "invalid settings file at {path}: {e} (line {}, column {}); run `rdsh settings init --force` (rdsh settings reset) to restore defaults",
+                "invalid settings file at {path}: {e} (line {}, column {}); run `rdsh settings init --force` to restore defaults",
                 e.line(),
                 e.column()
             ));
         }
     };
+    if existed && !parsed.is_object() {
+        return Err(anyhow::anyhow!(
+            "invalid settings file at {path}: expected a JSON object; run `rdsh settings init --force` to restore defaults"
+        ));
+    }
     let has_context = parsed.get("context").is_some_and(|c| !c.is_null());
     let mut cfg = if parsed.is_null() {
         RdshSettings::default()
@@ -310,25 +315,9 @@ impl RdshSettings {
         let mut clean = self.clone();
         clean.sanitize();
         let text = serde_json::to_string_pretty(&clean.to_value())?;
-        #[cfg(unix)]
-        {
-            use std::io::Write;
-            use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-            let mut opts = std::fs::OpenOptions::new();
-            opts.write(true).create(true).truncate(true).mode(0o600);
-            let mut f = opts.open(&path)?;
-            f.write_all(text.as_bytes())?;
-            f.write_all(b"\n")?;
-            drop(f);
-            let mut perm = std::fs::metadata(&path)?.permissions();
-            perm.set_mode(0o600);
-            std::fs::set_permissions(&path, perm)?;
-        }
-        #[cfg(not(unix))]
-        {
-            std::fs::write(&path, format!("{text}\n"))?;
-        }
-        Ok(())
+        // Exclusive random temporary file + rename: never truncate a
+        // repository-controlled link target or expose a partially written file.
+        crate::auth::write_creds(&path, &format!("{text}\n"))
     }
 
     fn from_value(v: &serde_json::Value) -> Self {
@@ -413,7 +402,7 @@ impl RdshSettings {
                 working_files: working_file_list(&cx),
                 open_tasks: list(&cx, "open_tasks", TEXT_CHARS),
                 max_code_hits: clamp_u64(num(&cx, "max_code_hits"), 20, 1, 100) as usize,
-                max_sessions: clamp_u64(num(&cx, "max_sessions"), 10, 0, 100) as usize,
+                max_sessions: clamp_u64(num(&cx, "max_sessions"), 0, 0, 100) as usize,
                 include_git_diff: flag(&cx, "include_git_diff", true),
             },
             extras: ExtrasSection {
@@ -501,7 +490,7 @@ impl RdshSettings {
         out.context.working_files = working_file_list(&cx);
         out.context.open_tasks = list(&cx, "open_tasks", TEXT_CHARS);
         out.context.max_code_hits = clamp_u64(num(&cx, "max_code_hits"), 20, 1, 100) as usize;
-        out.context.max_sessions = clamp_u64(num(&cx, "max_sessions"), 10, 0, 100) as usize;
+        out.context.max_sessions = clamp_u64(num(&cx, "max_sessions"), 0, 0, 100) as usize;
         out.context.include_git_diff = flag(&cx, "include_git_diff", true);
         out
     }
@@ -611,7 +600,7 @@ impl RdshSettings {
             }
             "context.open_tasks" => self.context.open_tasks = parse_list(raw, TEXT_CHARS),
             "context.max_code_hits" => self.context.max_code_hits = parse_usize(raw, 20)? as usize,
-            "context.max_sessions" => self.context.max_sessions = parse_usize(raw, 10)? as usize,
+            "context.max_sessions" => self.context.max_sessions = parse_usize(raw, 0)? as usize,
             "context.include_git_diff" => self.context.include_git_diff = parse_bool(raw)?,
             _ => return Err(bad()),
         }
@@ -664,8 +653,7 @@ impl RdshSettings {
             "all" | "" => *self = d,
             _ => {
                 // 単項目は既定節から写す
-                let tmp = d.clone();
-                self.set_dotted_fallback(&key, &tmp)?;
+                self.set_dotted_fallback(&key, &d)?;
             }
         }
         self.sanitize();
@@ -975,7 +963,7 @@ mod rdsh_config_tests {
         assert!(d.context.goal.is_empty());
         assert!(d.context.decisions.is_empty() && d.context.constraints.is_empty());
         assert!(d.context.working_files.is_empty() && d.context.open_tasks.is_empty());
-        assert_eq!((d.context.max_code_hits, d.context.max_sessions), (20, 10));
+        assert_eq!((d.context.max_code_hits, d.context.max_sessions), (20, 0));
         assert!(d.context.include_git_diff);
     }
 
@@ -985,6 +973,25 @@ mod rdsh_config_tests {
             assert!(!std::path::Path::new(&settings_path()).exists());
             assert_eq!(load(), RdshSettings::default());
             assert_eq!(try_load().unwrap(), RdshSettings::default());
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn settings_save_never_truncates_a_symlink_target() {
+        with_home("settings-link", |home| {
+            let outside = std::path::Path::new(home).join("unrelated.txt");
+            std::fs::write(&outside, "DUMMY_PRIVATE_VALUE").unwrap();
+            std::os::unix::fs::symlink(&outside, settings_path()).unwrap();
+            RdshSettings::default().save().unwrap();
+            assert_eq!(
+                std::fs::read_to_string(outside).unwrap(),
+                "DUMMY_PRIVATE_VALUE"
+            );
+            assert!(!std::fs::symlink_metadata(settings_path())
+                .unwrap()
+                .file_type()
+                .is_symlink());
         });
     }
 
@@ -999,7 +1006,7 @@ mod rdsh_config_tests {
             assert!(err.contains("line"), "line missing: {err}");
             assert!(err.contains("column"), "column missing: {err}");
             assert!(
-                err.contains("settings reset"),
+                err.contains("settings init --force"),
                 "recovery hint missing: {err}"
             );
             // 壊れファイルは既定値に置き換えない（fail-open 禁止）。
@@ -1019,7 +1026,7 @@ mod rdsh_config_tests {
             let err = try_load().unwrap_err().to_string();
             assert!(err.contains(&p), "path missing: {err}");
             assert!(
-                err.contains("settings reset"),
+                err.contains("settings init --force"),
                 "recovery hint missing: {err}"
             );
         });

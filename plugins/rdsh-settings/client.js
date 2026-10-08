@@ -30,12 +30,14 @@ window.__ModuleLoader__.load({
       const sv = useState(false); const saving = sv[0]; const setSaving = sv[1];
       const ms = useState(''); const msg = ms[0]; const setMsg = ms[1];
       const load = useCallback(async () => {
-        setLoading(true); setMsg('');
+        setLoading(true); setMsg(''); setAll(null);
         try {
           const r2 = await fetch(GET_ALL, { cache: 'no-store' });
           const j2 = await r2.json();
-          if (j2 && j2.config) { setAll(j2.config); setLegacy(!!j2.legacy_present); }
-          else setMsg('読み込みに失敗しました');
+          if (r2.ok && j2 && j2.config) { setAll(j2.config); setLegacy(!!j2.legacy_present); }
+          else setMsg(j2?.error === 'invalid-settings'
+            ? '設定ファイルを読み込めません。元の設定を確認してから再読み込みしてください。'
+            : '読み込みに失敗しました。接続と権限を確認してから再読み込みしてください。');
         } catch (e) { setMsg('読み込みに失敗しました'); }
         setLoading(false);
       }, []);
@@ -48,16 +50,19 @@ window.__ModuleLoader__.load({
         try {
           const r = await fetch(SAVE_ALL, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ config: all }) });
           const j = await r.json();
-          if (j && j.ok) { setAll(j.config); if ('legacy_present' in j) setLegacy(!!j.legacy_present); setMsg('保存しました (rdsh.json)'); }
+          if (r.ok && j && j.ok) { setAll(j.config); if ('legacy_present' in j) setLegacy(!!j.legacy_present); setMsg('保存しました (rdsh.json)'); }
           else setMsg('保存に失敗しました');
         } catch (e) { setMsg('保存に失敗しました'); }
         setSaving(false);
       };
       const num = (secName, key, v, fb) => {
-        const n = Number(v);
+        const n = String(v).trim() === '' ? NaN : Number(v);
         setPath(secName, key, Number.isFinite(n) ? n : fb);
       };
-      if (loading || !all) return h('div', { style: { maxWidth: 720, display: 'flex', flexDirection: 'column', gap: 12 } }, h('p', { style: desc }, '読み込み中…'));
+      if (loading) return h('div', { style: { maxWidth: 720, display: 'flex', flexDirection: 'column', gap: 12 } }, h('p', { style: desc }, '読み込み中…'));
+      if (!all) return h('div', { style: { maxWidth: 720, display: 'flex', flexDirection: 'column', gap: 12 } },
+        h('p', { role: 'alert', style: warn }, msg || '読み込みに失敗しました'),
+        h('button', { className: 'rdsh-btn-sec', onClick: load, style: { padding: '8px 12px', borderRadius: 8, cursor: 'pointer', fontSize: 13, alignSelf: 'flex-start' } }, '再読み込み'));
       const g = sec('general'); const tk = sec('tokens'); const se = sec('search');
       const co = sec('compact'); const ss = sec('sessions'); const lg2 = sec('logs');
       const svv = sec('serve'); const gu = sec('guard'); const be = sec('bench');
@@ -85,7 +90,7 @@ window.__ModuleLoader__.load({
             h('label', { style: row }, h('input', { type: 'checkbox', checked: !!cx.include_git_diff, onChange: (e) => setPath('context', 'include_git_diff', e.target.checked) }), 'git差分を含める')),
           h('div', { style: grid2 },
             h('div', { style: row }, h('span', { style: label }, 'コード取得上限'), h('input', { type: 'number', min: 1, max: 100, value: cx.max_code_hits, onChange: (e) => num('context', 'max_code_hits', e.target.value, 20), style: { ...input, maxWidth: 110 } })),
-            h('div', { style: row }, h('span', { style: label }, 'セッション参照数'), h('input', { type: 'number', min: 0, max: 100, value: cx.max_sessions, onChange: (e) => num('context', 'max_sessions', e.target.value, 10), style: { ...input, maxWidth: 110 } }))),
+            h('div', { style: row }, h('span', { style: label }, '旧履歴参照数（自動取り込みは無効）'), h('input', { type: 'number', min: 0, max: 100, value: cx.max_sessions, onChange: (e) => num('context', 'max_sessions', e.target.value, 0), style: { ...input, maxWidth: 110 } }))),
           h('div', null, h('div', { style: label }, 'ゴール'), h('input', { value: cx.goal || '', placeholder: '例: dsh互換性を維持する', onChange: (e) => setPath('context', 'goal', e.target.value), style: input })),
           h('div', null, h('div', { style: label }, '作業中ファイル (1行1件)'), h('textarea', { value: toLines(cx.working_files), rows: 3, onChange: (e) => setPath('context', 'working_files', fromLines(e.target.value)), style: { ...input, minHeight: 56 } })),
           h('div', null, h('div', { style: label }, '未解決タスク (1行1件)'), h('textarea', { value: toLines(cx.open_tasks), rows: 3, onChange: (e) => setPath('context', 'open_tasks', e.target.value), style: { ...input, minHeight: 56 } }))
@@ -122,7 +127,7 @@ window.__ModuleLoader__.load({
           h('div', { style: label }, 'ログ (logs)'),
           h('div', { style: row }, h('span', { style: label }, '末尾行数'), h('input', { type: 'number', min: 1, max: 500, value: lg2.tail, onChange: (e) => num('logs', 'tail', e.target.value, 50), style: { ...input, maxWidth: 110 } })),
           h('div', { style: label }, 'サーバ (serve)'),
-          h('div', { style: row }, h('span', { style: label }, 'ポート'), h('input', { type: 'number', min: 1, max: 65535, value: svv.port, onChange: (e) => num('serve', 'port', e.target.value, 3080), style: { ...input, maxWidth: 110 } })),
+          h('div', { style: row }, h('span', { style: label }, 'ポート'), h('input', { type: 'number', min: 1, max: 65535, value: svv.port, onChange: (e) => num('serve', 'port', e.target.value, 38080), style: { ...input, maxWidth: 110 } })),
           h('div', { style: label }, 'ガード (guard)'),
           h('div', null, h('div', { style: label }, '拒否パス (1行1件)'), h('textarea', { value: toLines(gu.deny), rows: 2, onChange: (e) => setPath('guard', 'deny', fromLines(e.target.value)), style: { ...input, minHeight: 44 } })),
           h('div', null, h('div', { style: label }, '理由'), h('input', { value: gu.reason || '', onChange: (e) => setPath('guard', 'reason', e.target.value), style: input })),

@@ -128,8 +128,7 @@ fn scan_sessions(root: &str, project: Option<&str>) -> Vec<Session> {
                 let mut handles = vec![];
                 for proj in batch {
                     let pdir = std::path::Path::new(&root).join(proj);
-                    let proj = proj.clone();
-                    handles.push(s.spawn(move || scan_project(&pdir, &proj)));
+                    handles.push(s.spawn(move || scan_project(&pdir, proj)));
                 }
                 for h in handles {
                     out.extend(h.join().unwrap_or_default());
@@ -331,10 +330,16 @@ fn subprocess_width() -> usize {
 /// content: repeat views (a desktop sidecar polling `sessions --tokens`)
 /// skip re-decompression entirely. Best-effort file cache — any error
 /// means recompute, never a wrong value. `RDSH_TOKENS_CACHE=0` disables it.
+///
+/// Entries are `(mtime, bytes, decomp, ts, cli)`; `cli` records whether the
+/// zstd CLI was available when the value was computed. A `None` is only
+/// authoritative with `cli` set: without the CLI, FCS-less frames are
+/// unresolvable, so such `None`s are never stored, and legacy `null`
+/// entries (no `cli` field) are recomputed once the CLI is available.
 #[derive(Clone)]
 struct TokensCache {
     path: Option<String>,
-    map: std::collections::HashMap<String, (u64, u64, Option<u64>, u64)>,
+    map: std::collections::HashMap<String, (u64, u64, Option<u64>, u64, bool)>,
     dirty: bool,
 }
 
@@ -355,13 +360,21 @@ impl TokensCache {
     }
 
     fn load() -> Self {
-        let path = Self::path();
+        Self::load_from(Self::path())
+    }
+
+    fn load_from(path: Option<String>) -> Self {
         let mut map = std::collections::HashMap::new();
         if let Some(p) = path.as_deref() {
             if let Ok(text) = std::fs::read_to_string(p) {
                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
                     if let Some(obj) = v.as_object() {
                         for (k, e) in obj {
+                            // Older cache writers could store an inexact value as
+                            // exact. Its provenance cannot be recovered: recompute.
+                            if e.get("schema").and_then(|x| x.as_u64()) != Some(2) {
+                                continue;
+                            }
                             // Cap on load so a foreign huge file stays harmless.
                             if map.len() >= 2000 {
                                 break;
@@ -370,7 +383,8 @@ impl TokensCache {
                             let b = e.get("bytes").and_then(|x| x.as_u64()).unwrap_or(0);
                             let d = e.get("decomp").and_then(|x| x.as_u64());
                             let t = e.get("ts").and_then(|x| x.as_u64()).unwrap_or(0);
-                            map.insert(k.clone(), (m, b, d, t));
+                            let c = e.get("cli").and_then(|x| x.as_bool()).unwrap_or(false);
+                            map.insert(k.clone(), (m, b, d, t, c));
                         }
                     }
                 }
@@ -384,10 +398,15 @@ impl TokensCache {
     }
 
     /// Cache hit returns the stored result (which may itself be `None`
-    /// for unresolvable sessions); key mismatch means recompute.
-    fn get(&self, key: &str, mtime: u64, bytes: u64) -> Option<Option<u64>> {
+    /// for unresolvable sessions); key mismatch means recompute, and so does
+    /// a `None` computed without the zstd CLI when the CLI is now available.
+    fn get(&self, key: &str, mtime: u64, bytes: u64, zstd_cli: bool) -> Option<Option<u64>> {
         match self.map.get(key) {
-            Some((m, b, d, _)) if *m == mtime && *b == bytes => Some(*d),
+            Some((m, b, d, _, c))
+                if *m == mtime && *b == bytes && (d.is_some() || *c || !zstd_cli) =>
+            {
+                Some(*d)
+            }
             _ => None,
         }
     }
@@ -395,7 +414,7 @@ impl TokensCache {
     /// Stale reuse: a previous exact value for a grown file, valid when
     /// computed recently. Callers must mark the row inexact.
     fn stale(&self, key: &str, max_age_secs: u64) -> Option<u64> {
-        let (.., d, t) = *self.map.get(key)?;
+        let (.., d, t, _) = *self.map.get(key)?;
         let age = now_secs().saturating_sub(t);
         if age <= max_age_secs {
             d
@@ -404,12 +423,16 @@ impl TokensCache {
         }
     }
 
-    fn put(&mut self, key: &str, mtime: u64, bytes: u64, decomp: Option<u64>) {
-        if self.path.is_none() {
+    fn put(&mut self, key: &str, mtime: u64, bytes: u64, decomp: Option<u64>, zstd_cli: bool) {
+        // Without the CLI a `None` may just mean "needs `zstd -dc`": storing
+        // it would pin `?` after the CLI is installed.
+        if self.path.is_none() || (decomp.is_none() && !zstd_cli) {
             return;
         }
-        self.map
-            .insert(key.to_string(), (mtime, bytes, decomp, now_secs()));
+        self.map.insert(
+            key.to_string(),
+            (mtime, bytes, decomp, now_secs(), zstd_cli),
+        );
         self.dirty = true;
     }
 
@@ -444,10 +467,10 @@ impl TokensCache {
         keys.sort();
         let mut obj = serde_json::Map::new();
         for k in keys.into_iter().take(1000) {
-            if let Some((m, b, d, t)) = self.map.get(k) {
+            if let Some((m, b, d, t, c)) = self.map.get(k) {
                 obj.insert(
                     k.clone(),
-                    serde_json::json!({"mtime": m, "bytes": b, "decomp": d, "ts": t}),
+                    serde_json::json!({"schema": 2, "mtime": m, "bytes": b, "decomp": d, "ts": t, "cli": c}),
                 );
             }
         }
@@ -477,8 +500,8 @@ fn batch_decompressed(
     let mut pending: Vec<(usize, Session)> = vec![];
     for (i, sess) in shown.iter().enumerate() {
         let key = TokensCache::key(root, &sess.project, &sess.id);
-        match cache.get(&key, sess.mtime, sess.bytes) {
-            Some(hit) => out[i] = (hit, true),
+        match cache.get(&key, sess.mtime, sess.bytes, zstd_cli) {
+            Some(hit) => out[i] = (hit, hit.is_some()),
             None => pending.push((i, (*sess).clone())),
         }
     }
@@ -504,16 +527,9 @@ fn batch_decompressed(
                 ));
             }
             for (i, h) in handles {
-                if let Ok(((r, _), local)) = h.join() {
+                if let Ok(((r, exact), local)) = h.join() {
                     cache.merge(&local);
-                    let sess = &shown[i];
-                    cache.put(
-                        &TokensCache::key(root, &sess.project, &sess.id),
-                        sess.mtime,
-                        sess.bytes,
-                        r,
-                    );
-                    out[i] = (r, true);
+                    out[i] = (r, exact);
                 }
             }
         });
@@ -525,8 +541,7 @@ fn zstd_available() -> bool {
     std::process::Command::new("zstd")
         .arg("--version")
         .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+        .is_ok_and(|o| o.status.success())
 }
 
 /// Exact decompressed byte total for one session: std-only frame headers
@@ -542,8 +557,8 @@ fn session_decompressed_bytes(
     cache: &mut TokensCache,
 ) -> (Option<u64>, bool) {
     let key = TokensCache::key(root, &sess.project, &sess.id);
-    if let Some(hit) = cache.get(&key, sess.mtime, sess.bytes) {
-        return (hit, true);
+    if let Some(hit) = cache.get(&key, sess.mtime, sess.bytes, zstd_cli) {
+        return (hit, hit.is_some());
     }
     let (r, exact) = session_decompressed_bytes_uncached(
         root,
@@ -553,7 +568,11 @@ fn session_decompressed_bytes(
         stale_secs,
         cache,
     );
-    cache.put(&key, sess.mtime, sess.bytes, r);
+    // A reused value from a growing file is deliberately inexact. Do not
+    // associate it with the new content identity and promote it on a cache hit.
+    if exact || r.is_none() {
+        cache.put(&key, sess.mtime, sess.bytes, r, zstd_cli);
+    }
     (r, exact)
 }
 
@@ -601,14 +620,17 @@ fn session_decompressed_bytes_uncached(
                 continue;
             };
             let Some((mtime, bytes)) = file_meta(p) else {
+                estimated = true;
                 continue;
             };
             let fkey = TokensCache::file_key(root, project, id, &name);
-            match cache.get(&fkey, mtime, bytes) {
+            match cache.get(&fkey, mtime, bytes, zstd_cli) {
                 Some(hit) => {
                     if let Some(n) = hit {
                         total += n;
                         any = true;
+                    } else {
+                        estimated = true;
                     }
                 }
                 None => todo.push(p.clone()),
@@ -619,15 +641,18 @@ fn session_decompressed_bytes_uncached(
         let stale_window = stale_secs;
         let mut todo2: Vec<std::path::PathBuf> = vec![];
         for p in &todo {
-            let stale_hit = p
-                .file_name()
-                .map(|s| s.to_string_lossy().into_owned())
-                .and_then(|name| {
-                    cache.stale(
-                        &TokensCache::file_key(root, project, id, &name),
-                        stale_window,
-                    )
-                });
+            let stale_hit = (stale_window > 0)
+                .then(|| {
+                    p.file_name()
+                        .map(|s| s.to_string_lossy().into_owned())
+                        .and_then(|name| {
+                            cache.stale(
+                                &TokensCache::file_key(root, project, id, &name),
+                                stale_window,
+                            )
+                        })
+                })
+                .flatten();
             match stale_hit {
                 Some(n) => {
                     total += n;
@@ -648,11 +673,16 @@ fn session_decompressed_bytes_uncached(
                         mtime,
                         bytes,
                         n,
+                        zstd_cli,
                     );
                     if let Some(n) = n {
                         total += n;
                         any = true;
+                    } else {
+                        estimated = true;
                     }
+                } else {
+                    estimated = true;
                 }
             }
         } else if !todo.is_empty() {
@@ -670,6 +700,8 @@ fn session_decompressed_bytes_uncached(
                         if let Some(n) = stream_decompressed_bytes(p) {
                             total += n;
                             any = true;
+                        } else {
+                            estimated = true;
                         }
                     }
                 }
@@ -973,11 +1005,14 @@ fn stream_many_decompressed_bytes(paths: &[&std::path::PathBuf]) -> Option<u64> 
 pub fn cmd_logs(tail: usize, grep: Option<String>, file: Option<String>) -> anyhow::Result<()> {
     let dir = format!("{}/logs", dsh_home());
     let path = match file {
-        Some(f) => std::path::PathBuf::from(if f.contains('/') {
-            f
-        } else {
-            format!("{dir}/{f}")
-        }),
+        Some(f) => {
+            let path = std::path::PathBuf::from(&f);
+            if path.is_absolute() || path.components().count() > 1 || f.contains('/') {
+                path
+            } else {
+                std::path::Path::new(&dir).join(path)
+            }
+        }
         None => match latest_file(&dir) {
             Some(p) => p,
             None => {
@@ -1188,6 +1223,101 @@ mod tests {
         for f in [&pm, &ps, &pu, &pt, &pg] {
             let _ = std::fs::remove_file(f);
         }
+    }
+
+    fn tmp_cache(dir: &std::path::Path) -> TokensCache {
+        TokensCache::load_from(Some(dir.join("cache.json").to_string_lossy().into_owned()))
+    }
+
+    fn sess(project: &str, id: &str) -> Session {
+        Session {
+            project: project.to_string(),
+            id: id.to_string(),
+            bytes: 13,
+            mtime: 1000,
+            mtime_s: String::new(),
+        }
+    }
+
+    #[test]
+    fn tokens_cache_skips_none_without_cli() {
+        // A FCS-less frame is `?` without the zstd CLI; that `None` must not
+        // be cached on the session, batch or file path, or installing zstd
+        // later would never resolve the unchanged session.
+        let dir = std::env::temp_dir().join(format!("rdsh-tc-skip-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let root = dir.join("sessions");
+        std::fs::create_dir_all(root.join("p/s1")).unwrap();
+        std::fs::create_dir_all(root.join("p/s2")).unwrap();
+        std::fs::write(
+            root.join("p/s1/a.zstd"),
+            raw_frame(0, &[], &[5], b"hello", false),
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("p/s2/a.zstd"),
+            raw_frame(0, &[0xAA], &[], b"abcd", false),
+        )
+        .unwrap();
+        let root = root.to_string_lossy().into_owned();
+        let (s1, s2) = (sess("p", "s1"), sess("p", "s2"));
+        let k1 = TokensCache::key(&root, "p", "s1");
+        let k2 = TokensCache::key(&root, "p", "s2");
+
+        // Session path.
+        let mut cache = tmp_cache(&dir);
+        assert_eq!(
+            session_decompressed_bytes(&root, &s2, false, 0, &mut cache),
+            (None, false)
+        );
+        assert!(!cache.map.contains_key(&k2));
+        assert!(!cache.dirty);
+
+        // Batch path: the resolvable session is cached, the `?` one is not.
+        let mut cache = tmp_cache(&dir);
+        let out = batch_decompressed(&root, &[&s1, &s2], false, 0, &mut cache);
+        // Batch marks a freshly unresolvable row inexact, like the session path.
+        assert_eq!(out, vec![(Some(5), true), (None, false)]);
+        assert_eq!(cache.get(&k1, s1.mtime, s1.bytes, true), Some(Some(5)));
+        assert!(!cache.map.contains_key(&k2));
+        cache.save();
+        let reloaded = tmp_cache(&dir);
+        assert!(!reloaded.map.contains_key(&k2));
+
+        // File path (and put itself): CLI-less `None` is dropped, a `None`
+        // computed with the CLI is authoritative and kept.
+        let fkey = TokensCache::file_key(&root, "p", "s2", "a.zstd");
+        let mut cache = tmp_cache(&dir);
+        cache.put(&fkey, 1, 2, None, false);
+        assert!(!cache.map.contains_key(&fkey));
+        cache.put(&fkey, 1, 2, None, true);
+        assert_eq!(cache.get(&fkey, 1, 2, true), Some(None));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn tokens_cache_legacy_null_rechecked_with_cli() {
+        // Caches written before the `cli` field may hold `null` from a host
+        // without zstd: a miss once the CLI exists, still a hit without it.
+        let dir = std::env::temp_dir().join(format!("rdsh-tc-legacy-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("cache.json"),
+            r#"{"n":{"schema":2,"mtime":1,"bytes":2,"decomp":null,"ts":0},"v":{"schema":2,"mtime":1,"bytes":2,"decomp":40,"ts":0}}"#,
+        )
+        .unwrap();
+        let mut cache = tmp_cache(&dir);
+        assert_eq!(cache.get("n", 1, 2, true), None);
+        assert_eq!(cache.get("n", 1, 2, false), Some(None));
+        assert_eq!(cache.get("v", 1, 2, true), Some(Some(40)));
+        // Recomputed with the CLI and still unresolvable: now authoritative,
+        // and the flag survives a save/load round trip.
+        cache.put("n", 1, 2, None, true);
+        cache.save();
+        let reloaded = tmp_cache(&dir);
+        assert_eq!(reloaded.get("n", 1, 2, true), Some(None));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

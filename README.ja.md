@@ -11,14 +11,17 @@
 <img src="assets/icon.svg" width="96" alt="rdsh icon">
 
 フル移植ではなく**ホットパスだけ Rust 化＋残りは本家 dsh に委譲**する設計です。
-起動約98倍・メモリ約1/23を、本家の動作を変えずに実現します。
+Linux上の `--version` で起動約98倍・最大RSS約1/23を測定しています。
+この数値は短いCLI呼び出しの結果です。Desktop全体の常駐メモリやモデル通信の
+削減量を表すものではありません。
 
-- 起動中央値 **約0.90ミリ秒**（本家約88ミリ秒）
-- 常駐メモリ **約2.9MB**（本家約66MB）・単一バイナリ約806KB（依存ツリー不要）
+- `--version` 起動中央値 **約0.90ミリ秒**（本家約88ミリ秒、Linux）
+- `--version` 最大RSS **約2.9MB**（本家約66MB、Linux）
 - `dsh`名で置換しても引数を一字も変えず委譲するため、既存の使い方・スクリプトはそのまま動きます
 
 ## 目次
 
+- [最初に進める順番](#最初に進める順番)
 - [実測](#実測)
 - [インストール](#インストール)
 - [使い方](#使い方)
@@ -30,6 +33,17 @@
 - [よくある質問](#よくある質問)
 - [クレジット](#クレジット)
 - [ライセンス](#ライセンス)
+
+## 最初に進める順番
+
+1. 下の手順で導入し、`rdsh --version` と `rdsh doctor` で確認します。
+2. `rdsh setup --web` が表示する鍵付きURLを開き、接続と必要な補助機能を設定します。
+3. 会話は `rdsh tui` から始め、選択したモデルの応答まで確認します。
+4. 状態画面は `rdsh settings set extras.enable serve` で有効化してから開きます。
+5. 設定破損時は元のファイルを退避し、明示的な復旧後に設定を再確認します。
+
+詳しい[導入・利用・復旧の動線](docs/USER-FLOW.md)、[設定画面](docs/RDSH-SETTINGS.md)、
+[構成図](docs/ARCHITECTURE.md)を用意しています。会話には本家DSHが必要です。
 
 ## 実測
 
@@ -105,7 +119,7 @@ OAuthフローをその場で起動します）。
 ```sh
 rdsh tui                          # = dsh --profile tui（slim env 付きで委譲）
 rdsh --profile web --patch x.yml  # オーバーレイ付き起動
-rdsh --passthrough tui            # slim 無しの完全委譲（非常口）
+rdsh --passthrough tui            # slim 無し（実行制限は継続）
 rdsh --dry-run tui -- --resume abc  # 実行内容だけ表示
 ```
 
@@ -115,20 +129,20 @@ rdsh --dry-run tui -- --resume abc  # 実行内容だけ表示
 rdsh tokens ./AGENTS.md             # 入力トークン見積（約4文字=1トークン、CJKは1字1トークン）
 echo ... | rdsh prune --max-tokens 4000   # head+tailを残して予算内に切り詰め
 rdsh search TODO --dir . --max 100 # 再帰grep（並列・出力順は逐次と同一）
-rdsh search-web "rust async" --limit 5  # Web検索（SearXNG経由、既定 http://127.0.0.1:8888、`$SEARXNG_URL` で変更）
+rdsh search-web "rust async" --limit 5  # search-web有効化とSearXNGが必要
 rdsh compact ./s.jsonl --max-tokens 8000 # セッションJSONLの圧縮（元ファイル不変）
 rdsh sessions --limit 20 --tokens  # セッション一覧＋展開後トークン見積
 rdsh logs --tail 50 --grep ERROR   # 起動ログの参照
 rdsh profiles / rdsh skills        # プロファイル・スキル一覧
 rdsh doctor                        # 本家dsh・DSH_HOME・slim設定の確認
 rdsh bench --n 5                   # rdsh/dsh の起動比較
-rdsh serve                         # Webダッシュボード（:38080）
+rdsh serve                         # serve有効化後の状態画面（:38080）
 ```
 
-### OAuth自動認識（`rdsh auth`：入れるだけで認識）
+### 認証情報の明示的な取り込み（`rdsh auth`）
 
 他ツールで済ませたログインを、dsh本体が読む
-`$DSH_HOME/.credentials.yaml` へ自動で写します：
+`rdsh auth --import --provider openai-codex` で `$DSH_HOME/.credentials.yaml` へ写します：
 
 - Codex CLI（`~/.codex/auth.json`、ChatGPT OAuth）
 - opencode（`$XDG_DATA_HOME/opencode/auth.json`、`openai` OAuthは
@@ -136,16 +150,37 @@ rdsh serve                         # Webダッシュボード（:38080）
 
 ```sh
 rdsh auth            # 状態確認：見つかったログインと認識済みの一覧
-rdsh auth --import   # 不足・古い分だけ書込（0600、他エントリ不変）
+rdsh auth --import --provider openai-codex   # 不足・古い分だけ書込（0600、他エントリ不変）
 rdsh auth --json     # 機械可読の状態出力
 rdsh setup           # 初回ウィザード：取込、キー貼付、--login/--open
 rdsh setup --web     # フローティングのセットアップUI（localhost、ブラウザ自動表示）
 ```
 
-起動時（`rdsh tui`・`dump-config`・`plugin`）は先に自動同期するので、
-Codex/opencode側でログインするだけで使えます。
-`RDSH_AUTH_AUTOSYNC=0` で無効化できます。dsh側で更新された新しい
-トークンは上書きせず、非grant記録（APIキー）にも触れません。
+起動・診断・setupでは、他のアプリの認証情報をコピーしません。
+OAuthは `rdsh auth --import --provider openai-codex --source codex` のように
+対象を選んで取り込みます。APIキーは `--ref OPENAI_API_KEY` で指定します。
+一括取り込みと `RDSH_AUTH_AUTOSYNC` は無効です。`setup --yes` は明示的な
+環境変数キーの保存だけを許可し、外部ログインを取り込みません。
+
+### エージェントの実行制限
+
+Linux x86_64・bubblewrap・prlimit・監査対象DSH 0.2.0-rc.2で、モデルのツールを
+`rdsh_inspect` に限定します。ツールには認証ストア・ホスト環境変数を渡さず、
+ネットワークとホスト・プロジェクトへの書き込みをカーネルで拒否します。
+隔離環境内の使い捨て一時領域は利用できます。利用者が指定したファイルの
+コピーだけを、読み取り専用で渡します。例えば：
+
+```sh
+rdsh --share-file README.md --share-file src/main.rs --profile tui
+```
+
+共有ファイルの内容はモデルへ渡り得るため、秘密情報を含むファイルは指定しないでください。
+隠しファイル、リンク、複数のハードリンクを持つファイルは共有できません。
+既存bash・read/write/edit・MCP・run_codeツールは拒否します。未対応OS・DSH版、
+不一致のツール実装、bubblewrap未導入では保護なしに起動せずエラーにします。
+`--passthrough` は環境調整の切り替えだけで、実行制限を解除しません。
+この制限はrustdsh経由の新しいプロセスに適用されます。直接DSHを起動する場合や、
+既に実行中のプロセスには適用されません。設定されたプラグイン・プロファイルは信頼するコードです。
 
 ### 追加機能（既定OFF）
 
@@ -164,7 +199,16 @@ rdsh settings get extras.enable
 
 ### hooks.json での使い方（`rdsh guard`）
 
-標準入力（フックJSONまたは生テキスト）を走査し、拒否パターンに一致したらexit 2＋理由出力でブロック、それ以外はexit 0で通過します。`--json` で `{"decision":"block"/"approve"}` を返します。パターンの `*` は任意文字列に一致します。
+コンテキスト生成は過去セッションを自動で取り込みません。旧設定の
+`context.max_sessions` が正でも同じです。履歴の確認は明示的な
+`rdsh context search` を使ってください。
+
+Unixのcontextと再帰searchは、ディレクトリのハンドルを基準に各パスを開き、
+リンク差し替え・複数のハードリンク・特殊ファイルを拒否します。
+Windowsでは安全な実装が入るまで、ネイティブsearchを拒否し、contextの
+ファイル読み取りを省略します。
+
+標準入力（フックJSONまたは生テキスト）を走査し、拒否パターンに一致したらexit 2＋理由出力でブロック、それ以外はexit 0で通過します。`--json` はブロック時に `{"decision":"block"}`、一致しない場合は `{}` を返します。一致しないことは実行の承認ではなく、ホスト側の権限確認が必要です。不正・過大なJSON入力も拒否します。パターンの `*` は任意文字列に一致します。
 
 ```sh
 echo "$input" | rdsh guard --deny "rm -rf /*" --deny "*token*"
@@ -214,8 +258,9 @@ rdsh --profile web                             # slim env付きで起動（プ�
 DSHの会話GUIに読み取り専用のworkflow進捗ボードを追加する場合は、[対応sourceへの適用・診断ツール](plugins/workflow-board/README.ja.md)を隔離した対応checkoutに使います。boardと共通表示projectionを変更する18ファイルのpatch・fixtureテストを同梱し、patched DSHのbuild・採用は別工程です。
 
 ```sh
+rdsh settings set extras.enable serve  # 有効な補助機能の一覧を置き換えます
 rdsh serve
-# → http://127.0.0.1:38080/ を開く（localhost のみ、読取専用API）
+# → 起動時に表示される #key=... 付きURLを開く（localhost のみ）
 # ※ dsh web GUI（:3080）と競合しません。`--port 0` で自動選択もできます
 ```
 
@@ -229,9 +274,10 @@ rdsh serve
 | `GET /api/sessions?limit=20` | セッション一覧 |
 | `GET /api/skills` / `/api/profiles` | 一覧 |
 
-外部依存はありません（CDN不要・オフライン可）。
+`/api/version` 以外のAPIは起動ごとの鍵が必要です。画面がURLから読み取り、
+`X-RDSH-Token` ヘッダーで送ります。CDN不要・オフラインで使えます。
 
-手元の状態確認だけなら `rdsh serve` を使います（バイナリだけで動作）。
+手元の状態確認だけなら `serve` を有効化して `rdsh serve` を使います。
 プロジェクトの指標・質問と回答・スマホ接続には [Node.jsダッシュボード](dashboard/README.md) を使います（Node.js 22+が必要）。
 `rdsh-dashboard project --project <ディレクトリ>` でプロジェクト用、`rdsh-dashboard harness` で元のHarness Web画面を起動します。
 
@@ -241,9 +287,10 @@ rdsh serve
 2. slimは**環境変数の追加だけ**です。本家が知らないキーは無視されます
 3. `desktop`プロファイル拒否・dump排他など本家のエラー条件をRust側でも再現します
 4. 読取系（tokens/search/compact/dump --native/serve API/inspect）は元ファイルを書き換えません
-5. `--passthrough`・`RDSH_PASSTHROUGH=1`・`./install.sh --restore`で即時退避できます
+5. `--passthrough` はslim調整を無効化します。`./install.sh --restore` で元のDSHへ戻す場合はrustdshの保護も外れます。
 
-`cargo test`（26件）と `tests/regress.sh`（35件）で検証し、高速化の前後で出力一致を確認しています。
+現在のcheckoutは `cargo test` と `tests/regress.sh`、[必須チェック](CONTRIBUTING.md)で検証します。
+[再現可能な性能測定](docs/BENCHMARKS.md)では、入力と修正前後の出力一致も確認します。
 
 ## コミュニティ
 

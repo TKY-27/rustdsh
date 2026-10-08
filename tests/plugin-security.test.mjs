@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile, rm, symlink, lstat, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { Readable } from 'node:stream';
@@ -248,6 +248,20 @@ test('plugin security boundary and settings preservation', async (t) => {
     assert.equal(await readFile(settingsFile, 'utf8'), stored);
   });
 
+  await t.test('saves replace symlinks without overwriting their targets and tighten existing file permissions', async () => {
+    for (const [file, route] of [[settingsFile, '/api/rdsh-settings/save'], [contextFile, '/api/rdsh-context/save']]) {
+      const outside = join(home, 'unrelated-' + route.split('/')[2] + '.json');
+      const raw = JSON.stringify(original);
+      await writeFile(outside, raw);
+      await rm(file, { force: true });
+      await symlink(outside, file);
+      assert.equal((await request(route, { method: 'POST', body: '{}' })).status, 200);
+      assert.equal(await readFile(outside, 'utf8'), raw);
+      assert.equal((await lstat(file)).isSymbolicLink(), false);
+      if (process.platform !== 'win32') assert.equal((await stat(file)).mode & 0o777, 0o600);
+    }
+  });
+
   await t.test('unreadable settings are never replaced with defaults', async () => {
     for (const raw of ['{broken', 'null', '[]']) {
       await writeFile(settingsFile, raw);
@@ -255,5 +269,27 @@ test('plugin security boundary and settings preservation', async (t) => {
       assert.equal(result.status, 400);
       assert.equal(await readFile(settingsFile, 'utf8'), raw);
     }
+  });
+
+  await t.test('reads report corrupt settings instead of displaying defaults', async () => {
+    for (const raw of ['{broken', 'null', '[]']) {
+      await writeFile(settingsFile, raw);
+      const result = await request('/api/rdsh-settings');
+      assert.equal(result.status, 400);
+      assert.equal(result.body.ok, false);
+      assert.equal(result.body.config, undefined);
+      assert.equal(await readFile(settingsFile, 'utf8'), raw);
+    }
+  });
+
+  await t.test('missing settings use the current Rust dashboard port', async () => {
+    await rm(settingsFile);
+    const result = await request('/api/rdsh-settings');
+    assert.equal(result.status, 200);
+    assert.equal(result.body.config.serve.port, 38080);
+    assert.equal((await request('/api/rdsh-settings/save', {
+      method: 'POST', body: JSON.stringify(result.body.config),
+    })).status, 200);
+    assert.equal(JSON.parse(await readFile(settingsFile, 'utf8')).serve.port, 38080);
   });
 });
