@@ -872,9 +872,7 @@ fn shadowing_original() -> bool {
         .map(|p| {
             p.split(':').any(|dir| {
                 let cand = format!("{dir}/dsh");
-                std::fs::canonicalize(&cand)
-                    .map(|c| c == me)
-                    .unwrap_or(false)
+                std::fs::canonicalize(&cand).is_ok_and(|c| c == me)
             })
         })
         .unwrap_or(false)
