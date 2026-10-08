@@ -46,8 +46,10 @@ It does not add or move existing tags. Release publication follows
 ## Security settings
 
 Dependabot vulnerability alerts, automated security updates, secret scanning and
-secret scanning push protection are enabled in GitHub. CodeQL remains in its
-existing workflow. Report vulnerabilities through [SECURITY.md](../SECURITY.md).
+secret scanning push protection are enabled in GitHub. Private vulnerability
+reporting is enabled so external users can report without opening a public issue.
+CodeQL remains in its existing workflow. Report vulnerabilities through
+[SECURITY.md](../SECURITY.md).
 
 ## Verify the live settings
 
