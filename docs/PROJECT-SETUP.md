@@ -12,6 +12,8 @@ files; changing the JSON file alone does not change repository settings.
   and the local dashboard. Topics cover Rust, DSH, DeepSeek, CLI, dashboard,
   performance and agent tooling. The homepage points to the README.
 - Merged PR branches are automatically deleted; local checkouts are unaffected.
+- Automatic merge is available after the required checks and other-person review
+  succeed. It does not bypass branch protection.
 - [Managed labels](../.github/labels.yml) define type/component labels and
   `P0` (critical), `P1` (high), `P2` (normal), `P3` (backlog) priority labels.
   Existing labels and issue assignments are preserved.

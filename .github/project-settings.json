@@ -2,6 +2,7 @@
   "description": "Rust launcher for DSH with native fast commands, guarded agent tools and a local project dashboard",
   "homepage": "https://github.com/jimoto-no-llm/rustdsh#readme",
   "delete_branch_on_merge": true,
+  "allow_auto_merge": true,
   "topics": [
     "rust",
     "cli",
