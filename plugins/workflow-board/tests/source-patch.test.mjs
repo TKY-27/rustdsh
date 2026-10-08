@@ -181,13 +181,24 @@ test('VERIFY_FAILED catches post-write edits outside patch context and retains t
 
 test('Git ownership protection is retained', t => {
   const f = fixture(t)
-  const previous = process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER
+  const keys = ['GIT_TEST_ASSUME_DIFFERENT_OWNER', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_NOSYSTEM', 'GIT_CONFIG_COUNT', 'GIT_CONFIG_PARAMETERS']
+  const previous = new Map(keys.map(key => [key, process.env[key]]))
+  const config = join(f.source, '.git', 'ownership-test.gitconfig')
+  writeFileSync(config, '')
+  // CI may intentionally trust every checkout via safe.directory. Isolate that
+  // policy for this test without modifying any real user or runner configuration.
   process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER = '1'
+  process.env.GIT_CONFIG_GLOBAL = config
+  process.env.GIT_CONFIG_NOSYSTEM = '1'
+  process.env.GIT_CONFIG_COUNT = '0'
+  delete process.env.GIT_CONFIG_PARAMETERS
   try {
     assert.throws(() => prepare(f.source, { ...f, apply: true }), { code: 'SOURCE_UNSAFE' })
   } finally {
-    if (previous === undefined) delete process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER
-    else process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER = previous
+    for (const key of keys) {
+      if (previous.get(key) === undefined) delete process.env[key]
+      else process.env[key] = previous.get(key)
+    }
   }
   assert.equal(f.git('status', '--porcelain'), '')
 })
