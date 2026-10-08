@@ -644,8 +644,8 @@ fn session_decompressed_bytes_uncached(
         if !name.ends_with(".zstd") {
             continue;
         }
-        // Never follow linked or unreadable compressed entries. Excluding one
-        // leaves the session total incomplete, so do not promote it to exact.
+        // Never measure through a link, and never label the remaining partial
+        // sum exact when a compressed entry was deliberately omitted.
         if !e.file_type().is_ok_and(|t| t.is_file()) {
             estimated = true;
             continue;

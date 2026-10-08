@@ -522,6 +522,8 @@ fn cli_tokens_prune_compact_search_logs_guard_and_settings_work_together() {
             );
         }
     }
+    // Positive log selection stays under the approved logs root. Outside-file
+    // refusals are pinned separately in log_session_boundaries.rs.
     let logs_dir = f.0.join("dsh/logs");
     fs::create_dir_all(&logs_dir).unwrap();
     let log = logs_dir.join("test.log");

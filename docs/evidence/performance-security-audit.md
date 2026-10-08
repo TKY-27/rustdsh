@@ -4,8 +4,8 @@
 
 Native search reuses one approved root directory descriptor and stops retaining
 matches once each ordered worker chunk reaches the global output limit.
-Dense fixture median fell from 197.500ms to 4.973ms; peak RSS fell from
-132892KiB to 4316KiB. Nonmatching and deep fixtures also improved. Search
+Dense fixture median fell from 197.774ms to 4.607ms; peak RSS fell from
+132848KiB to 4344KiB. Nonmatching and deep fixtures also improved. Search
 stdout/stderr matched v0.2.0 under default, one-CPU, and two-CPU affinity,
 including 64 compatibility cases per setting. See
 [raw samples and reproduction](search-performance/README.md).
@@ -35,9 +35,9 @@ with no secret in stdout. See the actual
 Local Linux x86_64 verification on the final source:
 
 - `cargo fmt --check`; release Clippy for all targets with warnings denied.
-- `cargo test --release`: 78 unit tests plus 11 CLI boundary integration tests.
+- `cargo test --release`: 78 unit tests, 11 CLI boundary tests, 11 native E2E tests, and three settings tests; seven Cargo-example tests also passed.
 - `tests/regress.sh`: all 53 checks, isolated HOME and a delegation stub.
-- Plugin/security/kernel-boundary Node suites: 29 passes, no skipped tests;
+- Plugin/security/kernel-boundary Node suites: 36 passes, no skipped tests;
   includes dummy credential access, network, environment, host writes, and
   mandatory-tool rejection checks.
 - Audited ToolRuntime integration: allowed inspection dispatches through the
@@ -69,7 +69,7 @@ part of that conclusion.
 These results do not establish that the entire project is free of every
 vulnerability. GitHub CI must still validate the pushed commit on its Linux,
 macOS, and Windows runners; their authoritative results belong to the PR.
-Dashboard code is unchanged in this change.
+Dashboard server/UI code is unchanged relative to integrated main `98abc67`; a tracked, absolute dependency symlink was removed.
 
 The model execution boundary has no host session/log/cache access: only the
 human's explicit shared files are snapshotted read-only, and the kernel
@@ -98,3 +98,31 @@ path-based chmod after cache rename, fixed relative-home log selection,
 isolated the test environment, bounded FIFO-test cleanup, and added the
 eleventh regression. No credentials or session transcript are included in
 this report.
+
+## Integration with concurrent main changes
+
+Main `98abc67` was merged into this branch before final validation. Cache schema
+2 and inexact/partial-session handling remain intact. A rejected linked compressed
+entry now marks the remaining token sum inexact instead of claiming a complete
+count. The positive native log fixture now lives inside its approved logs root;
+outside refusals remain covered by the dedicated boundary suite.
+
+A tracked `dashboard/node_modules` symlink referred to a developer’s absolute
+local checkout, which made dependency installation nonportable. It was removed;
+dependencies remain ignored and are installed through the locked package file.
+The shell web-search fixture now binds port zero, publishes its actual port,
+and records startup/client errors instead of hiding them. Its HTTPServer
+subclass avoids reverse DNS during bind; the exact embedded fixture also passed
+with reverse resolution deliberately disabled after a macOS startup failure.
+
+The existing [browser E2E runner](../../tests/e2e/README.md) passed with the final
+local binary: setup persistence, authenticated native tokens/prune/sessions,
+and project MCP questions/browser answers/SSE drafts/restart key revocation.
+It used isolated directories, loopback only, no model or Tailscale, desktop/mobile
+viewports, and reported no page or console errors. See
+[the actual browser result](search-performance/browser-final.json).
+
+The GitHub open CodeQL-alert API returned an empty list. Dependabot alerts
+are disabled, so that API could not establish dependency safety; a fresh
+production `npm audit` for the locked dashboard tree reported zero known
+vulnerabilities. These advisory results do not prove absence of unknown bugs.
