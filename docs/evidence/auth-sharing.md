@@ -71,3 +71,31 @@ exact source commits and all four before/after locale flows.
 ![Sharing and Extras after integration](../screenshots/auth-sharing-rereview-after.png)
 
 ![Mobile sharing and Extras](../screenshots/auth-sharing-rereview-mobile.png)
+
+## Guarded-main and one-time import compatibility
+
+Integrated main `98abc67d7e5c5d3f2a5321d9a56adb6a83ff93e2` at
+`9f7f17b900c0049b267fa6bdd5428802970f101d`. This preserves main's restricted
+tool runtime, atomic credential writes and recovery validation alongside
+the persistent sharing policy. Removed main's host-specific tracked
+`dashboard/node_modules` symlink; dashboard dependencies use the lockfile.
+
+`auth --import --source codex --provider openai-codex` and `--ref` import only
+the explicitly selected credentials for that invocation. They never widen or
+save the persistent sharing policy. Integration checks cover provider filtering,
+key-only filtering, preservation of existing consent, dry-run, invalid sources
+and rejection of mixing one-time filters with persistent selection changes.
+
+An isolated release build of this exact source passed 105 Rust tests (78 unit,
+13 credential-sharing, 11 native E2E, 3 settings), 7 benchmark-example tests,
+31 Node security tests, 182 dashboard tests (zero skips), 55 CLI checks,
+20 settings checks, 21 context checks and 6 Python release-artifact tests.
+Formatting and release Clippy on all targets passed with warnings denied.
+The enforcement tests reject unsupported agent runtimes before copying any
+credential; trusted `--version` metadata delegation still obeys saved consent.
+Only synthetic credentials and dummy executables were used.
+
+The sharing and Extras UI is unchanged from the EN/JA desktop/mobile captures
+above. These are source-matched browser evidence from the earlier commit;
+the latest CLI and security verification is the separate run described here.
+Real model authentication and paid APIs remain untested.
