@@ -1,6 +1,6 @@
 name: cd
 
-# Release binaries on version tags: git tag vX.Y.Z && git push origin vX.Y.Z
+# Release binaries on annotated version tags; follow docs/RELEASING.md.
 
 on:
   push:
