@@ -5,11 +5,24 @@ on: [push, pull_request]
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  plugin-security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - run: node --test tests/plugin-security.test.mjs
+
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -29,12 +42,12 @@ jobs:
             regress: false
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo test
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: '24'
+          node-version: 22
       - run: node --test plugins/workflow-board/tests/source-patch.test.mjs
       - run: cargo build
       - if: matrix.regress
@@ -58,4 +71,3 @@ jobs:
           $setup = ./target/debug/rdsh.exe setup --json | Out-String
           if ($setup -notmatch '"needed":true') { throw 'setup should report needed on first run' }
           ./target/debug/rdsh.exe doctor
-

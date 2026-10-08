@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { createHash } from 'node:crypto'
-import { readFileSync, realpathSync, statSync } from 'node:fs'
+import { readFileSync, realpathSync, statSync, lstatSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
@@ -11,10 +11,14 @@ export class PatchError extends Error {
 }
 
 function git(source, args, input) {
-  const result = spawnSync('git', ['-c', `safe.directory=${source.replaceAll('\\', '/')}`, '-C', source, ...args], {
+  const result = spawnSync('git', ['-c', 'core.fsmonitor=false', '-C', source, ...args], {
     encoding: 'utf8', input, windowsHide: true,
+    env: { ...process.env, LC_ALL: 'C', GIT_OPTIONAL_LOCKS: '0' },
   })
   if (result.error) throw new PatchError('GIT_UNAVAILABLE', 'Git must be available on PATH.')
+  if (result.status !== 0 && /detected dubious ownership|unsafe repository/.test(result.stderr)) {
+    throw new PatchError('SOURCE_UNSAFE', 'Git rejected this checkout ownership. Select a trusted isolated source checkout.')
+  }
   return result
 }
 
@@ -32,36 +36,73 @@ function sameDirectory(left, right) {
     && first.dev === second.dev && first.ino === second.ino
 }
 
+function validateManifest(manifest) {
+  const oid = value => typeof value === 'string' && /^[0-9a-f]{40}$/.test(value)
+  const files = manifest?.files
+  if (!oid(manifest?.base_commit) || !oid(manifest?.board_commit)
+    || !Array.isArray(files) || files.length === 0 || new Set(files).size !== files.length
+    || files.some(path => typeof path !== 'string' || /[\\:\x00-\x1f\x7f]/.test(path)
+      || path.split('/').some(part => !part || part === '.' || part === '..' || part.toLowerCase() === '.git'))
+    || !manifest.file_blobs || JSON.stringify(Object.keys(manifest.file_blobs).sort()) !== JSON.stringify([...files].sort())
+    || files.some(path => !oid(manifest.file_blobs[path]))) {
+    throw new PatchError('MANIFEST_INVALID', 'The manifest must pin safe paths and their exact Git blob IDs.')
+  }
+}
+
+const blobId = bytes => createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex')
+function matchesBoard(source, manifest) {
+  return manifest.files.every(path => {
+    try {
+      const target = resolve(source, path)
+      if (!lstatSync(target).isFile() || realpathSync(target) !== target) return false
+      const bytes = readFileSync(target)
+      if (blobId(bytes) === manifest.file_blobs[path]) return true
+      // Git text checkouts may use CRLF. Never invoke repository clean filters to hash a file.
+      return !bytes.includes(0) && blobId(Buffer.from(bytes.toString('latin1').replace(/\r\n/g, '\n'), 'latin1')) === manifest.file_blobs[path]
+    } catch { return false }
+  })
+}
+
 /** Apply only the bundled board patch to an explicitly selected, compatible source checkout. */
-export function prepare(sourcePath, { apply = false, patch, manifest } = {}) {
+export function prepare(sourcePath, { apply = false, patch, manifest, runGit = git } = {}) {
   patch ??= readFileSync(resolve(bundle, 'workflow-board.patch'))
   manifest ??= JSON.parse(readFileSync(resolve(bundle, 'manifest.json'), 'utf8'))
+  validateManifest(manifest)
   if (createHash('sha256').update(patch).digest('hex') !== manifest.patch_sha256) {
     throw new PatchError('PATCH_INTEGRITY', 'The board patch checksum does not match its manifest.')
+  }
+  if (!patch.toString().startsWith(`From ${manifest.board_commit} `)) {
+    throw new PatchError('PATCH_COMMIT', 'The patch header does not match the pinned board commit.')
   }
   let source
   try { source = realpathSync(sourcePath) } catch {
     throw new PatchError('SOURCE_MISSING', 'Select an existing DSH source checkout with --source.')
   }
-  const top = successful(git(source, ['rev-parse', '--show-toplevel']), 'SOURCE_NOT_GIT', 'Select a DSH Git source checkout, not an installed package or profile.')
+  const top = successful(runGit(source, ['rev-parse', '--show-toplevel']), 'SOURCE_NOT_GIT', 'Select a DSH Git source checkout root.')
   if (!sameDirectory(top, source)) throw new PatchError('SOURCE_NOT_ROOT', '--source must select the checkout root.')
-  const head = successful(git(source, ['rev-parse', 'HEAD']), 'HEAD_UNAVAILABLE', 'The source HEAD cannot be read.')
+  const head = successful(runGit(source, ['rev-parse', 'HEAD']), 'HEAD_UNAVAILABLE', 'The source HEAD cannot be read.')
   if (head !== manifest.base_commit) {
     throw new PatchError('UNSUPPORTED_BASE', 'This source revision is not the verified board base. Do not apply it to installed DSH or a different upstream revision.')
   }
-  const stats = successful(git(source, ['apply', '--numstat', '-'], patch), 'PATCH_INVALID', 'The board patch is not a valid Git patch.')
-  const paths = stats.split('\n').map(line => line.split('\t').slice(2).join('\t')).sort()
+  const stats = successful(runGit(source, ['apply', '--numstat', '-z', '-'], patch), 'PATCH_INVALID', 'The board patch is not a valid Git patch.')
+  const paths = stats.split('\0').filter(Boolean).map(line => line.split('\t').slice(2).join('\t')).sort()
   if (JSON.stringify(paths) !== JSON.stringify([...manifest.files].sort())) {
     throw new PatchError('PATCH_SCOPE', 'The patch file set does not match the board manifest.')
   }
   const outcome = state => ({ state, base_commit: head, board_commit: manifest.board_commit, files: paths.length })
-  if (git(source, ['apply', '--reverse', '--check', '-'], patch).status === 0) return outcome('already-applied')
-  const dirty = successful(git(source, ['status', '--porcelain', '--untracked-files=normal']), 'STATUS_UNAVAILABLE', 'The source working tree cannot be inspected.')
-  if (dirty !== '') throw new PatchError('SOURCE_DIRTY', 'Use a clean isolated DSH checkout; existing edits and untracked files are preserved.')
-  successful(git(source, ['apply', '--check', '--whitespace=error-all', '-'], patch), 'PATCH_CONFLICT', 'The board patch does not apply cleanly; no files were changed.')
+  const status = runGit(source, ['status', '--porcelain=v1', '-z', '--untracked-files=all'])
+  successful(status, 'STATUS_UNAVAILABLE', 'The source working tree cannot be inspected.')
+  const changes = status.stdout.split('\0').filter(Boolean)
+  // Mixed index/worktree edits can hide another staged change even when working bytes match.
+  const onlyBoardPaths = changes.every(entry => [' M', 'M ', 'A ', '??'].includes(entry.slice(0, 2)) && manifest.files.includes(entry.slice(3)))
+  if (onlyBoardPaths && matchesBoard(source, manifest)
+    && runGit(source, ['apply', '--reverse', '--check', '--whitespace=nowarn', '-'], patch).status === 0) return outcome('already-applied')
+  if (changes.length) throw new PatchError('SOURCE_DIRTY', 'Use a clean isolated DSH checkout; existing edits and untracked files are preserved.')
+  successful(runGit(source, ['apply', '--check', '--whitespace=nowarn', '-'], patch), 'PATCH_CONFLICT', 'The board patch does not apply cleanly; no files were changed.')
   if (!apply) return outcome('ready')
-  successful(git(source, ['apply', '--whitespace=error-all', '-'], patch), 'APPLY_FAILED', 'Git could not apply the board patch. Inspect this source checkout before retrying.')
-  successful(git(source, ['apply', '--reverse', '--check', '-'], patch), 'VERIFY_FAILED', 'The patched source failed verification; inspect the source diff before building.')
+  successful(runGit(source, ['apply', '--whitespace=nowarn', '-'], patch), 'APPLY_FAILED', 'Git could not apply the board patch. Inspect this source checkout before retrying.')
+  successful(runGit(source, ['apply', '--reverse', '--check', '--whitespace=nowarn', '-'], patch), 'VERIFY_FAILED', 'The patched source failed verification; inspect the source diff before building.')
+  if (!matchesBoard(source, manifest)) throw new PatchError('VERIFY_FAILED', 'The patched files differ from the pinned board blobs; inspect the source diff before building.')
   return outcome('applied')
 }
 
@@ -82,7 +123,11 @@ export function main(args) {
   console.log(JSON.stringify(prepare(source, { apply })))
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+function isEntryPoint() {
+  try { return process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)) } catch { return false }
+}
+
+if (isEntryPoint()) {
   try { main(process.argv.slice(2)) } catch (error) {
     const known = error instanceof PatchError
     console.error(JSON.stringify({ error: known ? error.code : 'UNEXPECTED', message: known ? error.message : 'Cannot prepare this source; no installation was attempted.' }))

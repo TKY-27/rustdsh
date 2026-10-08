@@ -14,7 +14,15 @@ fn default_base() -> String {
                 s
             }
         }
-        Err(_) => "http://127.0.0.1:8888".to_string(),
+        Err(_) => {
+            let u = crate::rdsh_config::load().search.searxng_url;
+            let u = u.trim().trim_end_matches('/').to_string();
+            if u.is_empty() {
+                "http://127.0.0.1:8888".to_string()
+            } else {
+                u
+            }
+        }
     }
 }
 
@@ -90,14 +98,12 @@ fn strip_tags(s: &str) -> String {
     out.trim().to_string()
 }
 
-const DQ: char = 34 as char;
-
 fn decode_entities(s: &str) -> String {
     let mut out = s
         .replace("&amp;", "&")
         .replace("&lt;", "<")
         .replace("&gt;", ">")
-        .replace("&quot;", &DQ.to_string())
+        .replace("&quot;", "\"")
         .replace("&#39;", "'")
         .replace("&#x27;", "'");
     let mut search = 0;

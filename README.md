@@ -3,6 +3,8 @@
 # rdsh — a fast, safe Rust launcher for `dsh`
 
 [![ci](https://github.com/sahenjp/rustdsh/actions/workflows/ci.yml/badge.svg)](https://github.com/sahenjp/rustdsh/actions/workflows/ci.yml)
+[![dashboard](https://github.com/sahenjp/rustdsh/actions/workflows/dashboard.yml/badge.svg)](https://github.com/sahenjp/rustdsh/actions/workflows/dashboard.yml)
+[![docs](https://github.com/sahenjp/rustdsh/actions/workflows/docs.yml/badge.svg)](https://github.com/sahenjp/rustdsh/actions/workflows/docs.yml)
 [![release](https://img.shields.io/github/v/release/sahenjp/rustdsh.svg)](https://github.com/sahenjp/rustdsh/releases)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![rust](https://img.shields.io/badge/rust-1.73%2B-orange.svg)](https://www.rust-lang.org/)
@@ -28,9 +30,7 @@ to Rust and delegates everything else to the original `dsh` binary** — so you 
 - [Using with Smart-DSH](#using-with-smart-dsh)
 - [Web dashboard](#web-dashboard)
 - [Safety design](#safety-design)
-- [How it got fast](#how-it-got-fast)
-- [Project layout](#project-layout)
-- [Contributing](#contributing)
+- [Community](#community)
 - [FAQ](#faq)
 - [Credits](#credits)
 - [License](#license)
@@ -40,7 +40,7 @@ to Rust and delegates everything else to the original `dsh` binary** — so you 
 Measured on Linux x86_64, including before/after comparisons for the optimizations.
 
 | Case | rdsh | Baseline | Factor |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `--version` startup (median, n=5) | ~0.90ms | original `dsh` ~88ms | ~98x |
 | `--version` peak RSS | ~2.9MB | original ~66MB | ~1/23 |
 | Hook-equivalent peak RSS | ~2.7MB | equivalent Node script ~45MB | ~1/16 |
@@ -49,9 +49,8 @@ Measured on Linux x86_64, including before/after comparisons for the optimizatio
 | sessions --tokens (20 sessions) | ~0.41s | before ~1.65s | ~4.0x |
 | Distribution size | one ~806KB binary | ~508MB Node tree | — |
 
-Reproduce with `rdsh bench --n 5` and `/usr/bin/time -v`. The before/after
-binaries were built from HEAD vs. the working tree in a scratch worktree and
-their outputs were diffed for equality.
+Reproduce with `rdsh bench --n 5` and `/usr/bin/time -v`.
+Details: [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 
 ## Install
 
@@ -64,7 +63,9 @@ curl -fsSL https://github.com/sahenjp/rustdsh/releases/latest/download/install.s
 
 ```powershell
 # Windows (PowerShell)
-& ([scriptblock]::Create((Invoke-WebRequest -Uri https://github.com/sahenjp/rustdsh/releases/latest/download/install.ps1).Content)) -FromRelease
+$f = Join-Path $env:TEMP 'rdsh-install.ps1'
+Invoke-WebRequest -Uri https://github.com/sahenjp/rustdsh/releases/latest/download/install.ps1 -OutFile $f -UseBasicParsing
+& $f -FromRelease
 ```
 
 From source:
@@ -91,7 +92,7 @@ cd rustdsh
 ```
 
 | OS | script | notes |
-|---|---|---|
+| --- | --- | --- |
 | Linux / macOS | `./install.sh` | needs `cargo` or `curl` (rustup auto-install) |
 | WSL | `./install.sh` inside the distro | detected automatically; alongside native via `install.ps1 -Wsl` |
 | Windows (native) | `.\install.ps1` | needs Rust (`winget install Rustlang.Rustup`); MSVC build tools required to compile |
@@ -101,8 +102,7 @@ you at the DeepSeek prompt: run `rdsh setup` (or `rdsh setup --login` to
 start the Codex/opencode OAuth flow right away).
 
 Or build directly: `cargo build --release` produces `target/release/rdsh`.
-Requires Rust 1.73+ (uses `u32::div_ceil`, `thread::scope`); only three
-dependencies (`clap`, `serde_json`, `anyhow`), no async runtime, no build scripts.
+Requires Rust 1.73+.
 
 ## Usage
 
@@ -128,7 +128,7 @@ rdsh logs --tail 50 --grep ERROR     # inspect startup logs
 rdsh profiles / rdsh skills          # list profiles and skills
 rdsh doctor                          # check original dsh, DSH_HOME, slim setup
 rdsh bench --n 5                     # compare rdsh vs dsh startup
-rdsh serve                           # local web dashboard (:3080)
+rdsh serve                           # local web dashboard (:38080)
 ```
 
 ### `rdsh auth`: OAuth auto-recognition (drop it in and it works)
@@ -148,10 +148,25 @@ rdsh setup           # first-run wizard: import, DeepSeek-key paste, --login/--o
 rdsh setup --web     # floating glass setup UI on localhost (browser auto-opens)
 ```
 
-`setup --web` は起動ごとに鍵を発行し、`#key=...` を含む URL を表示します。
-ブラウザーで開くと鍵はそのタブに保存されます。API キーの保存と画面の終了には
-この鍵が必要です。接続状態の読み取りにも同じ鍵が必要です。
-端末に表示された URL を他人と共有しないでください。
+`setup --web` issues a fresh key on every launch and prints a URL
+containing `#key=...`. Open it in your browser; the key stays in that tab
+and is required to save keys or finish setup. Do not share the URL.
+
+### Optional extras (off by default)
+
+Server-type features stay off until you enable them, so a plain install
+remains a fast dsh. Enable them from the setup UI (`rdsh setup --web`,
+Extras section) or the CLI:
+
+```sh
+rdsh settings set extras.enable serve,search-web
+rdsh settings get extras.enable
+```
+
+| Extra | Command |
+| --- | --- |
+| `serve` | `rdsh serve` local dashboard |
+| `search-web` | `rdsh search-web` web search |
 
 Booting (`rdsh tui`, `dump-config`, `plugin`) auto-syncs first, so logging
 in with Codex/opencode is enough. `RDSH_AUTH_AUTOSYNC=0` disables it.
@@ -188,25 +203,16 @@ any other failure is non-blocking and only logged.
 When the binary is invoked under the name `dsh`, anything that is not an
 rdsh-native subcommand is delegated verbatim to the original binary, so
 `dsh --version`, `dsh --profile tui`, and `dsh --help` stay byte-identical.
+Full discovery order and naming rules: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-- Original-binary discovery order: `RDSH_ORIG_BIN` (legacy `DSH_ORIG_BIN` still
-honored) → `~/.config/rdsh/origin` →
-  sibling backups (`dsh-orig`, `dsh.orig`, `dsh.real`) → `PATH` (self excluded) →
-  newest `~/.local/opt/node-v*` tree matching this OS/CPU
-- Naming follows dsh convention: kebab-case commands/flags like the original
-  (`dump-config`, `--from-default-profile`), while the `DSH_` env namespace stays
-  owned by dsh itself — rdsh-private keys live under `RDSH_`
 - One-shot escapes: `RDSH_PASSTHROUGH=1 dsh ...` (no slim env),
   `RDSH_DRY_RUN=1 dsh ...` (print only)
-- Slim also sets `NODE_COMPILE_CACHE` (Node >= 22.1 only, user value wins,
-  `RDSH_NODE_COMPILE_CACHE=0` opts out). Upstream dsh reads no `RDSH_*` key.
 - Default profile: `RDSH_DEFAULT_PROFILE`, then local `tui`, else a guided error
-  (dsh 0.2.0 ships no `tui` template)
 - Name shadowing: a bare `dsh tokens` runs the rdsh subcommand; a profile
   literally named `tokens` still boots via `dsh --profile tokens`
-- Node wrappers: scripts that run `node "$(... dsh ...)"` break while `dsh` is
-  shadowed (the path is now a native binary, not JS). Exec `dsh`/`rdsh`
-  directly instead of via `node`; `rdsh doctor` lists the offending wrappers.
+- Scripts that run `node "$(... dsh ...)"` break while `dsh` is
+  shadowed. Run `dsh`/`rdsh` directly instead of via `node`;
+  `rdsh doctor` lists the affected wrappers.
 
 ## Using with Smart-DSH
 
@@ -223,27 +229,24 @@ rdsh --profile web                             # boot web with slim env (plugins
 
 Co-use notes:
 
-- Ports: the dsh web GUI and `rdsh serve` both default to 3080. Keep 3080 for
-  dsh web (push/remote access) and run `rdsh serve --port 38080`.
-- `dsh`-shadowing: with `install.sh --as-dsh`, Smart-DSH helper scripts that
-  locate DSH via `dsh` on PATH resolve to the Rust binary and fail. Run those
-  scripts against the original (`dsh-orig ...`) or export `DSH_PACKAGE_DIR`
-  to the DSH package dir.
-- Versions: Smart-DSH documents DSH `0.1.2-rc.1`; `rdsh doctor` prints your
-  actual dsh version so mismatches are visible before installing bundles.
+- Ports never collide: dsh web GUI uses 3080, `rdsh serve` defaults to 38080
+  (`--port 0` picks a free port).
+- With `install.sh --as-dsh`, point Smart-DSH helper scripts at the original
+  (`dsh-orig ...`) or export `DSH_PACKAGE_DIR`.
+- `rdsh doctor` shows your dsh version so mismatches are visible first.
 
 ## Web dashboard
 
-For the read-only workflow member board in DSH's conversation GUI, use the [verified source-patch preparation tool](plugins/workflow-board/README.md). It includes the 18-file board patch, compatibility diagnostics and fixture tests; applying it never replaces the installed DSH or changes a profile.
+For the read-only workflow member board in DSH's conversation GUI, use the [verified source-patch preparation tool](plugins/workflow-board/README.md) with an isolated compatible source checkout. It includes the 18-file board/UI projection patch, compatibility diagnostics and fixture tests; building and adopting the patched DSH are separate steps.
 
 ```sh
 rdsh serve
 # open the URL containing #key=... printed by rdsh (localhost only)
-# if the port is taken (the dsh web GUI also uses 3080), try --port 38080
+# default :38080 keeps clear of the dsh web GUI (:3080); --port 0 auto-picks
 ```
 
 | API | Purpose |
-|---|---|
+| --- | --- |
 | `GET /api/version` | version |
 | `GET /api/doctor` | health check |
 | `POST /api/tokens` | token estimate for `{"text"}` |
@@ -252,22 +255,17 @@ rdsh serve
 | `GET /api/sessions?limit=20` | recent sessions |
 | `GET /api/skills`, `/api/profiles` | name lists |
 
-`/api/version` 以外の API は起動ごとの鍵を `X-RDSH-Token` ヘッダーで要求します。
-ブラウザー画面は表示された URL の鍵を使います。HTTP は本文を最大 64 KiB まで
-読み取り、同時接続を 32 件に制限します。画面は CDN を使わずオフラインで動作します。
+APIs other than `/api/version` require the per-launch key in the
+`X-RDSH-Token` header (the browser UI uses the key from its URL).
+No CDN is used; the page works offline.
 
-Which dashboard? `rdsh serve` is the quick local status page for this
-machine. For project metrics, human Q&A, and phone access, use the optional
-[Node.js dashboard](dashboard/README.md) instead.
+Which one? `rdsh serve` is the quick local status page (no setup beyond
+the binary). For project metrics, human Q&A, and phone access, use the
+optional [Node.js dashboard](dashboard/README.md) (needs Node.js 22+).
 
-### Private project dashboards and phone access
-
-The optional [Node.js dashboard](dashboard/README.md) adds project metrics,
-tasks, human questions/replies, native MCP Events for ChatGPT Dots, and Tailscale
-QR access. `rdsh-dashboard project --project <directory>` opens a project-specific
-dashboard; `rdsh-dashboard harness` starts a separate original Harness Web UI.
-See the guide for installation, MCP client configuration, and private Dots
-connections through Secure MCP Tunnel. Requires Node.js 22+.
+The Node.js dashboard adds project metrics, tasks, human Q&A, and Tailscale
+QR access: `rdsh-dashboard project --project <directory>` for a project,
+`rdsh-dashboard harness` for the original Harness Web UI.
 
 ## Safety design
 
@@ -278,65 +276,23 @@ dumps, missing `--profile`) are reproduced in Rust.
 4. Read paths never write: tokens/search/compact/dump/native APIs touch nothing.
 5. Instant retreats: `--passthrough`, `RDSH_PASSTHROUGH=1`, `./install.sh --restore`.
 
-### Verification (all executed)
+Verified with `cargo test` (26 unit tests) and `tests/regress.sh`
+(35 CLI checks), plus byte-for-byte output equality on optimizations.
 
-- `cargo test`: 26 unit tests pass (token math, wildcard matcher, arg splitter, auth splice/freshness, setup lang).
-  The suite caught and fixed one real matcher bug (single-pattern substring).
-- `tests/regress.sh`: 35 CLI checks pass (every subcommand, error paths,
-  auth import round-trip, setup first-run flow, and sandboxed `dsh`-name
-  delegation against a fake original).
-- Optimization diffs: old vs. new binary outputs compared byte-for-byte
-  (300-hit search and truncated-max search both identical).
-- Live replacement verified on a real machine: `dsh --version` still delegates,
-  new native commands work under the `dsh` name.
+## Community
 
-## How it got fast
-
-- ASCII fast path for token estimation: pure-ASCII input is one `len/4`
-  computation (non-ASCII keeps the exact scan; results identical).
-- Two-phase search: sequential walk fixes the order, files are grepped in
-  parallel, hits merge back in walk order. Trees under 32 files keep the exact
-  old sequential code path.
-- Parallel zstd expansion for `sessions --tokens` (same numbers, order kept).
-- Release profile stays small: `opt-level=z`, LTO, `strip`, `panic=abort` (~806KB).
-
-## Project layout
-
-- `src/main.rs` — CLI definition, dispatch, `dsh`-name detection
-- `src/auth.rs` — OAuth auto-recognition (codex/opencode → credentials.yaml)
-- `src/dsh_args.rs` — original `lib/bin.js`-compatible arg splitter (read-only)
-- `src/passthrough.rs` — original-binary discovery + `exec` delegation
-- `src/slim.rs` — slim environment definition
-- `src/tokens.rs` — token estimation and pruning
-- `src/search.rs` — order-preserving parallel grep
-- `src/websearch.rs` — SearXNG web search (`search-web`, no API key)
-- `src/compact.rs` — session transcript compaction
-- `src/inspect.rs` — read-only sessions/logs/skills/profiles views
-- `src/guard.rs` — hooks.json guard command
-- `src/serve.rs` + `src/ui.html` — local web dashboard
-- `src/setup_web.rs` + `src/setup.html` — floating glass setup UI (`setup --web`)
-- `install.sh` — installer (`--as-dsh` shadow / `--restore`)
-- `tests/regress.sh` — CLI regression suite (35 checks)
-
-## Contributing
-
-```sh
-cargo fmt --check      # must be clean
-cargo clippy --all-targets -- -D warnings   # must be clean
-cargo test             # 26 unit tests
-BIN=./target/debug/rdsh sh tests/regress.sh # 35 CLI checks (needs cargo build first)
-```
-
-No new dependencies without discussion: binary size and startup time are
-features. Behavior changes must extend `tests/regress.sh`.
-
-Release: `git tag vX.Y.Z && git push origin vX.Y.Z` builds per-OS binaries
-(Linux/macOS/Windows) and attaches them to the GitHub Release via the `cd`
-workflow.
+- Start with [CONTRIBUTING.md](CONTRIBUTING.md) (4-line PRs, screenshot rules).
+- Bugs and ideas: [issue forms](https://github.com/sahenjp/rustdsh/issues/new/choose) (Japanese OK).
+- Questions: [Issues](https://github.com/sahenjp/rustdsh/issues).
+- Security: never file public issues — see [SECURITY.md](SECURITY.md).
+- Design docs: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) ·
+  [docs/BENCHMARKS.md](docs/BENCHMARKS.md) · [docs/ROADMAP.md](docs/ROADMAP.md) ·
+  [docs/RELEASING.md](docs/RELEASING.md) · [CHANGELOG.md](CHANGELOG.md).
+- Be kind: [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## FAQ
 
-- **Port 3080 is busy?** The dsh web GUI uses it too — run `rdsh serve --port 38080`.
+- **Port is busy?** The dsh web GUI uses 3080; `rdsh serve` defaults to 38080. Use `--port 0` for a free port.
 - **A profile collides with a subcommand name?** Boot it explicitly:
   `dsh --profile <name>`.
 - **Revert the replacement?** `./install.sh --restore` brings the original back.
