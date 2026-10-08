@@ -14,6 +14,15 @@ pub struct AuthArgs {
     pub import: bool,
     #[arg(long)]
     pub json: bool,
+    /// Import this provider once without enabling future credential copies
+    #[arg(long)]
+    pub provider: Option<String>,
+    /// Limit a one-time import to this credential source
+    #[arg(long)]
+    pub source: Option<String>,
+    /// Import only this named API-key reference once
+    #[arg(long = "ref")]
+    pub key_ref: Option<String>,
     /// Allow future imports of one SOURCE:CREDENTIAL (repeatable)
     #[arg(long, value_name = "SOURCE:CREDENTIAL")]
     pub select: Vec<String>,

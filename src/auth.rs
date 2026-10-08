@@ -657,6 +657,10 @@ struct Scan {
 }
 
 fn scan() -> Scan {
+    scan_selected(None, None, None)
+}
+
+fn scan_selected(provider: Option<&str>, source: Option<&str>, key_ref: Option<&str>) -> Scan {
     let mut grants: Vec<OauthGrant> = Vec::new();
     let mut keys: Vec<ApiKey> = Vec::new();
     let mut notes: Vec<String> = Vec::new();
@@ -673,6 +677,12 @@ fn scan() -> Scan {
                 });
             }
         }
+    }
+    if provider.is_some() || source.is_some() || key_ref.is_some() {
+        grants.retain(|g| {
+            provider == Some(g.provider.as_str()) && source.is_none_or(|v| v == g.from)
+        });
+        keys.retain(|k| key_ref == Some(k.name.as_str()) && source.is_none_or(|v| v == k.from));
     }
     let path = creds_path();
     let doc = load_doc(&path);
@@ -960,11 +970,51 @@ fn sharing_document(
     })
 }
 
+fn one_time_selection(args: &AuthArgs) -> anyhow::Result<Option<SharingPolicy>> {
+    if args.provider.is_none() && args.source.is_none() && args.key_ref.is_none() {
+        return Ok(None);
+    }
+    anyhow::ensure!(
+        args.provider.is_some() || args.key_ref.is_some(),
+        "credential import requires --provider <id> or --ref <name>"
+    );
+    anyhow::ensure!(
+        args.select.is_empty() && args.unselect.is_empty(),
+        "one-time import filters cannot be combined with persistent --select/--unselect"
+    );
+    if let Some(source) = args.source.as_deref() {
+        anyhow::ensure!(
+            matches!(source, "codex" | "opencode" | "env"),
+            "unknown credential source"
+        );
+    }
+    let inventory = scan_selected(
+        args.provider.as_deref(),
+        args.source.as_deref(),
+        args.key_ref.as_deref(),
+    );
+    let mut policy = SharingPolicy::default();
+    policy.selected.extend(
+        inventory
+            .grants
+            .iter()
+            .map(|grant| format!("{}:{}", grant.from, grant.provider)),
+    );
+    policy.selected.extend(
+        inventory
+            .keys
+            .iter()
+            .map(|key| format!("{}:{}", key.from, key.name)),
+    );
+    Ok(Some(policy))
+}
+
 pub fn cmd_auth(args: AuthArgs, dry: bool) -> anyhow::Result<()> {
     let root = crate::inspect::dsh_home();
     let mut policy = SharingPolicy::load(&root)?;
     // Validate before creating a lock or writing any file.
     policy.change(&args.select, &args.unselect)?;
+    let one_time = one_time_selection(&args)?;
     let mutating = args.import || !args.select.is_empty() || !args.unselect.is_empty();
     let _lock = if mutating && !dry {
         Some(SharingLock::acquire(&root)?)
@@ -975,9 +1025,13 @@ pub fn cmd_auth(args: AuthArgs, dry: bool) -> anyhow::Result<()> {
         policy = SharingPolicy::load(&root)?;
         policy.change(&args.select, &args.unselect)?;
     }
+    let one_time_import = one_time.is_some();
+    if let Some(selection) = one_time {
+        policy = selection;
+    }
     anyhow::ensure!(
         !args.import || !policy.selected.is_empty(),
-        "no credential sharing selected; preview rdsh auth, then use --select SOURCE:CREDENTIAL --import"
+        "no credential sharing selected; credential import requires --provider <id>, --ref <name>, or --select SOURCE:CREDENTIAL with an available source"
     );
     let path = creds_path();
     if mutating {
@@ -986,6 +1040,9 @@ pub fn cmd_auth(args: AuthArgs, dry: bool) -> anyhow::Result<()> {
             if dry { "preview " } else { "" },
             policy.selected.iter().cloned().collect::<Vec<_>>().join(", ")
         );
+        if one_time_import {
+            eprintln!("[rdsh auth] one-time selection is not saved; future credential copies remain governed by the existing sharing policy");
+        }
         eprintln!("[rdsh auth] unselect stops future imports and retains existing copies; stop DSH and remove its record/ref to stop using a copy; provider revocation is separate");
     }
     if !dry && (!args.select.is_empty() || !args.unselect.is_empty()) {
@@ -1003,8 +1060,22 @@ pub fn cmd_auth(args: AuthArgs, dry: bool) -> anyhow::Result<()> {
         doc,
         decisions: _decisions,
         path: _,
-    } = scan();
-    let sharing = sharing_document(&policy, &grants, &keys, &doc, &path);
+    } = scan_selected(
+        args.provider.as_deref(),
+        args.source.as_deref(),
+        args.key_ref.as_deref(),
+    );
+    let persistent_policy = SharingPolicy::load(&root)?;
+    let display_policy = if one_time_import {
+        &persistent_policy
+    } else {
+        &policy
+    };
+    let mut sharing = sharing_document(display_policy, &grants, &keys, &doc, &path);
+    sharing["one_time_import"] = serde_json::json!(one_time_import);
+    if one_time_import {
+        sharing["one_time_selection"] = serde_json::json!(policy.selected);
+    }
     if args.json {
         let inventory = sharing["inventory"].as_array().unwrap();
         println!(

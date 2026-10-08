@@ -105,7 +105,7 @@ OAuthフローをその場で起動します）。
 ```sh
 rdsh tui                          # = dsh --profile tui（slim env 付きで委譲）
 rdsh --profile web --patch x.yml  # オーバーレイ付き起動
-rdsh --passthrough tui            # slim 無しの完全委譲（非常口）
+rdsh --passthrough tui            # slim 無し（実行制限は継続）
 rdsh --dry-run tui -- --resume abc  # 実行内容だけ表示
 ```
 
@@ -191,6 +191,28 @@ setup --webは毎回アクセス鍵を発行し、#key=...付きURLを表示し�
 画面では保存前に保存先・利用範囲と、選択解除・コピー削除・provider失効の
 違いを確認できます。
 
+一度だけ取り込む場合は `rdsh auth --import --provider openai-codex --source codex` または `rdsh auth --import --ref OPENAI_API_KEY --source codex` を使えます。この指定は継続コピーの選択に保存されず、既存の共有方針を変更しません。継続する場合は別途 `--select` で指定します。
+
+### エージェントの実行制限
+
+Linux x86_64・bubblewrap・prlimit・監査対象DSH 0.2.0-rc.2で、モデルのツールを
+`rdsh_inspect` に限定します。ツールには認証ストア・ホスト環境変数を渡さず、
+ネットワークとホスト・プロジェクトへの書き込みをカーネルで拒否します。
+隔離環境内の使い捨て一時領域は利用できます。利用者が指定したファイルの
+コピーだけを、読み取り専用で渡します。例えば：
+
+```sh
+rdsh --share-file README.md --share-file src/main.rs --profile tui
+```
+
+共有ファイルの内容はモデルへ渡り得るため、秘密情報を含むファイルは指定しないでください。
+隠しファイル、リンク、複数のハードリンクを持つファイルは共有できません。
+既存bash・read/write/edit・MCP・run_codeツールは拒否します。未対応OS・DSH版、
+不一致のツール実装、bubblewrap未導入では保護なしに起動せずエラーにします。
+`--passthrough` は環境調整の切り替えだけで、実行制限を解除しません。
+この制限はrustdsh経由の新しいプロセスに適用されます。直接DSHを起動する場合や、
+既に実行中のプロセスには適用されません。設定されたプラグイン・プロファイルは信頼するコードです。
+
 ### 追加機能（既定OFF）
 
 サーバー型の機能は有効化するまで動きません。素のままでは高速なdshです。
@@ -208,7 +230,16 @@ rdsh settings get extras.enable
 
 ### hooks.json での使い方（`rdsh guard`）
 
-標準入力（フックJSONまたは生テキスト）を走査し、拒否パターンに一致したらexit 2＋理由出力でブロック、それ以外はexit 0で通過します。`--json` で `{"decision":"block"/"approve"}` を返します。パターンの `*` は任意文字列に一致します。
+コンテキスト生成は過去セッションを自動で取り込みません。旧設定の
+`context.max_sessions` が正でも同じです。履歴の確認は明示的な
+`rdsh context search` を使ってください。
+
+Unixのcontextと再帰searchは、ディレクトリのハンドルを基準に各パスを開き、
+リンク差し替え・複数のハードリンク・特殊ファイルを拒否します。
+Windowsでは安全な実装が入るまで、ネイティブsearchを拒否し、contextの
+ファイル読み取りを省略します。
+
+標準入力（フックJSONまたは生テキスト）を走査し、拒否パターンに一致したらexit 2＋理由出力でブロック、それ以外はexit 0で通過します。`--json` はブロック時に `{"decision":"block"}`、一致しない場合は `{}` を返します。一致しないことは実行の承認ではなく、ホスト側の権限確認が必要です。不正・過大なJSON入力も拒否します。パターンの `*` は任意文字列に一致します。
 
 ```sh
 echo "$input" | rdsh guard --deny "rm -rf /*" --deny "*token*"
@@ -283,7 +314,7 @@ rdsh serve
 2. slimは**環境変数の追加だけ**です。本家が知らないキーは無視されます
 3. `desktop`プロファイル拒否・dump排他など本家のエラー条件をRust側でも再現します
 4. 読取系（tokens/search/compact/dump --native/serve API/inspect）は元ファイルを書き換えません
-5. `--passthrough`・`RDSH_PASSTHROUGH=1`・`./install.sh --restore`で即時退避できます
+5. `--passthrough` はslim調整を無効化します。`./install.sh --restore` で元のDSHへ戻す場合はrustdshの保護も外れます。
 
 ### 検証（すべて実行済み）
 

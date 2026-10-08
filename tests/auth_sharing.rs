@@ -13,6 +13,90 @@ const ENV_OPENAI: &str = "fixture-env-openai-must-not-print";
 const ENV_DEEPSEEK: &str = "fixture-env-deepseek-must-not-print";
 const EXISTING: &str = "# preserve CRLF and manual entries\r\nversion: 1\r\nrecords:\r\n  llm-pi-ai/anthropic:\r\n    kind: grant\r\n    payload:\r\n      access: fixture-existing-anthropic\r\n      refresh: fixture-existing-refresh\r\n      expires: 9000000000000\r\n      type: oauth\r\nrefs:\r\n  MANUAL_KEY: fixture-existing-manual";
 
+#[test]
+fn one_time_provider_import_does_not_persist_consent_or_copy_other_secrets() {
+    let fixture = Fixture::new();
+    fixture.seed();
+    fixture.json(&["auth", "--select", "opencode:anthropic", "--json"]);
+    let policy = fixture.read("dsh/rdsh-auth-sharing.json");
+    let preview = fixture.json(&[
+        "--dry-run",
+        "auth",
+        "--import",
+        "--source",
+        "codex",
+        "--provider",
+        "openai-codex",
+        "--json",
+    ]);
+    assert_eq!(preview["dry_run"], true);
+    assert_eq!(preview["sharing"]["one_time_import"], true);
+    assert!(!fixture.root.join("dsh/.credentials.yaml").exists());
+    let imported = fixture.json(&[
+        "auth",
+        "--import",
+        "--source",
+        "codex",
+        "--provider",
+        "openai-codex",
+        "--json",
+    ]);
+    let credentials = fixture.read("dsh/.credentials.yaml");
+    assert!(credentials.contains(CODEX_ACCESS));
+    assert!(!credentials.contains(CODEX_KEY));
+    assert!(!credentials.contains(OPENCODE_ACCESS));
+    assert!(!credentials.contains("fixture-other-provider"));
+    assert_eq!(fixture.read("dsh/rdsh-auth-sharing.json"), policy);
+    assert_eq!(
+        imported["sharing"]["selected"],
+        serde_json::json!(["opencode:anthropic"])
+    );
+    assert!(!fixture
+        .run(&[
+            "auth",
+            "--import",
+            "--source",
+            "unknown",
+            "--provider",
+            "openai-codex"
+        ])
+        .status
+        .success());
+    assert!(!fixture
+        .run(&[
+            "auth",
+            "--import",
+            "--provider",
+            "openai-codex",
+            "--select",
+            "codex:openai-codex"
+        ])
+        .status
+        .success());
+    assert_eq!(fixture.read("dsh/rdsh-auth-sharing.json"), policy);
+}
+
+#[test]
+fn one_time_key_reference_does_not_enable_automatic_copying() {
+    let fixture = Fixture::new();
+    fixture.seed();
+    let imported = fixture.json(&[
+        "auth",
+        "--import",
+        "--source",
+        "codex",
+        "--ref",
+        "OPENAI_API_KEY",
+        "--json",
+    ]);
+    let credentials = fixture.read("dsh/.credentials.yaml");
+    assert!(credentials.contains(CODEX_KEY));
+    assert!(!credentials.contains(CODEX_ACCESS));
+    assert!(!fixture.root.join("dsh/rdsh-auth-sharing.json").exists());
+    assert_eq!(imported["sharing"]["selected"], serde_json::json!([]));
+    assert_eq!(imported["sharing"]["autosync_enabled"], false);
+}
+
 struct Fixture {
     root: PathBuf,
 }
