@@ -117,7 +117,7 @@ cd rustdsh
 `rdsh setup` を実行してください（`rdsh setup --login` ならCodex/opencodeの
 OAuthフローをその場で起動します）。
 
-ソースから直接ビルドする場合は `cargo build --release` で `target/release/rdsh` ができます（Rust 1.73+が必要）。
+ソースから直接ビルドする場合は `cargo build --release` で `target/release/rdsh` ができます（Rust 1.85+が必要）。
 
 ## 使い方
 
