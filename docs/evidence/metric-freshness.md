@@ -50,3 +50,46 @@ These captures verify local rendering and interaction using declared reports.
 They do not establish independent provider measurements, acceptance approval,
 physical-phone/Tailscale access or Production adoption. The unrelated local
 Windows setup files are outside this change.
+
+## Current-main re-review, 2026-10-08
+
+Source `b17358ca2968f57f1f53f292c65b88ab3e2ddf0f` integrates main
+`98abc67d7e5c5d3f2a5321d9a56adb6a83ff93e2`. It retains the current typed
+question cards, reply application, input queue, budget and source-specific cost
+ledger, and extends freshness checks into main's project/task overview.
+The legacy cumulative report is clearly separate from the cost ledger.
+Removed main's tracked host-specific `dashboard/node_modules` symlink.
+
+The exact current source passed all 193 dashboard tests on Linux Node 24,
+with zero skips. Windows Node 22 passed 192 dashboard tests on the prior
+`418508c` integration and 15 focused observation/overview tests for the added
+overview logic. These are separate source-pinned runs; current platform and
+browser CI remain merge gates.
+
+Installed Windows Chrome used the production HTTP server and durable state in
+a disposable fixture at 1440 and 390 px. The before proxy serves main's actual
+HTML, app and overview modules against the same fixture/backend. No model,
+credential import, real tool or paid API ran. The
+[sanitized browser record](metric-freshness-main-browser.json) pins both sources.
+
+![Current main before freshness integration](metric-freshness-main-before.png)
+
+![Current dashboard with source and age labels](metric-freshness-main-after.png)
+
+![Actual initial, partial and idle-expiry sequence](metric-freshness-main-flow.gif)
+
+The fixture's four completed tasks yield one fresh completion report, one stale,
+one unknown-age and one estimate. The overview labels the old result and its
+source; it continues saying the execution state is unobserved. The cache ratio
+changes from 80.0% to `比較不可` after a partial report, then to `古い情報` after
+eight seconds and the next poll, without another state event.
+
+An unsent consultation retains its text, focus and selection through updates.
+Expanded source details remain open. Cancelling one approval and expiring one
+consultation leaves one pending question and zero answers. All four provenance
+labels are visible; external markup remains literal text with zero inserted
+images, page errors or horizontal overflow.
+
+![390 px current-main integration](metric-freshness-main-mobile.png)
+
+![Selected task overview retains unobserved execution](metric-freshness-main-task.png)
