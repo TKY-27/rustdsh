@@ -50,3 +50,24 @@ A Linux-installed Koffi tree cannot run the Windows kernel ownership tests. The
 full Windows check used a dedicated Windows copy and Windows `npm ci` instead
 of weakening the ownership checks or changing the shared development dependencies.
 The original checkout's concurrent Codex-bridge and release-note edits are excluded.
+
+## Independent current-source review
+
+Source `2adb5d14771c6a8e5fc57700ee73cc01a9460c77` was checked on native
+Windows using Node v22.23.3 and PowerShell 7. The 13 tray/launcher tests all
+passed, without skips, including the actual menu, NotifyIcon disposal, MCP
+streams, quoted project paths and preservation of a separate project.
+
+The actual installer passed in an isolated directory containing spaces,
+an apostrophe, an ampersand and Japanese characters. Its WSL native package
+now uses the loaded Windows Koffi version rather than a hardcoded `3.1.1`.
+The current `3.1.1` dependencies were verified first. A separate integration
+fixture then used PR #198's package/lock from
+`0cfb8df27a46471614a24ab7afdf33c69d0d473d`: the actual Windows native module
+and coinstalled `@koromix/koffi-linux-x64` were both `3.3.2`. No models,
+paid APIs, real project servers or user installation directories were used.
+
+The review also repairs the BSD HTTP test socket and remaps historical
+repository links to their transfer destination in CI. The earlier full-suite
+counts and source hashes above remain the original checks; this section records
+the narrower rerun and concrete dependency integration separately.
