@@ -29,8 +29,10 @@ try {
     # Install the pinned native prebuilts without running package lifecycle shells.
     $taskInstall = Invoke-DashboardInstallerProcess $taskNode @($taskNpm, 'ci', '--omit=dev', '--ignore-scripts')
     if ($taskInstall.ExitCode -ne 0) { throw 'Dashboard dependency installation failed' }
-    $taskNative = Invoke-DashboardInstallerProcess $taskNode @('--input-type=module', '--eval', "import koffi from 'koffi'; if (!koffi.version) throw new Error('Native Koffi unavailable');")
+    $taskNative = Invoke-DashboardInstallerProcess $taskNode @('--input-type=module', '--eval', "import koffi from 'koffi'; if (!koffi.version) throw new Error('Native Koffi unavailable'); console.log(koffi.version);") -Capture
     if ($taskNative.ExitCode -ne 0) { throw 'Windows native prebuilt unavailable; installation did not complete' }
+    $taskKoffiVersion = $taskNative.Output.Trim()
+    if ($taskKoffiVersion -notmatch '^\d+\.\d+\.\d+$') { throw 'Native Koffi version could not be verified' }
     # Co-install the pinned native binary for an existing WSL distribution.
     # This does not create a distribution or run the DSH environment wrapper.
     $taskDistribution = if ($env:RDSH_WSL_DISTRO) { $env:RDSH_WSL_DISTRO } else { 'FlashNext' }
@@ -40,7 +42,7 @@ try {
         $taskWslStatus = $taskWsl.ExitCode
         $taskArchitecture = @{ x86_64 = 'x64'; aarch64 = 'arm64' }[($taskMachine -join '').Trim()]
         if ($taskWslStatus -eq 0 -and $taskArchitecture) {
-            $taskInstall = Invoke-DashboardInstallerProcess $taskNode @($taskNpm, 'install', '--no-save', '--package-lock=false', '--ignore-scripts', '--force', "@koromix/koffi-linux-$taskArchitecture@3.1.1")
+            $taskInstall = Invoke-DashboardInstallerProcess $taskNode @($taskNpm, 'install', '--no-save', '--package-lock=false', '--ignore-scripts', '--force', "@koromix/koffi-linux-$taskArchitecture@$taskKoffiVersion")
             if ($taskInstall.ExitCode -ne 0) { throw 'WSL native dependency installation failed' }
         } else { Write-Verbose 'WSL native dependency not selected; see docs/SCOPED-STOP.md before Harness launch.' }
     }
