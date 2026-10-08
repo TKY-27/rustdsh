@@ -1081,7 +1081,12 @@ fn confine_log_path(
     root: &std::path::Path,
     cand: &std::path::Path,
 ) -> anyhow::Result<std::path::PathBuf> {
-    let joined = if cand.is_absolute() {
+    // Preserve the existing CLI contract: bare names are logs-root-relative,
+    // while paths with a separator are relative to the caller's working dir.
+    let joined = if cand.is_absolute()
+        || cand.components().count() > 1
+        || cand.to_string_lossy().contains('/')
+    {
         cand.to_path_buf()
     } else {
         root.join(cand)

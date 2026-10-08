@@ -86,7 +86,12 @@ fn logs_preserves_relative_home_latest_selection_and_tail_filter() {
         "DUMMY_MATCH old\nordinary\nDUMMY_MATCH new\n",
     )
     .unwrap();
-    for selection in [Vec::<&str>::new(), vec!["--file", "app.log"]] {
+    for selection in [
+        Vec::<&str>::new(),
+        vec!["--file", "app.log"],
+        vec!["--file", "dsh/logs/app.log"],
+        vec!["--file", "./dsh/logs/app.log"],
+    ] {
         let out = f
             .cmd()
             .current_dir(&f.root)
