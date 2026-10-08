@@ -109,11 +109,24 @@ struct Session {
 /// Missing root yields an empty vec.
 fn scan_sessions(root: &str, project: Option<&str>) -> Vec<Session> {
     let projs: Vec<String> = match project {
-        Some(p) => vec![p.to_string()],
+        // Project ids are single directory names: reject traversal so
+        // `--project ../../.ssh` cannot list outside the sessions root.
+        Some(p) if !p.is_empty() && !p.contains(['/', '\\']) && p != "." && p != ".." => {
+            // The entry itself must not be a link: lstat never follows, so a
+            // planted `sessions/<proj>` symlink fails closed here. (A swap
+            // after this check needs DSH_HOME write; descriptor enumeration
+            // of project dirs belongs in file_security as follow-up.)
+            let dir = std::path::Path::new(root).join(p);
+            if std::fs::symlink_metadata(&dir).is_ok_and(|m| m.file_type().is_symlink()) {
+                return vec![];
+            }
+            vec![p.to_string()]
+        }
+        Some(_) => return vec![],
         None => match std::fs::read_dir(root) {
             Ok(e) => e
                 .filter_map(|e| e.ok())
-                .filter(|e| e.metadata().is_ok_and(|m| m.is_dir()))
+                .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
                 .map(|e| e.file_name().to_string_lossy().into_owned())
                 .collect(),
             Err(_) => return vec![],
@@ -253,12 +266,18 @@ pub fn cmd_sessions(
 
 fn scan_project(pdir: &std::path::Path, proj: &str) -> Vec<Session> {
     let mut v = vec![];
+    // Reject a linked project dir itself (lstat, no following).
+    if std::fs::symlink_metadata(pdir).is_ok_and(|m| m.file_type().is_symlink()) {
+        return v;
+    }
     let entries = match std::fs::read_dir(pdir) {
         Ok(e) => e,
         Err(_) => return v,
     };
     for e in entries.filter_map(|e| e.ok()) {
-        if !e.metadata().is_ok_and(|m| m.is_dir()) {
+        // file_type does not traverse symlinks: a planted link never
+        // pulls an outside directory into the walk.
+        if !e.file_type().is_ok_and(|t| t.is_dir()) {
             continue;
         }
         let id = e.file_name().to_string_lossy().into_owned();
@@ -280,6 +299,10 @@ fn dir_size_mtime(dir: &std::path::Path) -> (u64, u64, String) {
     let mut best: Option<std::time::SystemTime> = None;
     if let Ok(entries) = std::fs::read_dir(dir) {
         for e in entries.filter_map(|e| e.ok()) {
+            // Skip links before statting: sizes must describe files inside.
+            if !e.file_type().is_ok_and(|t| t.is_file()) {
+                continue;
+            }
             // One stat per entry: size + mtime come from the same metadata.
             let md = match e.metadata() {
                 Ok(m) => m,
@@ -370,6 +393,11 @@ impl TokensCache {
                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
                     if let Some(obj) = v.as_object() {
                         for (k, e) in obj {
+                            // Older cache writers could store an inexact value as
+                            // exact. Its provenance cannot be recovered: recompute.
+                            if e.get("schema").and_then(|x| x.as_u64()) != Some(2) {
+                                continue;
+                            }
                             // Cap on load so a foreign huge file stays harmless.
                             if map.len() >= 2000 {
                                 break;
@@ -465,7 +493,7 @@ impl TokensCache {
             if let Some((m, b, d, t, c)) = self.map.get(k) {
                 obj.insert(
                     k.clone(),
-                    serde_json::json!({"mtime": m, "bytes": b, "decomp": d, "ts": t, "cli": c}),
+                    serde_json::json!({"schema": 2, "mtime": m, "bytes": b, "decomp": d, "ts": t, "cli": c}),
                 );
             }
         }
@@ -475,11 +503,31 @@ impl TokensCache {
                 return;
             }
         }
-        // Atomic replace so concurrent readers never see a torn file.
-        let tmp = format!("{p}.tmp");
-        if std::fs::write(&tmp, text).is_ok() {
-            let _ = std::fs::rename(&tmp, p);
+        // Randomized exclusive tmp + rename: a predictable `{p}.tmp` would
+        // let a planted symlink truncate an unrelated file on write.
+        let tmp = match crate::local_http::random_token() {
+            Ok(nonce) => format!("{p}.tmp.{nonce}"),
+            Err(_) => return,
+        };
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
         }
+        if let Ok(mut file) = options.open(&tmp) {
+            use std::io::Write;
+            if file.write_all(text.as_bytes()).is_ok() {
+                let _ = file.sync_all();
+                drop(file);
+                // Atomic replace so concurrent readers never see a torn file.
+                // The new inode was already created privately. Avoid a
+                // path-based chmod after rename, which could follow a swap.
+                let _ = std::fs::rename(&tmp, p);
+            }
+        }
+        let _ = std::fs::remove_file(&tmp);
     }
 }
 
@@ -496,7 +544,7 @@ fn batch_decompressed(
     for (i, sess) in shown.iter().enumerate() {
         let key = TokensCache::key(root, &sess.project, &sess.id);
         match cache.get(&key, sess.mtime, sess.bytes, zstd_cli) {
-            Some(hit) => out[i] = (hit, true),
+            Some(hit) => out[i] = (hit, hit.is_some()),
             None => pending.push((i, (*sess).clone())),
         }
     }
@@ -522,17 +570,9 @@ fn batch_decompressed(
                 ));
             }
             for (i, h) in handles {
-                if let Ok(((r, _), local)) = h.join() {
+                if let Ok(((r, exact), local)) = h.join() {
                     cache.merge(&local);
-                    let sess = &shown[i];
-                    cache.put(
-                        &TokensCache::key(root, &sess.project, &sess.id),
-                        sess.mtime,
-                        sess.bytes,
-                        r,
-                        zstd_cli,
-                    );
-                    out[i] = (r, true);
+                    out[i] = (r, exact);
                 }
             }
         });
@@ -561,7 +601,7 @@ fn session_decompressed_bytes(
 ) -> (Option<u64>, bool) {
     let key = TokensCache::key(root, &sess.project, &sess.id);
     if let Some(hit) = cache.get(&key, sess.mtime, sess.bytes, zstd_cli) {
-        return (hit, true);
+        return (hit, hit.is_some());
     }
     let (r, exact) = session_decompressed_bytes_uncached(
         root,
@@ -571,7 +611,11 @@ fn session_decompressed_bytes(
         stale_secs,
         cache,
     );
-    cache.put(&key, sess.mtime, sess.bytes, r, zstd_cli);
+    // A reused value from a growing file is deliberately inexact. Do not
+    // associate it with the new content identity and promote it on a cache hit.
+    if exact || r.is_none() {
+        cache.put(&key, sess.mtime, sess.bytes, r, zstd_cli);
+    }
     (r, exact)
 }
 
@@ -600,6 +644,12 @@ fn session_decompressed_bytes_uncached(
         if !name.ends_with(".zstd") {
             continue;
         }
+        // Never measure through a link, and never label the remaining partial
+        // sum exact when a compressed entry was deliberately omitted.
+        if !e.file_type().is_ok_and(|t| t.is_file()) {
+            estimated = true;
+            continue;
+        }
         match zstd_frame_content_size(&p) {
             Some(n) => {
                 total += n;
@@ -619,6 +669,7 @@ fn session_decompressed_bytes_uncached(
                 continue;
             };
             let Some((mtime, bytes)) = file_meta(p) else {
+                estimated = true;
                 continue;
             };
             let fkey = TokensCache::file_key(root, project, id, &name);
@@ -627,6 +678,8 @@ fn session_decompressed_bytes_uncached(
                     if let Some(n) = hit {
                         total += n;
                         any = true;
+                    } else {
+                        estimated = true;
                     }
                 }
                 None => todo.push(p.clone()),
@@ -637,15 +690,18 @@ fn session_decompressed_bytes_uncached(
         let stale_window = stale_secs;
         let mut todo2: Vec<std::path::PathBuf> = vec![];
         for p in &todo {
-            let stale_hit = p
-                .file_name()
-                .map(|s| s.to_string_lossy().into_owned())
-                .and_then(|name| {
-                    cache.stale(
-                        &TokensCache::file_key(root, project, id, &name),
-                        stale_window,
-                    )
-                });
+            let stale_hit = (stale_window > 0)
+                .then(|| {
+                    p.file_name()
+                        .map(|s| s.to_string_lossy().into_owned())
+                        .and_then(|name| {
+                            cache.stale(
+                                &TokensCache::file_key(root, project, id, &name),
+                                stale_window,
+                            )
+                        })
+                })
+                .flatten();
             match stale_hit {
                 Some(n) => {
                     total += n;
@@ -671,7 +727,11 @@ fn session_decompressed_bytes_uncached(
                     if let Some(n) = n {
                         total += n;
                         any = true;
+                    } else {
+                        estimated = true;
                     }
+                } else {
+                    estimated = true;
                 }
             }
         } else if !todo.is_empty() {
@@ -689,6 +749,8 @@ fn session_decompressed_bytes_uncached(
                         if let Some(n) = stream_decompressed_bytes(p) {
                             total += n;
                             any = true;
+                        } else {
+                            estimated = true;
                         }
                     }
                 }
@@ -989,24 +1051,94 @@ fn stream_many_decompressed_bytes(paths: &[&std::path::PathBuf]) -> Option<u64> 
     }
 }
 
+/// Open a validated logs path without following links: on Unix the open
+/// walks directory fds with O_NOFOLLOW and rejects hardlinked or
+/// non-regular files, closing the check/open race a canonicalize-then-read
+/// leaves behind (link swapped in after validation, FIFO block, hardlinked
+/// outside file). Callers confine `resolved` under `root` first.
+#[cfg(unix)]
+fn open_log_file(
+    root: &std::path::Path,
+    resolved: &std::path::Path,
+) -> anyhow::Result<std::fs::File> {
+    crate::file_security::open_beneath(root, resolved)
+        .ok_or_else(|| anyhow::anyhow!("cannot open log file"))
+}
+
+#[cfg(not(unix))]
+fn open_log_file(
+    root: &std::path::Path,
+    resolved: &std::path::Path,
+) -> anyhow::Result<std::fs::File> {
+    // No no-follow directory-fd opens on this platform: keep the lexical
+    // confinement check (done by the caller) and open normally.
+    let _ = root;
+    std::fs::File::open(resolved).map_err(|e| anyhow::anyhow!("cannot open log file: {e}"))
+}
+
+/// Resolve a logs candidate under the selected canonical logs dir.
+fn confine_log_path(
+    root: &std::path::Path,
+    cand: &std::path::Path,
+) -> anyhow::Result<std::path::PathBuf> {
+    // Preserve the existing CLI contract: bare names are logs-root-relative,
+    // while paths with a separator are relative to the caller's working dir.
+    let joined = if cand.is_absolute()
+        || cand.components().count() > 1
+        || cand.to_string_lossy().contains('/')
+    {
+        cand.to_path_buf()
+    } else {
+        root.join(cand)
+    };
+    let resolved =
+        std::fs::canonicalize(&joined).map_err(|e| anyhow::anyhow!("cannot read log file: {e}"))?;
+    if !resolved.starts_with(root) {
+        anyhow::bail!("log file must be inside {}", root.display());
+    }
+    Ok(resolved)
+}
+
 pub fn cmd_logs(tail: usize, grep: Option<String>, file: Option<String>) -> anyhow::Result<()> {
     let dir = format!("{}/logs", dsh_home());
-    let path = match file {
-        Some(f) => std::path::PathBuf::from(if f.contains('/') {
-            f
-        } else {
-            format!("{dir}/{f}")
-        }),
+    let (display, mut handle) = match file {
+        Some(f) => {
+            // Confine explicit selections to the logs dir (fail closed):
+            // without this `--file /etc/passwd` or `../../.credentials.yaml`
+            // prints arbitrary files to stdout.
+            let root =
+                std::fs::canonicalize(&dir).map_err(|_| anyhow::anyhow!("no logs at {dir}"))?;
+            let candidate = std::path::Path::new(&f);
+            let resolved = confine_log_path(&root, candidate)?;
+            let handle = open_log_file(&root, &resolved)?;
+            let display = if candidate.is_absolute() {
+                candidate.to_path_buf()
+            } else {
+                std::path::Path::new(&dir).join(candidate)
+            };
+            (display, handle)
+        }
         None => match latest_file(&dir) {
-            Some(p) => p,
+            Some(p) => {
+                let root =
+                    std::fs::canonicalize(&dir).map_err(|_| anyhow::anyhow!("no logs at {dir}"))?;
+                // read_dir already returned a path including `dir`; resolve
+                // it directly even when DSH_HOME is relative.
+                let candidate = std::fs::canonicalize(&p)?;
+                let resolved = confine_log_path(&root, &candidate)?;
+                let handle = open_log_file(&root, &resolved)?;
+                (p, handle)
+            }
             None => {
                 println!("# no logs at {dir}");
                 return Ok(());
             }
         },
     };
-    eprintln!("[rdsh] reading {}", path.display());
-    let text = std::fs::read_to_string(&path)?;
+    eprintln!("[rdsh] reading {}", display.display());
+    use std::io::Read as _;
+    let mut text = String::new();
+    handle.read_to_string(&mut text)?;
     // Single pass: count matches while keeping only the last `tail` lines.
     // (Old code collected every line, then filtered in a second pass.)
     let pat = grep.as_deref();
@@ -1042,6 +1174,11 @@ pub fn cmd_logs(tail: usize, grep: Option<String>, file: Option<String>) -> anyh
 fn latest_file(dir: &str) -> Option<std::path::PathBuf> {
     let mut best: Option<(u64, std::path::PathBuf)> = None;
     for e in std::fs::read_dir(dir).ok()?.filter_map(|e| e.ok()) {
+        // Never follow a planted link out of the logs dir (file_type does
+        // not traverse symlinks, unlike metadata below).
+        if !e.file_type().is_ok_and(|t| t.is_file()) {
+            continue;
+        }
         // One stat per entry; the display string is not needed here.
         let md = match e.metadata() {
             Ok(m) => m,
@@ -1067,7 +1204,7 @@ fn dir_names(dir: &str) -> Vec<String> {
     let mut names: Vec<String> = std::fs::read_dir(dir)
         .map(|e| {
             e.filter_map(|e| e.ok())
-                .filter(|e| e.metadata().is_ok_and(|m| m.is_dir()))
+                .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
                 .map(|e| e.file_name().to_string_lossy().into_owned())
                 .collect()
         })
@@ -1260,7 +1397,8 @@ mod tests {
         // Batch path: the resolvable session is cached, the `?` one is not.
         let mut cache = tmp_cache(&dir);
         let out = batch_decompressed(&root, &[&s1, &s2], false, 0, &mut cache);
-        assert_eq!(out, vec![(Some(5), true), (None, true)]);
+        // Batch marks a freshly unresolvable row inexact, like the session path.
+        assert_eq!(out, vec![(Some(5), true), (None, false)]);
         assert_eq!(cache.get(&k1, s1.mtime, s1.bytes, true), Some(Some(5)));
         assert!(!cache.map.contains_key(&k2));
         cache.save();
@@ -1287,7 +1425,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
             dir.join("cache.json"),
-            r#"{"n":{"mtime":1,"bytes":2,"decomp":null,"ts":0},"v":{"mtime":1,"bytes":2,"decomp":40,"ts":0}}"#,
+            r#"{"n":{"schema":2,"mtime":1,"bytes":2,"decomp":null,"ts":0},"v":{"schema":2,"mtime":1,"bytes":2,"decomp":40,"ts":0}}"#,
         )
         .unwrap();
         let mut cache = tmp_cache(&dir);

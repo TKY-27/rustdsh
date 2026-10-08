@@ -65,8 +65,8 @@ test('plugin security boundary and settings preservation', async (t) => {
   const initialSettings = await readFile(settingsFile, 'utf8');
   const initialContext = await readFile(contextFile, 'utf8');
 
-  await t.test('all six routes reject before body consumption or side effects', async () => {
-    assert.equal(routes.size, 6);
+  await t.test('all seven routes reject before body consumption or side effects', async () => {
+    assert.equal(routes.size, 7);
     for (const rejection of [401, 403]) {
       for (const path of routes.keys()) {
         for (const method of ['GET', 'HEAD', 'POST']) {
@@ -269,5 +269,27 @@ test('plugin security boundary and settings preservation', async (t) => {
       assert.equal(result.status, 400);
       assert.equal(await readFile(settingsFile, 'utf8'), raw);
     }
+  });
+
+  await t.test('reads report corrupt settings instead of displaying defaults', async () => {
+    for (const raw of ['{broken', 'null', '[]']) {
+      await writeFile(settingsFile, raw);
+      const result = await request('/api/rdsh-settings');
+      assert.equal(result.status, 400);
+      assert.equal(result.body.ok, false);
+      assert.equal(result.body.config, undefined);
+      assert.equal(await readFile(settingsFile, 'utf8'), raw);
+    }
+  });
+
+  await t.test('missing settings use the current Rust dashboard port', async () => {
+    await rm(settingsFile);
+    const result = await request('/api/rdsh-settings');
+    assert.equal(result.status, 200);
+    assert.equal(result.body.config.serve.port, 38080);
+    assert.equal((await request('/api/rdsh-settings/save', {
+      method: 'POST', body: JSON.stringify(result.body.config),
+    })).status, 200);
+    assert.equal(JSON.parse(await readFile(settingsFile, 'utf8')).serve.port, 38080);
   });
 });
