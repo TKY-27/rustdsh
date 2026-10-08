@@ -39,6 +39,9 @@ window.__ModuleLoader__.load({
         const separator = typeof old?.key === "string" ? old.key.lastIndexOf("@") : -1;
         if (separator > 0 && old.key.slice(0, separator) === j.to) {
           remember(j);
+          // Once assigned to this component, the legacy wildcard must not hide
+          // a future update of a different component with the same version.
+          try { localStorage.removeItem(DISMISS_KEY); } catch (e) {}
           return true;
         }
       } catch (e) {}

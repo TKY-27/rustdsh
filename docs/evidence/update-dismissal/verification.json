@@ -13,7 +13,7 @@
   "before": "Same target with a changed timestamp reappears on the next poll",
   "baseline_commit": "b7120ff2f9d8acbb25664e4efc675c73ca7548c5",
   "source_sha256": {
-    "plugins/rdsh-update-banner/client.js": "143298cc111de2e4dbed87d7b2724430ff0df04d337cc971a1b6b8909ff1112a",
+    "plugins/rdsh-update-banner/client.js": "5cc330bbfe0770ff4d29a54189671ca83221aa9e56bfe0ddeda0d26ec234d250",
     "plugins/rdsh-update-banner/index.js": "11ee199b7cf82467698684fa19dc27b3e3f466d22e2736a727c405f054858d57"
   },
   "review": {

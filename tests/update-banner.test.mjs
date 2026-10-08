@@ -36,6 +36,7 @@ function host({ storage = new Map(), storageFails = false, initial = update() } 
     localStorage: {
       getItem(k) { if (storageFails) throw new Error('storage disabled'); return storage.get(k) ?? null; },
       setItem(k, v) { if (storageFails) throw new Error('storage disabled'); storage.set(k, v); },
+      removeItem(k) { if (storageFails) throw new Error('storage disabled'); storage.delete(k); },
     },
     fetch: async (_url, options) => {
       if (options.method === 'POST') { posts.push(JSON.parse(options.body)); return response({ ok: true }); }
@@ -108,6 +109,8 @@ test('old expired records migrate and corrupt records do not break rendering', a
   const fixture = host({ storage }); fixture.render(); await settle(); assert.equal(fixture.render(), null);
   assert.equal(storage.get(key(update())), '1');
   assert.equal(fixture.posts.length, 1); // Migrated dismissal also reaches the account.
+  assert.equal(storage.has('rdsh-update-dismissed'), false);
+  fixture.setUpdate(update('v-next', { kind: 'dsh' })); await fixture.poll(); assert.ok(fixture.render());
   for (const raw of ['{broken', JSON.stringify({ key: 'v-nextX' }), 'null', '[]']) {
     await shown({ storage: new Map([['rdsh-update-dismissed', raw]]) });
   }
