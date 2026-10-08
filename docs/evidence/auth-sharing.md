@@ -99,3 +99,30 @@ The sharing and Extras UI is unchanged from the EN/JA desktop/mobile captures
 above. These are source-matched browser evidence from the earlier commit;
 the latest CLI and security verification is the separate run described here.
 Real model authentication and paid APIs remain untested.
+
+## Integration after the native inspection merge
+
+Merged main `b7120ff2f9d8acbb25664e4efc675c73ca7548c5` at source
+`921ba9105b0223556c6a3b1811e0c0dd6ecbca4a`. The setup conflict retains
+credential sharing and revocation guidance together with main's `noopener`
+external-link protection. Native inspection limits, compressed-entry precision,
+and the DNS-independent loopback regression fixture remain intact.
+
+The isolated release validation passed 120 Rust tests, 7 example tests,
+36 Node security tests, 182 dashboard tests, 55 CLI checks, 20 settings checks,
+21 context checks and 6 release-artifact tests, with fmt and release Clippy
+warnings denied. These counts belong to the exact source above.
+
+An actual Rust setup server with synthetic credentials passed the English and
+Japanese Chrome flows at 1280/390px. Sharing consent and Extras survived save,
+independent file reads and reload without page errors or horizontal overflow.
+The actual external-link button opened a controlled browser fixture with
+`window.opener === null`; the browser intercepted that URL locally, without a
+request to the real provider. The hint still explains shared credentials.
+
+The [current browser record](auth-sharing-main186-browser.json) and actual
+[Japanese desktop](auth-sharing-main186-ja-JP-desktop.png),
+[Japanese mobile](auth-sharing-main186-ja-JP-mobile.png),
+[English desktop](auth-sharing-main186-en-US-desktop.png), and
+[English mobile](auth-sharing-main186-en-US-mobile.png) captures supplement
+the unchanged UI-flow GIF above. No real credentials, models or paid APIs were used.
