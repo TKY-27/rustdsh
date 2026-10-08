@@ -482,7 +482,7 @@ fn setup_dry_run_does_not_import_an_existing_selection() {
 
 #[cfg(unix)]
 #[test]
-fn every_delegation_path_obeys_consent_and_disabled_autosync() {
+fn delegation_enforcement_precedes_copying_and_metadata_obeys_consent() {
     use std::os::unix::fs::PermissionsExt;
     let fixture = Fixture::new();
     fixture.seed();
@@ -508,10 +508,10 @@ fn every_delegation_path_obeys_consent_and_disabled_autosync() {
         for args in args.iter().copied() {
             fixture.write("dsh/.credentials.yaml", "version: 1\n");
             let output = fixture.run(args);
-            assert!(output.status.success(), "{}", public_output(&output));
-            public_output(&output);
+            assert!(!output.status.success(), "{}", public_output(&output));
+            assert!(public_output(&output).contains("RDSH_SECURITY"));
             let stored = fixture.read("dsh/.credentials.yaml");
-            assert_eq!(stored.contains(CODEX_ACCESS), selected);
+            assert!(!stored.contains(CODEX_ACCESS));
             assert!(!stored.contains(OPENCODE_ACCESS));
         }
         fixture.write("dsh/.credentials.yaml", "version: 1\n");
@@ -520,6 +520,11 @@ fn every_delegation_path_obeys_consent_and_disabled_autosync() {
             .args(["--profile", "tui"])
             .output()
             .unwrap();
+        assert!(!output.status.success(), "{}", public_output(&output));
+        assert!(public_output(&output).contains("RDSH_SECURITY"));
+        assert_eq!(fixture.read("dsh/.credentials.yaml"), "version: 1\n");
+        // The trusted metadata path executes the stub without starting an agent.
+        let output = fixture.command_for(&proxy).args(["--version"]).output().unwrap();
         assert!(output.status.success(), "{}", public_output(&output));
         public_output(&output);
         assert_eq!(
