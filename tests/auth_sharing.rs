@@ -524,7 +524,11 @@ fn delegation_enforcement_precedes_copying_and_metadata_obeys_consent() {
         assert!(public_output(&output).contains("RDSH_SECURITY"));
         assert_eq!(fixture.read("dsh/.credentials.yaml"), "version: 1\n");
         // The trusted metadata path executes the stub without starting an agent.
-        let output = fixture.command_for(&proxy).args(["--version"]).output().unwrap();
+        let output = fixture
+            .command_for(&proxy)
+            .args(["--version"])
+            .output()
+            .unwrap();
         assert!(output.status.success(), "{}", public_output(&output));
         public_output(&output);
         assert_eq!(

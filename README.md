@@ -13,16 +13,19 @@
 
 `rdsh` is a drop-in fast path for [dsh](https://github.com/deepseek-ai/deepseek-harness)
 (the DeepSeek Harness CLI). Instead of a full rewrite, it **ports only the hot paths
-to Rust and delegates everything else to the original `dsh` binary** — so you get
-~98x faster startup and ~1/23rd the memory with zero behavior change.
+to Rust and delegates conversation and model execution to the original `dsh` binary**.
+The Linux `--version` benchmark measured ~98x faster startup and ~1/23rd peak RSS.
+Those numbers describe a short CLI invocation, not the resident Desktop app or
+delegated model calls.
 
-- Startup median **~0.90ms** (original `dsh`: ~88ms)
-- Resident memory **~2.9MB** (original: ~66MB), single ~806KB binary, no runtime tree
+- `--version` startup median **~0.90ms** (original `dsh`: ~88ms, Linux)
+- `--version` peak RSS **~2.9MB** (original: ~66MB, Linux)
 - Safe by construction: agent loop and profile boot are never reimplemented,
   delegation is a verbatim `exec`, and every optimization is output-identical
 
 ## Contents
 
+- [Getting started](#getting-started)
 - [Benchmarks](#benchmarks)
 - [Install](#install)
 - [Usage](#usage)
@@ -34,6 +37,19 @@ to Rust and delegates everything else to the original `dsh` binary** — so you 
 - [FAQ](#faq)
 - [Credits](#credits)
 - [License](#license)
+
+## Getting started
+
+1. Install using the commands below, then run `rdsh --version` and `rdsh doctor`.
+2. Open `rdsh setup --web` using the complete URL printed by the launcher.
+3. For conversations, use `rdsh tui` and confirm a response from the selected model.
+4. For the local status page, enable `serve` first: `rdsh settings set extras.enable serve`.
+5. If settings are corrupt, preserve the file before explicitly resetting with
+   `rdsh settings init --force`; then review the restored settings.
+
+See the [usage and recovery flow](docs/USER-FLOW.md),
+[settings](docs/RDSH-SETTINGS.md), and [architecture diagrams](docs/ARCHITECTURE.md).
+The original DSH runtime is required for delegated conversations.
 
 ## Benchmarks
 
@@ -121,14 +137,14 @@ rdsh --dry-run tui -- --resume abc  # print what would be executed
 rdsh tokens ./AGENTS.md               # estimate input tokens (~4 chars = 1, CJK = 1 each)
 echo ... | rdsh prune --max-tokens 4000  # keep head+tail within a token budget
 rdsh search TODO --dir . --max 100   # recursive grep (parallel, same order as sequential)
-rdsh search-web "rust async" --limit 5  # web search via SearXNG (default http://127.0.0.1:8888, $SEARXNG_URL wins)
+rdsh search-web "rust async" --limit 5  # requires search-web extra and SearXNG
 rdsh compact ./s.jsonl --max-tokens 8000 # compact a session transcript (source untouched)
 rdsh sessions --limit 20 --tokens    # list sessions with decompressed token estimates
 rdsh logs --tail 50 --grep ERROR     # inspect startup logs
 rdsh profiles / rdsh skills          # list profiles and skills
 rdsh doctor                          # check original dsh, DSH_HOME, slim setup
 rdsh bench --n 5                     # compare rdsh vs dsh startup
-rdsh serve                           # local web dashboard (:38080)
+rdsh serve                           # requires serve extra; local dashboard (:38080)
 ```
 
 ### Credential sharing with rdsh auth
@@ -311,6 +327,7 @@ Co-use notes:
 ## Web dashboard
 
 ```sh
+rdsh settings set extras.enable serve  # replaces the enabled-extra list
 rdsh serve
 # open the URL containing #key=... printed by rdsh (localhost only)
 # default :38080 keeps clear of the dsh web GUI (:3080); --port 0 auto-picks
@@ -330,8 +347,8 @@ APIs other than `/api/version` require the per-launch key in the
 `X-RDSH-Token` header (the browser UI uses the key from its URL).
 No CDN is used; the page works offline.
 
-Which one? `rdsh serve` is the quick local status page (no setup beyond
-the binary). For project metrics, human Q&A, and phone access, use the
+`rdsh serve` is the quick local status page after enabling its extra.
+For project metrics, human Q&A, and phone access, use the
 optional [Node.js dashboard](dashboard/README.md) (needs Node.js 22+).
 
 The Node.js dashboard adds project metrics, tasks, human Q&A, and Tailscale
@@ -347,45 +364,9 @@ dumps, missing `--profile`) are reproduced in Rust.
 4. Read paths never write: tokens/search/compact/dump/native APIs touch nothing.
 5. `--passthrough` disables environment tuning. Restoring the original DSH with `./install.sh --restore` also removes rustdsh protection.
 
-### Verification (all executed)
-
-- `cargo test`: unit and isolated CLI integration tests pass (token math, wildcard matcher, arg splitter, auth splice/freshness, setup lang).
-  The suite caught and fixed one real matcher bug (single-pattern substring).
-- `tests/regress.sh`: CLI checks pass (every subcommand, error paths,
-  auth import round-trip, setup first-run flow, and sandboxed `dsh`-name
-  delegation against a fake original).
-- Optimization diffs: old vs. new binary outputs compared byte-for-byte
-  (300-hit search and truncated-max search both identical).
-- Live replacement verified on a real machine: `dsh --version` still delegates,
-  new native commands work under the `dsh` name.
-
-## How it got fast
-
-- ASCII fast path for token estimation: pure-ASCII input is one `len/4`
-  computation (non-ASCII keeps the exact scan; results identical).
-- Two-phase search: sequential walk fixes the order, files are grepped in
-  parallel, hits merge back in walk order. Trees under 32 files keep the exact
-  old sequential code path.
-- Parallel zstd expansion for `sessions --tokens` (same numbers, order kept).
-- Release profile stays small: `opt-level=z`, LTO, `strip`, `panic=abort` (~806KB).
-
-## Project layout
-
-- `src/main.rs` — CLI definition, dispatch, `dsh`-name detection
-- `src/auth.rs` — credential inventory and selected imports (codex/opencode/environment → credentials.yaml)
-- `src/dsh_args.rs` — original `lib/bin.js`-compatible arg splitter (read-only)
-- `src/passthrough.rs` — original-binary discovery + `exec` delegation
-- `src/slim.rs` — slim environment definition
-- `src/tokens.rs` — token estimation and pruning
-- `src/search.rs` — order-preserving parallel grep
-- `src/websearch.rs` — SearXNG web search (`search-web`, no API key)
-- `src/compact.rs` — session transcript compaction
-- `src/inspect.rs` — read-only sessions/logs/skills/profiles views
-- `src/guard.rs` — hooks.json guard command
-- `src/serve.rs` + `src/ui.html` — local web dashboard
-- `src/setup_web.rs` + `src/setup.html` — floating glass setup UI (`setup --web`)
-- `install.sh` — installer (`--as-dsh` shadow / `--restore`)
-- `tests/regress.sh` — CLI regression suite (CLI checks)
+Verify the current checkout with `cargo test`, `tests/regress.sh`, and the
+[required checks](CONTRIBUTING.md). Reproducible synthetic performance tests and
+before/after output checks are described in [BENCHMARKS.md](docs/BENCHMARKS.md).
 
 ## Community
 

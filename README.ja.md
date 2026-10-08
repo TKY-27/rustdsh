@@ -11,14 +11,17 @@
 <img src="assets/icon.svg" width="96" alt="rdsh icon">
 
 フル移植ではなく**ホットパスだけ Rust 化＋残りは本家 dsh に委譲**する設計です。
-起動約98倍・メモリ約1/23を、本家の動作を変えずに実現します。
+Linux上の `--version` で起動約98倍・最大RSS約1/23を測定しています。
+この数値は短いCLI呼び出しの結果です。Desktop全体の常駐メモリやモデル通信の
+削減量を表すものではありません。
 
-- 起動中央値 **約0.90ミリ秒**（本家約88ミリ秒）
-- 常駐メモリ **約2.9MB**（本家約66MB）・単一バイナリ約806KB（依存ツリー不要）
+- `--version` 起動中央値 **約0.90ミリ秒**（本家約88ミリ秒、Linux）
+- `--version` 最大RSS **約2.9MB**（本家約66MB、Linux）
 - `dsh`名で置換しても引数を一字も変えず委譲するため、既存の使い方・スクリプトはそのまま動きます
 
 ## 目次
 
+- [最初に進める順番](#最初に進める順番)
 - [実測](#実測)
 - [インストール](#インストール)
 - [使い方](#使い方)
@@ -30,6 +33,17 @@
 - [よくある質問](#よくある質問)
 - [クレジット](#クレジット)
 - [ライセンス](#ライセンス)
+
+## 最初に進める順番
+
+1. 下の手順で導入し、`rdsh --version` と `rdsh doctor` で確認します。
+2. `rdsh setup --web` が表示する鍵付きURLを開き、接続と必要な補助機能を設定します。
+3. 会話は `rdsh tui` から始め、選択したモデルの応答まで確認します。
+4. 状態画面は `rdsh settings set extras.enable serve` で有効化してから開きます。
+5. 設定破損時は元のファイルを退避し、明示的な復旧後に設定を再確認します。
+
+詳しい[導入・利用・復旧の動線](docs/USER-FLOW.md)、[設定画面](docs/RDSH-SETTINGS.md)、
+[構成図](docs/ARCHITECTURE.md)を用意しています。会話には本家DSHが必要です。
 
 ## 実測
 
@@ -115,14 +129,14 @@ rdsh --dry-run tui -- --resume abc  # 実行内容だけ表示
 rdsh tokens ./AGENTS.md             # 入力トークン見積（約4文字=1トークン、CJKは1字1トークン）
 echo ... | rdsh prune --max-tokens 4000   # head+tailを残して予算内に切り詰め
 rdsh search TODO --dir . --max 100 # 再帰grep（並列・出力順は逐次と同一）
-rdsh search-web "rust async" --limit 5  # Web検索（SearXNG経由、既定 http://127.0.0.1:8888、`$SEARXNG_URL` で変更）
+rdsh search-web "rust async" --limit 5  # search-web有効化とSearXNGが必要
 rdsh compact ./s.jsonl --max-tokens 8000 # セッションJSONLの圧縮（元ファイル不変）
 rdsh sessions --limit 20 --tokens  # セッション一覧＋展開後トークン見積
 rdsh logs --tail 50 --grep ERROR   # 起動ログの参照
 rdsh profiles / rdsh skills        # プロファイル・スキル一覧
 rdsh doctor                        # 本家dsh・DSH_HOME・slim設定の確認
 rdsh bench --n 5                   # rdsh/dsh の起動比較
-rdsh serve                         # Webダッシュボード（:38080）
+rdsh serve                         # serve有効化後の状態画面（:38080）
 ```
 
 ### 選択した認証情報だけを共有する（rdsh auth）
@@ -287,8 +301,9 @@ rdsh --profile web                             # slim env付きで起動（プ�
 ## Web UI（ダッシュボード）
 
 ```sh
+rdsh settings set extras.enable serve  # 有効な補助機能の一覧を置き換えます
 rdsh serve
-# → http://127.0.0.1:38080/ を開く（localhost のみ、読取専用API）
+# → 起動時に表示される #key=... 付きURLを開く（localhost のみ）
 # ※ dsh web GUI（:3080）と競合しません。`--port 0` で自動選択もできます
 ```
 
@@ -302,9 +317,10 @@ rdsh serve
 | `GET /api/sessions?limit=20` | セッション一覧 |
 | `GET /api/skills` / `/api/profiles` | 一覧 |
 
-外部依存はありません（CDN不要・オフライン可）。
+`/api/version` 以外のAPIは起動ごとの鍵が必要です。画面がURLから読み取り、
+`X-RDSH-Token` ヘッダーで送ります。CDN不要・オフラインで使えます。
 
-手元の状態確認だけなら `rdsh serve` を使います（バイナリだけで動作）。
+手元の状態確認だけなら `serve` を有効化して `rdsh serve` を使います。
 プロジェクトの指標・質問と回答・スマホ接続には [Node.jsダッシュボード](dashboard/README.md) を使います（Node.js 22+が必要）。
 `rdsh-dashboard project --project <ディレクトリ>` でプロジェクト用、`rdsh-dashboard harness` で元のHarness Web画面を起動します。
 
@@ -316,38 +332,8 @@ rdsh serve
 4. 読取系（tokens/search/compact/dump --native/serve API/inspect）は元ファイルを書き換えません
 5. `--passthrough` はslim調整を無効化します。`./install.sh --restore` で元のDSHへ戻す場合はrustdshの保護も外れます。
 
-### 検証（すべて実行済み）
-
-- `cargo test`：単体・隔離CLI統合テスト（トークン計算・ワイルドカード・引数分割・auth系）
-- `tests/regress.sh`：CLI回帰検査（全サブコマンド・異常系・auth取込往復・setup初回導線・dsh名委譲の隔離検証）
-- 高速化の前後で出力をdiff比較し、完全一致を確認（300件search・上限打ち切りsearch）
-- 実置換後に `dsh --version`（委譲）と `dsh guard`（新機能）を実機確認
-
-## 高速化の仕組み
-
-- トークン推定のASCII高速路：純ASCIIは `len/4` 一発計算（非ASCIIのみ従来走査、結果は同一）
-- searchの二段階化：逐次walkで順序固定→ファイル単位で並列grep→walk順に結合。32ファイル未満は従来の逐次路のままです
-- sessions --tokensの展開並列化：zstd展開をスレッド分散（数値は逐次と同一、順序保持）
-- ビルドは `opt-level=z`＋LTO＋strip＋`panic=abort` で小型維持（約806KB）
-- 再現： `python3` で9.6MBテキスト・300ファイル合成木を作り、新旧バイナリを `time` 比較（旧版はgit worktreeでHEADビルド）
-
-## 構成
-
-- `src/main.rs` — CLI定義・振り分け・`dsh`名検出
-- `src/auth.rs` — 認証一覧と選択した共有元だけの取込（codex/opencode/環境変数→credentials.yaml）
-- `src/dsh_args.rs` — 本家 `lib/bin.js` 互換の引数分割（読取専用）
-- `src/passthrough.rs` — 本家探索＋`exec`委譲
-- `src/slim.rs` — slim env定義
-- `src/tokens.rs` — トークン推定・prune
-- `src/search.rs` — 順序保持の並列grep
-- `src/websearch.rs` — SearXNG Web検索（`search-web`、APIキー不要）
-- `src/compact.rs` — JSONLセッション圧縮
-- `src/inspect.rs` — sessions/logs/skills/profiles参照
-- `src/guard.rs` — hooks.json用ガード
-- `src/serve.rs`＋`src/ui.html` — ローカルWeb UI
-- `src/setup_web.rs`＋`src/setup.html` — フローティングのセットアップUI（`setup --web`）
-- `install.sh` — 導入（`--as-dsh`置換／`--restore`復元）
-- `tests/regress.sh` — CLI回帰試験（CLI回帰検査）
+現在のcheckoutは `cargo test` と `tests/regress.sh`、[必須チェック](CONTRIBUTING.md)で検証します。
+[再現可能な性能測定](docs/BENCHMARKS.md)では、入力と修正前後の出力一致も確認します。
 
 ## コミュニティ
 
