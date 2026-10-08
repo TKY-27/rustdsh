@@ -49,6 +49,9 @@ def compose(authored, generated, repository):
         raise ValueError("repository must be OWNER/REPO")
     if "## What's Changed" not in generated or "**Full Changelog**:" not in generated:
         raise ValueError("GitHub generated notes must include changes and the comparison link")
+    # A single configured category adds a redundant subheading; v0.2.0 has one heading.
+    generated = generated.replace("## What's Changed\n### What's Changed\n",
+                                  "## What's Changed\n\n", 1)
     return (f"{authored}\n\n{generated.strip()}\n\n"
             f"全変更は [CHANGELOG](https://github.com/{repository}/blob/main/CHANGELOG.md) に記載しています。\n")
 

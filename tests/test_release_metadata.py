@@ -71,12 +71,13 @@ class ReleaseMetadataTests(unittest.TestCase):
         notes = self.fixture()
         notes.write_text(notes.read_text() + "\n## What's Changed\n\nold PR list\n")
         authored = release.validate(self.root, "v1.2.3")
-        generated = ("## What's Changed\n\n* Fix by @contributor in https://github.com/org/repo/pull/1\n\n"
+        generated = ("## What's Changed\n### What's Changed\n* Fix by @contributor in https://github.com/org/repo/pull/1\n\n"
                      "## New Contributors\n\n* @contributor\n\n"
                      "**Full Changelog**: https://github.com/org/repo/compare/v1.2.2...v1.2.3")
         rendered = release.compose(authored, generated, "org/repo")
         self.assertEqual(rendered.count("## What's Changed"), 1)
-        self.assertIn(generated, rendered)
+        self.assertNotIn("### What's Changed", rendered)
+        self.assertIn(generated.replace("\n### What's Changed\n", "\n\n"), rendered)
         self.assertNotIn("old PR list", rendered)
         self.assertIn("https://github.com/org/repo/blob/main/CHANGELOG.md", rendered)
 
