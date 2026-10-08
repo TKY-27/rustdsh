@@ -16,16 +16,16 @@ def validate(root, tag):
     if not TAG.fullmatch(tag):
         raise ValueError("tag must be vX.Y.Z or vX.Y.Z-{alpha,beta,rc}.N")
     version = tag[1:]
-    manifest = tomllib.loads((root / "Cargo.toml").read_text())
+    manifest = tomllib.loads((root / "Cargo.toml").read_text(encoding="utf-8"))
     package = manifest["package"]
-    lock = tomllib.loads((root / "Cargo.lock").read_text())
+    lock = tomllib.loads((root / "Cargo.lock").read_text(encoding="utf-8"))
     locked = [entry["version"] for entry in lock["package"] if entry["name"] == package["name"]]
     if package["version"] != version or locked != [version]:
         raise ValueError("tag, Cargo.toml and Cargo.lock versions must match")
-    changelog = (root / "CHANGELOG.md").read_text()
+    changelog = (root / "CHANGELOG.md").read_text(encoding="utf-8")
     if not re.search(r"^## \[" + re.escape(version) + r"\] - \d{4}-\d{2}-\d{2}$", changelog, re.M):
         raise ValueError("CHANGELOG.md must contain a dated entry for this version")
-    notes = (root / "docs" / "releases" / f"{tag}.md").read_text().strip()
+    notes = (root / "docs" / "releases" / f"{tag}.md").read_text(encoding="utf-8").strip()
     if not re.match(r"^## " + re.escape(version) + r" — \S", notes):
         raise ValueError("release notes must start with '## X.Y.Z — summary'")
     # The generated tail may be checked in, but is always replaced when rendering.
@@ -71,8 +71,8 @@ def main():
                        "-f", f"tag_name={args.tag}", "-f", "configuration_file_path=.github/release.yml"]
             if args.previous_tag:
                 command += ["-f", f"previous_tag_name={args.previous_tag}"]
-            generated = json.loads(subprocess.check_output(command, text=True))["body"]
-            args.output.write_text(compose(authored, generated, args.repo))
+            generated = json.loads(subprocess.check_output(command, text=True, encoding="utf-8"))["body"]
+            args.output.write_text(compose(authored, generated, args.repo), encoding="utf-8")
         print(f"Validated {args.tag} ({'prerelease' if '-' in args.tag else 'stable'})")
     except (ValueError, OSError, subprocess.CalledProcessError) as error:
         parser.exit(1, f"release validation failed: {error}\n")

@@ -1,6 +1,9 @@
 import importlib.util
+import os
 from pathlib import Path
 import tempfile
+import subprocess
+import sys
 import unittest
 
 
@@ -18,14 +21,14 @@ class ReleaseMetadataTests(unittest.TestCase):
         (self.root / "docs" / "releases").mkdir(parents=True)
 
     def fixture(self, version="1.2.3"):
-        (self.root / "Cargo.toml").write_text(f'[package]\nname = "rdsh"\nversion = "{version}"\n')
-        (self.root / "Cargo.lock").write_text(f'[[package]]\nname = "rdsh"\nversion = "{version}"\n')
-        (self.root / "CHANGELOG.md").write_text(f"## [{version}] - 2026-10-08\n")
+        (self.root / "Cargo.toml").write_text(f'[package]\nname = "rdsh"\nversion = "{version}"\n', encoding="utf-8")
+        (self.root / "Cargo.lock").write_text(f'[[package]]\nname = "rdsh"\nversion = "{version}"\n', encoding="utf-8")
+        (self.root / "CHANGELOG.md").write_text(f"## [{version}] - 2026-10-08\n", encoding="utf-8")
         notes = (f"## {version} — Example\n\n- Fixed an issue.\n\n## 更新前に確認\n\n"
                  "- Restart processes.\n\nInstall/update:\n\n```sh\ncurl https://example.com/install.sh\n```\n\n"
                  "Windows: `install.ps1 -FromRelease`.\n")
         path = self.root / "docs" / "releases" / f"v{version}.md"
-        path.write_text(notes)
+        path.write_text(notes, encoding="utf-8")
         return path
 
     def test_stable_and_prerelease(self):
@@ -42,15 +45,15 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.fixture()
         for filename in ("Cargo.toml", "Cargo.lock"):
             path = self.root / filename
-            original = path.read_text()
-            path.write_text(original.replace("1.2.3", "1.2.4"))
+            original = path.read_text(encoding="utf-8")
+            path.write_text(original.replace("1.2.3", "1.2.4"), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "versions must match"):
                 release.validate(self.root, "v1.2.3")
-            path.write_text(original)
+            path.write_text(original, encoding="utf-8")
 
     def test_missing_changelog_or_notes(self):
         notes = self.fixture()
-        (self.root / "CHANGELOG.md").write_text("## [Unreleased]\n")
+        (self.root / "CHANGELOG.md").write_text("## [Unreleased]\n", encoding="utf-8")
         with self.assertRaisesRegex(ValueError, "dated entry"):
             release.validate(self.root, "v1.2.3")
         self.fixture()
@@ -63,13 +66,13 @@ class ReleaseMetadataTests(unittest.TestCase):
                          ("1.2.3 — Example", "1.2.4 — Example"), ("Fixed an issue.", "<changes>"),
                          ("Fixed an issue.", "TODO"), ("install.ps1", "install.cmd")):
             notes = self.fixture()
-            notes.write_text(notes.read_text().replace(old, new))
+            notes.write_text(notes.read_text(encoding="utf-8").replace(old, new), encoding="utf-8")
             with self.subTest(old=old), self.assertRaises(ValueError):
                 release.validate(self.root, "v1.2.3")
 
     def test_generated_notes_are_replaced_without_duplicate_credits(self):
         notes = self.fixture()
-        notes.write_text(notes.read_text() + "\n## What's Changed\n\nold PR list\n")
+        notes.write_text(notes.read_text(encoding="utf-8") + "\n## What's Changed\n\nold PR list\n", encoding="utf-8")
         authored = release.validate(self.root, "v1.2.3")
         generated = ("## What's Changed\n### What's Changed\n* Fix by @contributor in https://github.com/org/repo/pull/1\n\n"
                      "## New Contributors\n\n* @contributor\n\n"
@@ -88,10 +91,21 @@ class ReleaseMetadataTests(unittest.TestCase):
 
     def test_prerelease_cannot_recommend_latest_installer(self):
         notes = self.fixture("1.2.3-rc.1")
-        notes.write_text(notes.read_text().replace("https://example.com/install.sh",
-                         "https://github.com/org/repo/releases/latest/download/install.sh"))
+        notes.write_text(notes.read_text(encoding="utf-8").replace("https://example.com/install.sh",
+                         "https://github.com/org/repo/releases/latest/download/install.sh"), encoding="utf-8")
         with self.assertRaisesRegex(ValueError, "exact tag URL"):
             release.validate(self.root, "v1.2.3-rc.1")
+
+    def test_cli_reads_japanese_notes_with_utf8_mode_disabled(self):
+        self.fixture()
+        result = subprocess.run(
+            [sys.executable, str(release.ROOT / "scripts" / "prepare-release.py"),
+             "v1.2.3", "--root", str(self.root)],
+            env={**os.environ, "LC_ALL": "C", "LANG": "C", "PYTHONUTF8": "0",
+                 "PYTHONCOERCECLOCALE": "0"},
+            capture_output=True, text=True, encoding="utf-8", timeout=15)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Validated v1.2.3", result.stdout)
 
 
 if __name__ == "__main__":
