@@ -12,6 +12,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { metricNames } from "./state.mjs";
 import { observationSchema } from "./observations.mjs";
+import { feedbackValidity } from "./question-contracts.mjs";
+import { costScopeSchema, costReportSchema } from "./cost-ledger.mjs";
 
 // Bucket E (MCP) diagnostics — Issues #76-#79:
 // Exposure control (#76), remote OAuth (#77), single-screen server
@@ -27,11 +29,50 @@ const object = (properties, required = []) => ({
   required,
   additionalProperties: false,
 });
+const decision = object(
+  {
+    kind: { enum: ["consultation", "approval"] },
+    target: object(
+      {
+        task_id: string,
+        run_id: string,
+        session_id: string,
+        action_id: string,
+        revision: string,
+      },
+      ["revision"],
+    ),
+    choices: {
+      type: "array",
+      maxItems: 8,
+      items: object({ id: string, label: string, detail: string }, [
+        "id",
+        "label",
+      ]),
+    },
+    recommended_choice: string,
+    recommendation_reason: string,
+    diff: string,
+    impact: string,
+    conditions: string,
+    cost: object(
+      {
+        currency: { const: "USD" },
+        max: { type: ["number", "null"], minimum: 0 },
+        description: string,
+      },
+      ["currency", "max"],
+    ),
+    expires_at: { type: "string", format: "date-time" },
+    consumer_id: string,
+  },
+  ["kind"],
+);
 export const tools = [
   {
     name: "dashboard_update_metrics",
     description:
-      "Report cumulative metric snapshots, not increments. Include observation kind, source, observed_at, session_id and reference to distinguish measurements, agent reports and explicit estimates. Omit unknown metrics or use null; never invent missing costs. Observation applies only to supplied fields; send ratio counters together.",
+      "Report cumulative metric snapshots, not increments. Include observation kind, source, observed_at, session_id and reference; observation applies only to supplied fields and ratio counters must be sent together. Optional cost_scope declares an immutable period and expected workers/sessions; cost_report records a source-labelled observation with stable event ID and sequence. Repeat IDs never add costs. Report API estimates only with explicit external calculation basis; unknown costs remain null. Provider/CLI reports, estimates and invoices remain separate.",
     inputSchema: object(
       Object.fromEntries([
         ...metricNames.map((name) => [
@@ -40,6 +81,8 @@ export const tools = [
         ]),
         ["session_id", string],
         ["observation", observationSchema],
+        ["cost_scope", costScopeSchema],
+        ["cost_report", costReportSchema],
       ]),
     ),
   },
@@ -62,15 +105,19 @@ export const tools = [
   {
     name: "dashboard_ask_question",
     description:
-      "Place a question in the project dashboard for a human to answer. A default action is informational; this server never executes it automatically. Retrieve replies with dashboard_get_feedback or subscribe to dashboard://feedback.",
+      "Place a legacy consultation or a typed decision card for a human. Typed approval requires a versioned action, choices, diff, impact, conditions and explicit USD limit (null means unknown). Use action revise/cancel with expected_revision for an existing typed question; cancellation needs cancel_reason. No reply grants execution authority. default_action is informational. Read answers and their current validity with dashboard_get_feedback.",
     inputSchema: object(
       {
         id: string,
         question: string,
         urgency: { enum: ["normal", "high", "critical"] },
         default_action: string,
+        decision,
+        action: { enum: ["create", "revise", "cancel"] },
+        expected_revision: { type: "integer", minimum: 1 },
+        cancel_reason: string,
       },
-      ["id", "question"],
+      ["id"],
     ),
   },
   {
@@ -91,13 +138,13 @@ export const tools = [
   {
     name: "dashboard_get_feedback",
     description:
-      "Read durable human answers after a sequence cursor. Pass next_cursor on the next call. Reads never consume or delete feedback; poll at appropriate workflow checkpoints if resource subscriptions are unavailable.",
+      "Read durable human answers after a sequence cursor. Pass next_cursor on the next call. Reads never consume, acknowledge or apply feedback. A consumer-bound reply has a stable reply_command_id; application acknowledgements require its separate run/session credential. Poll at appropriate workflow checkpoints if resource subscriptions are unavailable.",
     inputSchema: object({ after: { type: "integer", minimum: 0 } }),
   },
   {
     name: "dashboard_get_state",
     description:
-      "Read this project’s metrics, tasks, questions, and recent events.",
+      "Read this project’s metrics, tasks, questions, recent events and optional source-aware cost ledger. Ledger totals are per declared period/source/currency; missing workers remain unknown and invoice amounts are never used to correct estimates.",
     inputSchema: object({}),
   },
 ];
@@ -117,10 +164,10 @@ export function knownToolNames() {
 export function diagnoseUnknownTool(name) {
   return (
     `Unknown tool "${String(name)}": exact names take precedence over patterns. ` +
-      `Available tools from this server: ${knownToolNames().join(", ")}. ` +
-      `Check the effective exposure source (direct/deferred/hidden); hidden tools ` +
-      `stay unreachable via direct calls, PTC, and search, and this server never ` +
-      `bypasses the existing permission guard.`
+    `Available tools from this server: ${knownToolNames().join(", ")}. ` +
+    `Check the effective exposure source (direct/deferred/hidden); hidden tools ` +
+    `stay unreachable via direct calls, PTC, and search, and this server never ` +
+    `bypasses the existing permission guard.`
   );
 }
 export async function executeTool(api, name, args = {}) {
@@ -154,7 +201,8 @@ export function feedbackSince(state, after = 0) {
     );
   const messages = state.feedback
     .filter((item) => item.sequence > after)
-    .slice(0, 100);
+    .slice(0, 100)
+    .map((item) => feedbackValidity(state, item));
   return { messages, next_cursor: messages.at(-1)?.sequence ?? after };
 }
 // #78 (single-screen diagnostics) / #79 (binary resources stay safe):
@@ -165,9 +213,9 @@ export function feedbackSince(state, after = 0) {
 export function diagnoseUnknownResource(uri) {
   return (
     `Unknown resource "${String(uri)}": known resources: ${resourceDefinitions.map((r) => r.uri).join(", ")}. ` +
-      `Binary payloads are validated by size/MIME before saving and never expanded ` +
-      `to text; ui:// app resources are unsupported and HTML/script is never ` +
-      `auto-executed. Use an explicit action to reach the origin server/URI.`
+    `Binary payloads are validated by size/MIME before saving and never expanded ` +
+    `to text; ui:// app resources are unsupported and HTML/script is never ` +
+    `auto-executed. Use an explicit action to reach the origin server/URI.`
   );
 }
 export function createMcpServer(api) {

@@ -17,7 +17,7 @@ pub fn slim_env() -> Vec<(String, String)> {
 }
 
 pub fn describe() -> String {
-    "RDSH_SLIM=1 RDSH_LAZY_PLUGINS=1 RDSH_DISABLE_VOICE=1 RDSH_DISABLE_AUTO_REVIEW=1 NODE_COMPILE_CACHE=<cache-dir, effective on Node>=22.1, RDSH_NODE_COMPILE_CACHE=0 to disable>".to_string()
+    "RDSH_SLIM=1 RDSH_LAZY_PLUGINS=1 RDSH_DISABLE_VOICE=1 RDSH_DISABLE_AUTO_REVIEW=1 NODE_COMPILE_CACHE=<cache-dir> (effective on Node >= 22.1), RDSH_NODE_COMPILE_CACHE=0 to disable".to_string()
 }
 
 // Default on-disk dir for the Node compile cache (V8 code cache for the
@@ -40,7 +40,7 @@ pub fn resolve_node_compile_cache(
     existing: Option<&str>,
     default_dir: &str,
 ) -> Option<String> {
-    if rdsh_hint == Some("0") {
+    if rdsh_hint.is_some_and(|v| v == "0") {
         return None;
     }
     if existing.is_some_and(|v| !v.is_empty()) {

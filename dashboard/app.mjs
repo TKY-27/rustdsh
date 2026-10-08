@@ -1,13 +1,26 @@
-import { metricView, observationView, ratioView } from "./observations.mjs";
+import { renderReports } from "./reports-view.mjs";
+import { renderQuestionCards } from "./question-cards-ui.mjs";
+import { renderAnswerApplications } from "./answer-applications-ui.mjs";
+import { renderOverview } from "./project-overview.mjs";
+import { renderConnectionDiagnostics } from "./connection-diagnostics-ui.mjs";
+import { createInstructionPanel } from "./instruction-queue-ui.mjs";
+import { createCostPanel } from "./cost-ledger-ui.mjs";
+import { renderBudget } from "./budget-ui.mjs";
 
 const $ = (id) => document.getElementById(id);
 const base = location.pathname.startsWith("/_rdsh") ? "/_rdsh/" : "/";
-const browserToken = base === "/"
-  ? new URLSearchParams(location.hash.slice(1)).get("key") || sessionStorage.getItem("rdsh_project_browser_token") || ""
-  : "";
+const suppliedBrowserToken =
+  base === "/" ? new URLSearchParams(location.hash.slice(1)).get("key") : null;
+const browserToken =
+  base === "/"
+    ? suppliedBrowserToken ||
+      sessionStorage.getItem("rdsh_project_browser_token") ||
+      ""
+    : "";
 if (browserToken) {
   sessionStorage.setItem("rdsh_project_browser_token", browserToken);
-  history.replaceState(null, "", location.pathname + location.search);
+  if (suppliedBrowserToken !== null)
+    history.replaceState(null, "", location.pathname + location.search);
 }
 async function api(route, body) {
   const headers = browserToken ? { "x-rdsh-browser-token": browserToken } : {};
@@ -31,303 +44,121 @@ function node(tag, text, className) {
   if (className) result.className = className;
   return result;
 }
-const number = (value) =>
-  value == null ? "未取得" : value.toLocaleString("ja-JP");
-const money = (value) => (value == null ? "未取得" : "$" + value.toFixed(2));
-const ratio = (numerator, denominator) =>
-  numerator == null || denominator == null || denominator === 0
-    ? null
-    : numerator / denominator;
-const percentage = (value) =>
-  value == null ? "未取得" : (value * 100).toFixed(1) + "%";
-function card(label, value, detail, progress, warning = false) {
-  const element = node("section", undefined, "card");
-  element.append(
-    node("div", label, "label"),
-    node("div", value, "value" + (warning ? " warn" : "")),
-    node("div", detail, "detail"),
-  );
-  if (progress != null) {
-    const bar = node("div", undefined, "bar");
-    const fill = node("span");
-    fill.style.width = Math.min(100, Math.max(0, progress * 100)) + "%";
-    bar.append(fill);
-    element.append(bar);
-  }
-  return element;
+let renderedRevision = -1;
+let latestState = null;
+let selectedTask = "";
+let selectionKey = "";
+function navigateTo(id) {
+  const target = $(id);
+  if (!target) return;
+  for (let parent = target.parentElement; parent; parent = parent.parentElement)
+    if (parent.tagName === "DETAILS") parent.open = true;
+  target.tabIndex = -1;
+  target.focus();
+  target.scrollIntoView({ block: "start" });
 }
-function emptyRow(text, columns) {
-  const tr = node("tr");
-  const cell = node("td", text, "empty");
-  cell.colSpan = columns;
-  tr.append(cell);
-  return tr;
-}
-const date = (value) =>
-  value ? new Date(value).toLocaleString("ja-JP") : "未申告";
-const freshnessLabels = {
-  fresh: "",
-  stale: "古い情報",
-  unknown: "鮮度未確認",
-  unavailable: "未取得",
-};
-let openObservations = new Set();
-function provenance(view, label, format = String, id = "") {
-  const element = node("div", undefined, "observation");
-  element.dataset.freshness = view.freshness;
-  element.dataset.kind = view.kind || "unknown";
-  const heading = node("div", undefined, "observation-heading");
-  if (label) heading.append(node("span", label + "："));
-  heading.append(
-    node("span", view.label, "provenance-badge " + (view.kind || "unknown")),
+function updateOverview(state) {
+  const select = $("overview-task");
+  const options = [{ id: "", title: "プロジェクト全体" }, ...state.tasks];
+  if (selectedTask && !state.tasks.some((task) => task.id === selectedTask))
+    options.push({ id: selectedTask, title: "現在の一覧にありません" });
+  const signature = JSON.stringify(
+    options.map((task) => [task.id, task.title]),
   );
-  if (view.freshness === "stale" || view.freshness === "unknown")
-    heading.append(
-      node("span", freshnessLabels[view.freshness], "provenance-badge " + view.freshness),
-    );
-  element.append(heading);
-  if (view.value != null && !view.current)
-    element.append(node("div", "前回の報告値：" + format(view.value), "sub"));
-  const o = view.observation;
-  element.append(node("div", "観測：" + date(o?.observed_at), "sub"));
-  const details = node("details", undefined, "observation-details");
-  details.dataset.observationId = id;
-  details.open = openObservations.has(id);
-  const summary = node("summary", "報告元・参照対象");
-  summary.dataset.observationId = id;
-  details.append(
-    summary,
-    node("div", "報告元：" + (o?.source || "未申告")),
-    node("div", "報告session：" + (o?.session_id || "未申告")),
-    node("div", "参照対象：" + (o?.reference || "未申告")),
-    node("div", "受信：" + date(o?.recorded_at)),
-  );
-  if (o?.observed_at && o.max_age_seconds) {
-    const expiresAt = new Date(Date.parse(o.observed_at) + o.max_age_seconds * 1000);
-    details.append(node("div", "鮮度期限：" + date(expiresAt.toISOString())));
-  }
-  element.append(details);
-  return element;
-}
-function metricText(state, key, format, now) {
-  const view = metricView(state, key, now);
-  return view.current
-    ? (view.kind === "estimated" ? "推定 " : "") + format(view.value)
-    : freshnessLabels[view.freshness];
-}
-function metricCard(state, now, label, value, detail, fields, progress, warning) {
-  const element = card(label, value, detail, progress, warning);
-  for (const [name, key, format = number] of fields)
-    element.append(
-      provenance(metricView(state, key, now), name, format, "metric:" + key),
-    );
-  return element;
-}
-function rateText(state, a, b, now) {
-  const result = ratioView(state, a, b, now);
-  if (result.reason === "incompatible") return "比較不可";
-  if (result.value !== null)
-    return (metricView(state, a, now).kind === "estimated" ? "推定 " : "") + percentage(result.value);
-  const views = [metricView(state, a, now), metricView(state, b, now)];
-  if (views.some((view) => view.freshness === "stale")) return "古い情報";
-  if (views.some((view) => view.freshness === "unknown")) return "鮮度未確認";
-  return "未取得";
-}
-function freshnessSignature(state, now) {
-  return JSON.stringify([
-    Object.keys(state.metrics).map((key) => metricView(state, key, now).freshness),
-    state.tasks.map((task) => observationView(task.status, task.observation, now).freshness),
-    state.events.slice(-30).map((event) => observationView(event.title, event.observation, now).freshness),
-  ]);
-}
-let reportFreshnessSignature = null;
-function renderReports(state, now = Date.now()) {
-  openObservations = new Set(
-    [...document.querySelectorAll("details.observation-details[open]")]
-      .map((element) => element.dataset.observationId),
-  );
-  const activeDisclosure = document.activeElement?.dataset?.observationId;
-  const metric = (key, format = number) => metricText(state, key, format, now);
-  const progress = (a, b) => ratio(
-    metricView(state, a, now).current ? state.metrics[a] : null,
-    metricView(state, b, now).current ? state.metrics[b] : null,
-  );
-  const currentDone = state.tasks.filter((task) => {
-    const view = observationView(task.status, task.observation, now);
-    return task.status === "done" && view.current && view.kind !== "estimated";
-  }).length;
-  const pending = state.questions.filter((question) => question.answer === null);
-  const counts = ["done", "doing", "todo", "blocked"]
-    .map(
-      (status) =>
-        `${status} ${state.tasks.filter((task) => task.status === status).length}`,
-    )
-    .join(" · ");
-  $("cards").replaceChildren(
-    metricCard(state, now,
-      "費用（API換算、累計）",
-      metric("total_cost_usd", money),
-      "上限 " + metric("total_budget_usd", money),
-      [["費用", "total_cost_usd", money], ["上限", "total_budget_usd", money]],
-      progress("total_cost_usd", "total_budget_usd"),
-    ),
-    metricCard(state, now,
-      "直近のセッション",
-      metric("session_cost_usd", money),
-      `${state.metrics.session_id || "session未申告"}　上限 ${metric("session_budget_usd", money)}`,
-      [["費用", "session_cost_usd", money], ["上限", "session_budget_usd", money]],
-      progress("session_cost_usd", "session_budget_usd"),
-    ),
-    metricCard(state, now,
-      "キャッシュ読み込み率",
-      rateText(state, "cached_input_tokens", "input_tokens", now),
-      `${metric("model_calls")} 回の呼び出し（入力トークン加重）`,
-      [["キャッシュ", "cached_input_tokens"], ["入力", "input_tokens"], ["呼び出し", "model_calls"]],
-    ),
-    metricCard(state, now,
-      "ツールのエラー率",
-      rateText(state, "tool_errors", "tool_calls", now),
-      `${metric("tool_errors")} / ${metric("tool_calls")} 件`,
-      [["エラー", "tool_errors"], ["ツール", "tool_calls"]],
-    ),
-    metricCard(state, now,
-      "文脈の読み落とし",
-      metric("context_misses"),
-      "報告元で検出した回数",
-      [["検出数", "context_misses"]],
-      undefined,
-      metricView(state, "context_misses", now).current && state.metrics.context_misses > 0,
-    ),
-    metricCard(state, now,
-      "自動続行",
-      metric("auto_continues"),
-      `拒否 ${metric("refusals")} · APIエラー ${metric("api_errors")}`,
-      [["続行", "auto_continues"], ["拒否", "refusals"], ["APIエラー", "api_errors"]],
-    ),
-    card("鮮度内の完了報告", `${currentDone} / ${state.tasks.length}`, "全報告の内訳：" + counts),
-    card("未回答の質問", String(pending.length), `回答済み ${state.questions.length - pending.length}`),
-  );
-  // #42: 数値カードを開かなくても状態・判断要否だけ掴める一行要約。
-  $("overview").textContent =
-    `未回答の質問 ${pending.length} 件 · 鮮度内の完了報告 ${currentDone} / ${state.tasks.length}` +
-    (state.updated_at
-      ? ` · 最終更新 ${new Date(state.updated_at).toLocaleString("ja-JP")}`
-      : " · まだ報告がありません");
-  $("task-milestones").textContent = [
-    ...new Set(state.tasks.map((task) => task.milestone).filter(Boolean)),
-  ].join(" / ");
-  $("tasks").replaceChildren(
-    ...state.tasks.map((task) => {
-      // #57: 端末を替えても同じ行へ戻れる安定アンカー。
-      const tr = node("tr");
-      tr.id = "task-" + task.id;
-      const status = node("td");
-      const view = observationView(task.status, task.observation, now);
-      const statusLabel = (view.kind === "estimated" ? "推定 " : "") +
-        task.status + (view.current ? "" : "（" + freshnessLabels[view.freshness] + "）");
-      status.append(node(
-        "span", statusLabel,
-        "status " + (view.current && view.kind !== "estimated" ? task.status : ""),
-      ));
-      const title = node("td", task.title);
-      title.append(provenance(view, undefined, String, "task:" + task.id));
-      tr.append(
-        node("td", task.id, "id"),
-        status,
-        title,
-        node("td", task.blocker),
-      );
-      return tr;
-    }),
-  );
-  if (!state.tasks.length)
-    $("tasks").append(emptyRow("タスクはまだ登録されていません", 4));
-  renderEvents(state, now);
-  reportFreshnessSignature = freshnessSignature(state, now);
-  if (activeDisclosure)
-    [...document.querySelectorAll("summary[data-observation-id]")]
-      .find((summary) => summary.dataset.observationId === activeDisclosure)?.focus();
-}
-let lastState = null;
-function render(state) {
-  lastState = state;
-  renderReports(state);
-  const pending = state.questions.filter((question) => question.answer === null);
-  // #40: SSE 更新中も回答下書き・フォーカスを保持し、未回答・期限切れ・取消しを承認扱いにしない。
-  // Preserve in-progress human drafts while incoming events refresh the dashboard.
-  const drafts = new Map(
-    [...$("questions").querySelectorAll("textarea")].map((area) => [
-      area.dataset.id,
-      area.value,
-    ]),
-  );
-  const active = document.activeElement?.dataset?.id;
-  $("questions").replaceChildren(
-    ...pending.map((question) => {
-      // #40: 相談と承認依頼を同じカード上で区別する。default_action
-      // があるものは承認依頼として示す。対象・条件の変更検知と無効化は
-      // server 側の契約（案53・43）に委ね、ここでは再確認を促す文言に留める。
-      // #57: 端末を替えても同じ質問へ戻れる安定アンカー。
-      const isApproval = Boolean(question.default_action);
-      const tr = node("tr"),
-        cell = node("td", undefined, "question");
-      tr.id = "question-" + question.id;
-      cell.append(
-        node(
-          "span",
-          isApproval ? "承認依頼" : "相談",
-          "kind" + (isApproval ? " kind-approval" : ""),
-        ),
-      );
-      cell.append(node("div", question.question));
-      const form = node("form"),
-        textarea = node("textarea");
-      textarea.dataset.id = question.id;
-      textarea.setAttribute("aria-label", `質問 ${question.id} への回答`);
-      textarea.required = true;
-      textarea.maxLength = 8000;
-      textarea.value = drafts.get(question.id) || "";
-      const button = node("button", "回答を返す", "primary");
-      button.type = "submit";
-      const error = node("div", undefined, "error");
-      error.setAttribute("role", "alert");
-      form.append(textarea, button, error);
-      form.addEventListener("submit", async (event) => {
-        event.preventDefault();
-        button.disabled = true;
-        try {
-          await api("update/answer", {
-            id: question.id,
-            answer: textarea.value,
-          });
-          await refreshState();
-        } catch (e) {
-          error.textContent = e.message;
-          button.disabled = false;
-        }
-      });
-      cell.append(form);
-      // #40: 既定の行動は参考表示であり、回答しても自動実行されない。
-      const defaultCell = node("td");
-      defaultCell.append(node("div", question.default_action || "指定なし"));
-      if (isApproval)
-        defaultCell.append(
-          node("div", "参考表示（回答しても自動実行されません）", "sub"),
+  if (select.dataset.options !== signature) {
+    select.replaceChildren(
+      ...options.map((task) => {
+        const option = node(
+          "option",
+          `${task.id ? task.id + " · " : ""}${task.title}`,
         );
-      tr.append(
-        node("td", question.id, "id"),
-        node("td", question.urgency),
-        cell,
-        defaultCell,
-      );
-      return tr;
-    }),
-  );
-  if (!pending.length) $("questions").append(emptyRow("なし", 4));
-  if (active)
-    [...$("questions").querySelectorAll("textarea")]
-      .find((area) => area.dataset.id === active)
-      ?.focus();
+        option.value = task.id;
+        return option;
+      }),
+    );
+    select.dataset.options = signature;
+  }
+  select.value = selectedTask;
+  const view = renderOverview($("project-overview"), state, selectedTask, node);
+  $("quick-context").textContent = view.context;
+  $("quick-context").title = view.context;
+  $("quick-pending").textContent =
+    `判断 ${view.pending.length}件${view.reviews.length ? ` · 追指示 ${view.reviews.length}件` : ""}`;
+}
+$("overview-task").addEventListener("change", (event) => {
+  selectedTask = event.target.value;
+  try {
+    sessionStorage.setItem(selectionKey, selectedTask);
+  } catch {}
+  if (latestState) updateOverview(latestState);
+});
+$("tasks").addEventListener("click", (event) => {
+  const link = event.target.closest("a[data-task-id]");
+  if (!link) return;
+  event.preventDefault();
+  selectedTask = link.dataset.taskId;
+  try {
+    sessionStorage.setItem(selectionKey, selectedTask);
+  } catch {}
+  if (latestState) updateOverview(latestState);
+  navigateTo("overview-heading");
+});
+$("overview-pending").addEventListener("click", (event) => {
+  const link = event.target.closest("a");
+  if (!link) return;
+  event.preventDefault();
+  navigateTo(decodeURIComponent(link.hash.slice(1)));
+});
+$("quick-overview").onclick = () => navigateTo("overview-heading");
+$("quick-pending").onclick = () => {
+  const view =
+    latestState &&
+    renderOverview($("project-overview"), latestState, selectedTask, node);
+  if (view?.reviews.length && !view.pending.length) {
+    renderInstructions.selectTarget(view.reviews[0].consumer_id);
+    navigateTo("instruction-panel");
+  } else navigateTo("pending-heading");
+};
+$("quick-details").onclick = () => navigateTo("metrics-heading");
+$("quick-stop").onclick = () => navigateTo("overview-stop");
+$("diagnostics-refresh").onclick = async () => {
+  $("diagnostics-refresh").disabled = true;
+  $("diagnostics-status").textContent = "接続の各段階を確認中…";
+  try {
+    const report = await api("diagnostics");
+    renderConnectionDiagnostics($("diagnostics-result"), report, node);
+    $("diagnostics-status").textContent =
+      "診断を取得しました。各日時はその段階を観測した時点です。";
+  } catch {
+    $("diagnostics-status").textContent =
+      "診断を取得できません。現在の接続は未確認です。最新のQRまたは rdsh-dashboard open から開き直してください。";
+    $("diagnostics-result").replaceChildren();
+  } finally {
+    $("diagnostics-refresh").disabled = false;
+  }
+};
+const renderInstructions = createInstructionPanel($("instruction-panel"), {
+  node,
+  api,
+  refreshState,
+});
+const renderCosts = createCostPanel($("cost-ledger"), node);
+function render(state) {
+  if (state.revision < renderedRevision) return;
+  renderedRevision = state.revision;
+  latestState = state;
+  renderInstructions(state);
+  renderCosts(state);
+  renderBudget($("budget-admission"), state, node);
+  updateOverview(state);
+  renderReports(state);
+  const unanswered = state.questions.filter((question) => question.answer === null);
+  renderQuestionCards($("questions"), unanswered, state.question_contracts, {
+    node,
+    api,
+    refreshState,
+  });
+  renderAnswerApplications($("reply-status"), state, node);
   $("answers").replaceChildren(
     ...state.questions
       .filter((question) => question.answer !== null)
@@ -339,56 +170,29 @@ function render(state) {
           node("strong", question.question),
           node("p", question.answer),
         );
+        const contract = state.question_contracts?.cards[question.id];
+        element.append(
+          node(
+            "p",
+            contract
+              ? `版 ${contract.revision} · ${contract.status === "answered" ? "回答を保存済み" : contract.status === "expired" ? "期限切れ · 回答は無効" : "取消し · 回答は無効"} · 実行権限は発行していません`
+              : "相談への返答を保存済み · 実行権限は発行していません",
+            "sub",
+          ),
+        );
         return element;
       }),
   );
   $("connection").textContent = "接続済み · プロジェクト専用";
   $("updated").textContent =
-    `最終受信: ${state.updated_at ? date(state.updated_at) : "まだ報告がありません"} · 鮮度は各項目の観測時刻から判定します。費用は報告元のAPI換算値です。`;
+    `最終受信: ${state.updated_at ? new Date(state.updated_at).toLocaleString("ja-JP") : "まだ報告がありません"} · 鮮度は各項目の観測時刻から判定します。累計欄は報告元のAPI換算値です。台帳は出所ごとの報告値です。`;
 }
-function renderEvents(state, now) {
-  $("events").replaceChildren(
-    ...state.events
-      .slice(-30)
-      .reverse()
-      .map((event) => {
-        const element = node("article", undefined, "event");
-        element.append(
-          node("strong", event.title),
-          node(
-            "div",
-            `${event.type} · ${new Date(event.created_at).toLocaleString("ja-JP")}`,
-            "sub",
-          ),
-        );
-        if (event.detail) element.append(node("p", event.detail));
-        if (event.artifact) element.append(node("code", event.artifact));
-        element.append(provenance(
-          observationView(event.title, event.observation, now),
-          undefined, String, "event:" + event.sequence,
-        ));
-        return element;
-      }),
-  );
-  if (!state.events.length)
-    $("events").append(
-      node("div", "進捗・成果物の報告はまだありません", "empty"),
-    );
-}
-// Freshness expires even when no new SSE events arrive. Do not rebuild answer forms.
-function refreshFreshness() {
-  if (lastState && freshnessSignature(lastState, Date.now()) !== reportFreshnessSignature)
-    renderReports(lastState);
-}
-setInterval(refreshFreshness, 30000);
-document.addEventListener("visibilitychange", () => {
-  if (!document.hidden) refreshFreshness();
-});
 async function refreshState() {
   try {
     render(await api("state"));
   } catch (e) {
     $("connection").textContent = e.message;
+    $("overview-state").textContent = "画面の更新に失敗 · 対象の現在状態は不明";
   }
 }
 let qrObjectUrl = null;
@@ -416,7 +220,7 @@ async function renderShare(config) {
   if (share.consent_url) $("consent").href = share.consent_url;
   $("mcp-info").textContent =
     config.kind === "project"
-      ? `Dotsのイベント購読: ${config.events?.active || 0} 件` +
+      ? `MCPのイベント購読: ${config.events?.active || 0} 件` +
         (config.events?.failures
           ? ` · 配信エラー ${config.events.failures} 件`
           : "") +
@@ -463,7 +267,7 @@ const paletteCommands = [
     ja: "未回答の質問へ移動する",
     en: "Go to pending questions",
     keys: "質問 未回答 question pending",
-    run: () => $("pending-heading").focus(),
+    run: () => navigateTo("pending-heading"),
   },
   {
     id: "toggle-answered",
@@ -536,6 +340,7 @@ try {
   const config = await api("config");
   await renderShare(config);
   if (config.kind === "harness") {
+    $("connection-detail").hidden = true;
     $("kind").textContent = "DEEPSEEK HARNESS";
     $("title").textContent = "Harnessを開く";
     $("location").textContent = "会話・ツール実行のWeb画面";
@@ -545,17 +350,149 @@ try {
     $("connection").textContent = "接続済み · Harness専用の入口";
     $("share").hidden = false;
     $("share-toggle").setAttribute("aria-expanded", "true");
+    let stopRequested = false;
+    let pendingStop = null;
+    const refreshManaged = async () => {
+      try {
+        const value = await api("managed-process"),
+          scope = value.scope;
+        const labels = {
+          running: "実行中",
+          stopping: "停止要求中 · 子孫の終了を確認しています",
+          exit_confirmed: "終了確認済み · 所有する子孫プロセスは0件",
+          unverifiable: "終了確認不能 · 停止済みとは確認できません",
+        };
+        $("managed-status").textContent =
+          labels[scope?.status] ?? "所有する実行はありません";
+        $("managed-remaining").textContent = scope
+          ? `残存プロセス ${scope.remaining_count ?? "未確認"} 件` +
+            (scope.remaining_pids.length
+              ? ` · PID ${scope.remaining_pids.join(", ")}`
+              : "") +
+            (scope.members_truncated ? " · 一覧は一部または未確認" : "") +
+            (scope.confirmed && !scope.resources_released
+              ? " · 管理用の資源解放は未確認"
+              : "")
+          : "";
+        $("managed-run").textContent = value.run_id ?? "";
+        const names = {
+          input_interrupt: "入力中断",
+          graceful: "協調終了",
+          termination: "終了要求",
+          kill: "期限後の強制終了",
+          verification: "子孫の終了確認",
+        };
+        const results = {
+          requested: "要求送信",
+          unsupported: "非対応",
+          running: "残存あり",
+          exit_confirmed: "終了確認済み",
+          unverifiable: "確認不能",
+        };
+        $("managed-stages").replaceChildren(
+          ...value.stages.map((stage) =>
+            node(
+              "li",
+              `${names[stage.stage]} · ${stage.phase === "request" ? "要求を記録" : results[stage.status]}`,
+            ),
+          ),
+        );
+        $("managed-stop").disabled =
+          stopRequested || scope?.status !== "running";
+        $("harness-open").hidden = scope?.status === "exit_confirmed";
+      } catch {
+        $("managed-status").textContent =
+          "監視に接続できません · 終了は未確認です";
+        $("managed-stop").disabled = true;
+      }
+    };
+    $("managed-stop").onclick = async () => {
+      try {
+        const current = await api("managed-process");
+        if (!current.run_id || current.scope?.status !== "running") {
+          await refreshManaged();
+          return;
+        }
+        pendingStop = {
+          run_id: current.run_id,
+          owner_id: current.scope.owner_id,
+        };
+        $("managed-stop-target").textContent =
+          `run ${current.run_id} · owner ${current.scope.owner_id}`;
+        $("managed-stop-impact").textContent =
+          `このrunが所有する子孫プロセスを停止します。現在の残存 ${current.scope.remaining_count ?? "未確認"} 件（増減あり）。他のrun・外部プロセスは対象外です。停止後の作業結果は未確認です。`;
+        $("managed-stop-error").textContent = "";
+        $("managed-stop-confirm").disabled = false;
+        $("managed-stop-dialog").showModal();
+      } catch (error) {
+        $("managed-status").textContent = error.message;
+      }
+    };
+    $("managed-stop-cancel").onclick = () => $("managed-stop-dialog").close();
+    $("managed-stop-dialog").addEventListener("close", () => {
+      pendingStop = null;
+      $("managed-stop").focus();
+    });
+    $("managed-stop-confirm").onclick = async () => {
+      if (!pendingStop) return;
+      const target = pendingStop;
+      $("managed-stop-confirm").disabled = true;
+      try {
+        const current = await api("managed-process");
+        if (
+          current.run_id !== target.run_id ||
+          current.scope?.owner_id !== target.owner_id ||
+          current.scope.status !== "running"
+        )
+          throw new Error(
+            "停止対象が変わりました。閉じて対象を確認し直してください",
+          );
+      } catch (error) {
+        $("managed-stop-error").textContent = error.message;
+        $("managed-stop-confirm").disabled = false;
+        return;
+      }
+      $("managed-stop-dialog").close();
+      stopRequested = true;
+      $("managed-stop").disabled = true;
+      $("managed-status").textContent =
+        "停止要求中 · 子孫の終了を確認しています";
+      try {
+        await api("managed-stop", {});
+      } catch (error) {
+        $("managed-status").textContent = error.message;
+      }
+      await refreshManaged();
+    };
+    await refreshManaged();
+    setInterval(refreshManaged, 500);
   } else {
     $("title").textContent = config.project.name;
     $("location").textContent = config.project.root;
     document.title = config.project.name + " · Project dashboard";
+    selectionKey = "rdsh_overview_task_" + config.project.id;
+    try {
+      selectedTask = sessionStorage.getItem(selectionKey) || "";
+    } catch {}
+    if (location.hash.startsWith("#task-")) {
+      try {
+        selectedTask = decodeURIComponent(location.hash.slice(6));
+        sessionStorage.setItem(selectionKey, selectedTask);
+      } catch {}
+    }
+    $("quick-actions").hidden = false;
     await refreshState();
-    const source = new EventSource(base + "api/live?key=" + encodeURIComponent(browserToken));
+    const source = new EventSource(
+      base + "api/live?key=" + encodeURIComponent(browserToken),
+    );
     source.addEventListener("changed", refreshState);
     source.onerror = () => {
       $("connection").textContent = "再接続中…";
+      $("overview-state").textContent = "再接続中 · 対象の現在状態は不明";
     };
     source.onopen = refreshState;
+    // Expiration needs a clock update even when publishers send no SSE event.
+    setInterval(refreshState, 5000);
   }
 } catch (e) {
   $("connection").textContent = e.message;
