@@ -138,7 +138,7 @@ fetch_rdsh_release() {
   # its <asset>.sha256 sidecar. Honors RDSH_RELEASE_BASE (tests: file:///path)
   # and RDSH_SYNC_VERSION (default: latest).
   dest="$1"
-  base="${RDSH_RELEASE_BASE:-https://github.com/sahenjp/rustdsh/releases}"
+  base="${RDSH_RELEASE_BASE:-https://github.com/jimoto-no-llm/rustdsh/releases}"
   ver="${RDSH_SYNC_VERSION:-latest}"
   asset="$(rdsh_release_asset)" || { log "no prebuilt rdsh binary for this host; set RDSH_SYNC_FROM_SOURCE=1 to build"; return 1; }
   if [ "$ver" = "latest" ]; then url="$base/latest/download/$asset"; else url="$base/download/$ver/$asset"; fi
