@@ -11,7 +11,7 @@ pub fn cmd_serve(port: u16) -> anyhow::Result<()> {
     let addr = format!("127.0.0.1:{port}");
     let listener = std::net::TcpListener::bind(&addr).map_err(|e| {
         anyhow::anyhow!(
-            "cannot listen on {addr}: {e} (dsh web GUI also uses 3080; try --port 38080)"
+            "cannot listen on {addr}: {e} (dsh web GUI uses 3080; rdsh serve defaults to 38080, or try --port 0)"
         )
     })?;
     let port = listener.local_addr()?.port();
@@ -125,9 +125,9 @@ fn handle(mut s: std::net::TcpStream, token: &str, port: u16) -> anyhow::Result<
         ("GET", "/api/bench") => (200, "application/json", Cow::Owned(bench_json(query))),
         ("GET", "/api/sessions") => {
             let n: usize = query
-                .split("&")
+                .split('&')
                 .find_map(|kv| {
-                    let mut it = kv.splitn(2, "=");
+                    let mut it = kv.splitn(2, '=');
                     match (it.next(), it.next()) {
                         (Some("limit"), Some(v)) => v.parse().ok(),
                         _ => None,

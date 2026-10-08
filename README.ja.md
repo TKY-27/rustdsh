@@ -26,8 +26,6 @@
 - [Smart-DSH との併用](#smart-dsh-との併用)
 - [Web UI（ダッシュボード）](#web-uiダッシュボード)
 - [安全設計](#安全設計)
-- [高速化の仕組み](#高速化の仕組み)
-- [構成](#構成)
 - [コミュニティ](#コミュニティ)
 - [よくある質問](#よくある質問)
 - [クレジット](#クレジット)
@@ -47,7 +45,7 @@
 | sessions --tokens（20件展開） | 約0.41秒 | 改修前 約1.65秒 | 約4.0倍 |
 | 配布サイズ | 単一バイナリ約806KB | Nodeツリー約508MB | — |
 
-測定コマンドは `rdsh bench --n 5` と `/usr/bin/time -v` です。再現手順は[高速化の仕組み](#高速化の仕組み)にあります。
+測定コマンドは `rdsh bench --n 5` と `/usr/bin/time -v` です。詳しくは[docs/BENCHMARKS.md](docs/BENCHMARKS.md)を見てください。
 
 ## インストール
 
@@ -60,7 +58,9 @@ curl -fsSL https://github.com/sahenjp/rustdsh/releases/latest/download/install.s
 
 ```powershell
 # Windows（PowerShell）
-& ([scriptblock]::Create((Invoke-WebRequest -Uri https://github.com/sahenjp/rustdsh/releases/latest/download/install.ps1).Content)) -FromRelease
+$f = Join-Path $env:TEMP 'rdsh-install.ps1'
+Invoke-WebRequest -Uri https://github.com/sahenjp/rustdsh/releases/latest/download/install.ps1 -OutFile $f -UseBasicParsing
+& $f -FromRelease
 ```
 
 ソースから入れる場合：
@@ -96,7 +96,7 @@ cd rustdsh
 `rdsh setup` を実行してください（`rdsh setup --login` ならCodex/opencodeの
 OAuthフローをその場で起動します）。
 
-ソースから直接ビルドする場合は `cargo build --release` で `target/release/rdsh` ができます。
+ソースから直接ビルドする場合は `cargo build --release` で `target/release/rdsh` ができます（Rust 1.73+が必要）。
 
 ## 使い方
 
@@ -122,7 +122,7 @@ rdsh logs --tail 50 --grep ERROR   # 起動ログの参照
 rdsh profiles / rdsh skills        # プロファイル・スキル一覧
 rdsh doctor                        # 本家dsh・DSH_HOME・slim設定の確認
 rdsh bench --n 5                   # rdsh/dsh の起動比較
-rdsh serve                         # Webダッシュボード（:3080）
+rdsh serve                         # Webダッシュボード（:38080）
 ```
 
 ### 選択した認証情報だけを共有する（rdsh auth）
@@ -191,6 +191,21 @@ setup --webは毎回アクセス鍵を発行し、#key=...付きURLを表示し�
 画面では保存前に保存先・利用範囲と、選択解除・コピー削除・provider失効の
 違いを確認できます。
 
+### 追加機能（既定OFF）
+
+サーバー型の機能は有効化するまで動きません。素のままでは高速なdshです。
+セットアップUI（`rdsh setup --web` の追加機能欄）かCLIで有効にします：
+
+```sh
+rdsh settings set extras.enable serve,search-web
+rdsh settings get extras.enable
+```
+
+| 機能 | コマンド |
+| --- | --- |
+| `serve` | `rdsh serve` 状態ページ |
+| `search-web` | `rdsh search-web` Web検索 |
+
 ### hooks.json での使い方（`rdsh guard`）
 
 標準入力（フックJSONまたは生テキスト）を走査し、拒否パターンに一致したらexit 2＋理由出力でブロック、それ以外はexit 0で通過します。`--json` で `{"decision":"block"/"approve"}` を返します。パターンの `*` は任意文字列に一致します。
@@ -213,14 +228,12 @@ echo "$input" | rdsh guard --deny "rm -rf /*" --deny "*token*"
 
 `dsh`名で呼ばれた場合の振る舞いです。
 
-- rdsh固有の先頭サブコマンド（`tokens`/`guard`/`serve`/`sessions`等）以外は、**引数を一字も変えず本家へexec委譲**します（`dsh --version`・`dsh --profile tui`・`dsh --help`は完全互換）
-- 本家の探索順： `RDSH_ORIG_BIN`（旧 `DSH_ORIG_BIN` も有効）→ `~/.config/rdsh/origin` → 退避ファイル（dsh-orig等）→ PATH（自分を除外）→ このOS・CPUに合う最新の `~/.local/opt/node-v*` ツリー
-- 命名は本家に準拠：コマンド・フラグはケバブケース（`dump-config`等）、`DSH_`環境変数名前空間は本家の所有とし、rdsh固有キーは `RDSH_` 配下に置きます
+rdsh固有の先頭サブコマンド（`tokens`/`guard`/`serve`/`sessions`等）以外は、**引数を一字も変えず本家へexec委譲**します（`dsh --version`・`dsh --profile tui`・`dsh --help`は完全互換）。探索順などの詳細は[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)を見てください。
+
 - 一時退避： `RDSH_PASSTHROUGH=1 dsh ...`（slim無し）、`RDSH_DRY_RUN=1 dsh ...`（実行内容のみ表示）
-- slimは `NODE_COMPILE_CACHE` も付けます（Node 22.1以上のみ、利用者設定を優先、`RDSH_NODE_COMPILE_CACHE=0` で無効化）。本家dshは `RDSH_*` を読みません
-- 既定プロファイル： `RDSH_DEFAULT_PROFILE` → ローカルの `tui` → 案内付きエラーの順（dsh 0.2.0に `tui` テンプレートはありません）
+- 既定プロファイル： `RDSH_DEFAULT_PROFILE` → ローカルの `tui` → 案内付きエラーの順
 - 注意： `dsh tokens` のようにプロファイル名が予約語と衝突する場合は `dsh --profile tokens` で起動してください
-- Nodeラッパー： `node "$(... dsh ...)"` 形式のスクリプトは置換中に壊れます（`dsh`はJSではなくネイティブバイナリのため）。`node`経由ではなく `dsh`/`rdsh` を直接実行してください。対象は `rdsh doctor` が一覧表示します
+- `node "$(... dsh ...)"` 形式のスクリプトは置換中に壊れます。`dsh`/`rdsh` を直接実行してください。対象は `rdsh doctor` が一覧表示します
 
 ## Smart-DSH との併用
 
@@ -236,18 +249,16 @@ rdsh --profile web                             # slim env付きで起動（プ�
 
 併用時の注意点：
 
-- ポート：dsh web GUIと`rdsh serve`は既定3080です。dsh webを3080のまま使い、
-  `rdsh serve --port 38080` に分けます
-- 置換時：`install.sh --as-dsh`後はSmart-DSHの補助スクリプトがPATH上の`dsh`を
-  Rust製と誤認します。`dsh-orig`を使うか`DSH_PACKAGE_DIR`を指定します
-- 対応バージョン：Smart-DSHはDSH `0.1.2-rc.1`基準です。`rdsh doctor`の版表示で差異を確認します
+- ポートは競合しません：dsh web GUIは3080、`rdsh serve`は既定38080です（`--port 0` で自動選択）
+- 置換時はSmart-DSHの補助スクリプトに `dsh-orig` を使うか `DSH_PACKAGE_DIR` を指定します
+- `rdsh doctor` の版表示で差異を先に確認できます
 
 ## Web UI（ダッシュボード）
 
 ```sh
 rdsh serve
-# → http://127.0.0.1:3080/ を開く（localhost のみ、読取専用API）
-# ※ dsh web GUIと同ポートのため競合時は `rdsh serve --port 38080` 等を使ってください
+# → http://127.0.0.1:38080/ を開く（localhost のみ、読取専用API）
+# ※ dsh web GUI（:3080）と競合しません。`--port 0` で自動選択もできます
 ```
 
 | API | 内容 |
@@ -260,23 +271,11 @@ rdsh serve
 | `GET /api/sessions?limit=20` | セッション一覧 |
 | `GET /api/skills` / `/api/profiles` | 一覧 |
 
-外部依存はありません（標準ライブラリのみ＋単一HTML埋め込み、CDN不要・オフライン可）です。
+外部依存はありません（CDN不要・オフライン可）。
 
-使い分け：`rdsh serve` は手元の簡易状態ページです。プロジェクトの指標・質問と回答・スマホ接続には、下の [Node.jsダッシュボード](dashboard/README.md) を使います。
-
-### どちらを使うか（`rdsh serve` と `dashboard/`）
-
-- 手元の状態確認（バージョン・doctor・tokens・sessions）だけなら `rdsh serve` を使います。`rdsh` バイナリだけで動きます。
-- プロジェクトの指標・タスク・質問と回答・スマホ接続には `dashboard/` を使います。Node.js 22+ が必要です。詳しくは[Node.jsダッシュボードの案内](dashboard/README.md)を見てください。
-- dsh web GUIと同ポート（3080）で競合したら、dsh webを3080のままにして `rdsh serve --port 38080` で分けます。
-
-### プロジェクト専用ダッシュボードとスマホ接続
-
-追加の [Node.jsダッシュボード](dashboard/README.md) では、費用・タスク・質問と回答を
-プロジェクトごとに管理し、Tailscale経由のQRコードでスマホから開けます。
-`rdsh-dashboard project --project <ディレクトリ>` と、元のHarness Web画面を起動する
-`rdsh-dashboard harness` を分けて使います。ChatGPT Dots向けのMCP Eventsも備えています。
-Node.js 22+が必要です。導入・MCP設定・Secure MCP TunnelによるDots接続は上記ガイドを参照してください。
+手元の状態確認だけなら `rdsh serve` を使います（バイナリだけで動作）。
+プロジェクトの指標・質問と回答・スマホ接続には [Node.jsダッシュボード](dashboard/README.md) を使います（Node.js 22+が必要）。
+`rdsh-dashboard project --project <ディレクトリ>` でプロジェクト用、`rdsh-dashboard harness` で元のHarness Web画面を起動します。
 
 ## 安全設計
 
@@ -328,11 +327,10 @@ Node.js 22+が必要です。導入・MCP設定・Secure MCP TunnelによるDots
 - 設計資料：[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)・
   [docs/BENCHMARKS.md](docs/BENCHMARKS.md)・[docs/ROADMAP.md](docs/ROADMAP.md)・
   [docs/RELEASING.md](docs/RELEASING.md)・[CHANGELOG.md](CHANGELOG.md)。
-- 改善案の索引：[Issue #74](https://github.com/sahenjp/rustdsh/issues/74)（全72案と機能Issueの対応表、優先度P0-P3付き）。
 
 ## よくある質問
 
-- **3080が使用中と言われる**：dsh web GUIと同ポートです。`rdsh serve --port 38080` を使ってください
+- **ポートが使用中と言われる**：dsh web GUIは3080、`rdsh serve`は既定38080です。`--port 0` で空きポートを使えます
 - **プロファイル名がサブコマンドと被る**：`dsh --profile <name>` 形式で起動してください
 - **元に戻したい**：`./install.sh --restore`（退避した本家を復元）
 - **`--tokens` の `?` 付き表示**：zstd CLIが無い環境では圧縮サイズからの概算である印です

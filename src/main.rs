@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 mod auth;
 mod auth_sharing;
 mod compact;
@@ -20,7 +20,8 @@ mod websearch;
 #[command(
     name = "rdsh",
     version,
-    about = "Rust fast launcher for dsh (safe: native fast-paths + passthrough)"
+    about = "Rust fast launcher for dsh (safe: native fast-paths + passthrough)",
+    after_help = "USAGE:\n  rdsh [profile] [--profile <name>] [--patch <yml>...] [app-args...]\n  rdsh <native-subcommand> ...   (tokens|prune|search|compact|doctor|bench|serve|sessions|profiles|skills|logs|guard|dump-config|boot)\n\nEXAMPLES:\n  rdsh tui                        boot tui profile (slim env ON, delegates to dsh)\n  rdsh --profile web --patch x.yml boot web with overlay\n  rdsh dump-config --profile tui  delegate exact dump to dsh\n  rdsh tokens ./AGENTS.md         estimate input tokens natively\n  rdsh auth --import              mirror codex/opencode OAuth into dsh credentials\n  rdsh setup                      first-run connect: import, login flow, next steps\n  rdsh search hello --dir .       fast file search without Node\n  rdsh search-web \"rust async\"      web search via SearXNG (no API key)\n  rdsh --passthrough tui          byte-identical delegation, no slim env\n  rdsh --dry-run tui -- --resume abc   show what would exec"
 )]
 struct Cli {
     #[arg(long = "passthrough", global = true)]
@@ -106,6 +107,9 @@ enum Commands {
         /// Estimate tokens via zstd decompression (falls back to stored-bytes/4)
         #[arg(long = "tokens")]
         tokens: bool,
+        /// Machine-readable JSON for sidecar use
+        #[arg(long = "json")]
+        json: bool,
     },
     /// List local profiles (Node-free)
     Profiles,
@@ -219,6 +223,18 @@ enum SettingsAction {
         #[arg(long = "force")]
         force: bool,
     },
+    /// Get one value: rdsh settings get search.max / context.goal / beta.context_engine
+    Get {
+        key: String,
+        #[arg(long = "json")]
+        json: bool,
+    },
+    /// Set one value: rdsh settings set search.max 50 / guard.deny '["a*"]' / context.goal "方針"
+    Set { key: String, value: String },
+    /// Reset to defaults: rdsh settings unset search.max (or a whole section like context)
+    Unset { key: String },
+    /// List editable keys
+    Keys,
 }
 
 /// First-arg subcommands owned by rdsh. When installed as `dsh`, anything else
@@ -294,7 +310,11 @@ fn main() {
             search::cmd_search(&pattern, &dir, max.unwrap_or(cfg.search.max))
         }
         Some(Commands::SearchWeb { query, limit, json }) => {
-            websearch::cmd_search_web(&query, limit.unwrap_or(cfg.search.web_limit), json)
+            if !crate::rdsh_config::extra_enabled(&cfg, "search-web") {
+                extra_disabled("search-web")
+            } else {
+                websearch::cmd_search_web(&query, limit.unwrap_or(cfg.search.web_limit), json)
+            }
         }
         Some(Commands::Compact { file, max_tokens }) => {
             compact::cmd_compact(&file, max_tokens.unwrap_or(cfg.compact.max_tokens))
@@ -304,17 +324,26 @@ fn main() {
             project,
             limit,
             tokens,
+            json,
         }) => inspect::cmd_sessions(
             project,
             limit.unwrap_or(cfg.sessions.limit),
             tokens || cfg.sessions.with_tokens,
+            json,
+            cfg.sessions.stale_secs,
         ),
         Some(Commands::Profiles) => inspect::cmd_profiles(),
         Some(Commands::Skills) => inspect::cmd_skills(),
         Some(Commands::Logs { tail, grep, file }) => {
             inspect::cmd_logs(tail.unwrap_or(cfg.logs.tail), grep, file)
         }
-        Some(Commands::Serve { port }) => serve::cmd_serve(port.unwrap_or(cfg.serve.port)),
+        Some(Commands::Serve { port }) => {
+            if !crate::rdsh_config::extra_enabled(&cfg, "serve") {
+                extra_disabled("serve")
+            } else {
+                serve::cmd_serve(port.unwrap_or(cfg.serve.port))
+            }
+        }
         Some(Commands::Bench { n }) => bench(n.unwrap_or(cfg.bench.n)),
         Some(Commands::Guard { deny, reason, json }) => {
             let mut merged = cfg.guard.deny.clone();
@@ -346,16 +375,31 @@ fn main() {
                         Err(e) => Err(anyhow::anyhow!(e)),
                     }
                 } else {
+                    // Effective values per editable key with their source:
+                    // `config` = explicitly present in rdsh.json,
+                    // `default` = built-in fallback. `settings keys` remains
+                    // the editable-key list.
                     println!("config: {}", rdsh_config::settings_path());
-                    match v.as_object() {
-                        Some(map) => {
-                            for k in map.keys() {
-                                println!("- {k}");
-                            }
-                            Ok(())
-                        }
-                        None => Err(anyhow::anyhow!("settings did not render as an object")),
+                    let raw: serde_json::Value =
+                        std::fs::read_to_string(rdsh_config::settings_path())
+                            .ok()
+                            .and_then(|text| serde_json::from_str(&text).ok())
+                            .unwrap_or(serde_json::Value::Null);
+                    for annotated in rdsh_config::RdshSettings::keys() {
+                        let key = annotated.split('(').next().unwrap_or(annotated);
+                        let value = cfg.get_dotted(key).unwrap_or(serde_json::Value::Null);
+                        let rendered = match &value {
+                            serde_json::Value::String(s) => s.clone(),
+                            _ => serde_json::to_string(&value).unwrap_or_else(|_| "-".to_string()),
+                        };
+                        let source = if settings_key_in_file(&raw, key) {
+                            "config"
+                        } else {
+                            "default"
+                        };
+                        println!("{key}  {rendered}  {source}");
                     }
+                    Ok(())
                 }
             }
             SettingsAction::Init { force } => {
@@ -372,11 +416,84 @@ fn main() {
                     Err(e) => Err(e),
                 }
             }
+            SettingsAction::Get { key, json } => {
+                let cfg = rdsh_config::load();
+                match cfg.get_dotted(&key) {
+                    Some(v) => {
+                        if json || v.is_object() || v.is_array() {
+                            match serde_json::to_string_pretty(&v) {
+                                Ok(text) => {
+                                    println!("{text}");
+                                    Ok(())
+                                }
+                                Err(e) => Err(anyhow::anyhow!(e)),
+                            }
+                        } else if let Some(s) = v.as_str() {
+                            println!("{s}");
+                            Ok(())
+                        } else {
+                            println!("{v}");
+                            Ok(())
+                        }
+                    }
+                    None => {
+                        eprintln!("[rdsh] unknown key: {key} (try: rdsh settings keys)");
+                        std::process::exit(2);
+                    }
+                }
+            }
+            SettingsAction::Set { key, value } => {
+                let mut cfg = rdsh_config::load();
+                if let Err(e) = cfg.set_dotted(&key, &value) {
+                    Err(e)
+                } else if let Err(e) = cfg.save() {
+                    Err(e)
+                } else {
+                    match cfg.get_dotted(&key) {
+                        Some(v) => {
+                            if v.is_string() {
+                                println!("{}={}", key.trim(), v.as_str().unwrap_or_default());
+                                Ok(())
+                            } else {
+                                match serde_json::to_string(&v) {
+                                    Ok(text) => {
+                                        println!("{}={}", key.trim(), text);
+                                        Ok(())
+                                    }
+                                    Err(e) => Err(anyhow::anyhow!(e)),
+                                }
+                            }
+                        }
+                        None => Err(anyhow::anyhow!("set failed: {key}")),
+                    }
+                }
+            }
+            SettingsAction::Unset { key } => {
+                let mut cfg = rdsh_config::load();
+                if let Err(e) = cfg.reset_dotted(&key) {
+                    Err(e)
+                } else if let Err(e) = cfg.save() {
+                    Err(e)
+                } else {
+                    println!(
+                        "reset {} (saved to {})",
+                        key.trim(),
+                        rdsh_config::settings_path()
+                    );
+                    Ok(())
+                }
+            }
+            SettingsAction::Keys => {
+                for k in rdsh_config::RdshSettings::keys() {
+                    println!("{k}");
+                }
+                Ok(())
+            }
         },
         Some(Commands::Context { action }) => {
             if !cfg.beta.context_engine {
                 eprintln!(
-                    "[rdsh] context engine is disabled (beta off — enable it in rdsh settings)"
+                    "[rdsh] context engine is OFF by default (experimental) — enable with: rdsh settings set beta.context_engine true"
                 );
                 std::process::exit(2);
             }
@@ -432,20 +549,14 @@ fn main() {
             )
         }),
         None => {
-            let wants_help = cli.extra.iter().any(|a| a == "-h" || a == "--help");
             let parsed = dsh_args::split_launcher_args(cli.profile, cli.extra);
             match parsed {
                 dsh_args::Launcher::Help => {
-                    if wants_help {
-                        print_help();
-                        Ok(())
-                    } else {
-                        // Bare `rdsh` (no profile, no help flag): boot the
-                        // resolved default instead of showing help.
-                        resolve_default_profile().and_then(|p| {
-                            passthrough::exec_boot(&p, None, &cli.patch, &[], dry, slim)
-                        })
-                    }
+                    // Single source of truth: clap-generated help (see the
+                    // #[command] attributes on Cli). Bare `rdsh` and
+                    // `-h`/`--help` launcher args land here.
+                    let _ = Cli::command().print_help();
+                    Ok(())
                 }
                 dsh_args::Launcher::Plugin { profile, pnpm_args } => {
                     passthrough::exec_plugin(&profile, &pnpm_args, dry, slim)
@@ -524,24 +635,18 @@ fn resolve_default_profile() -> anyhow::Result<String> {
     pick_default_profile(env.as_deref(), local_tui).map_err(|m| anyhow::anyhow!(m))
 }
 
-fn print_help() {
-    println!("rdsh: fast Rust launcher for dsh (safe shim)");
-    println!();
-    println!("USAGE:");
-    println!("  rdsh [profile] [--profile <name>] [--patch <yml>...] [app-args...]");
-    println!("  rdsh <native-subcommand> ...   (tokens|prune|search|compact|doctor|bench|serve|sessions|profiles|skills|logs|guard|dump-config|boot)");
-    println!();
-    println!("EXAMPLES:");
-    println!("  rdsh tui                        boot tui profile (slim env ON, delegates to dsh)");
-    println!("  rdsh --profile web --patch x.yml boot web with overlay");
-    println!("  rdsh dump-config --profile tui  delegate exact dump to dsh");
-    println!("  rdsh tokens ./AGENTS.md         estimate input tokens natively");
-    println!("  rdsh auth --import              mirror codex/opencode OAuth into dsh credentials");
-    println!("  rdsh setup                      first-run connect: import, login flow, next steps");
-    println!("  rdsh search TODO --dir .        fast file search without Node");
-    println!("  rdsh search-web \"rust async\"      web search via SearXNG (no API key)");
-    println!("  rdsh --passthrough tui          byte-identical delegation, no slim env");
-    println!("  rdsh --dry-run tui -- --resume abc   show what would exec");
+/// True when `dotted` (e.g. `search.max`) is explicitly present (non-null)
+/// in the raw rdsh.json text. Used by `settings show` to label each
+/// effective value `config` vs `default`.
+fn settings_key_in_file(raw: &serde_json::Value, dotted: &str) -> bool {
+    let mut node = raw;
+    for part in dotted.split('.') {
+        match node.get(part) {
+            Some(next) if !next.is_null() => node = next,
+            _ => return false,
+        }
+    }
+    true
 }
 
 fn dump_config_native(profile: &str, patches: &[String]) -> anyhow::Result<()> {
@@ -570,6 +675,14 @@ fn dump_config_native(profile: &str, patches: &[String]) -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+/// Server-type extras are off by default: refuse with enable guidance.
+/// Setup itself is never gated (it hosts the switches).
+fn extra_disabled(id: &str) -> anyhow::Result<()> {
+    Err(anyhow::anyhow!(
+        "extra '{id}' is disabled by default; enable with: rdsh settings set extras.enable {id}"
+    ))
 }
 
 fn doctor() -> anyhow::Result<()> {
@@ -679,6 +792,14 @@ fn node_wrapper_warnings(shadowed: bool) -> Vec<String> {
         for entry in entries.flatten() {
             let path = entry.path();
             if !path.is_file() {
+                continue;
+            }
+            // Size-gate before reading: ~/.local/bin can hold huge binaries and
+            // reading them fully just to discard costs seconds in `doctor`.
+            if std::fs::metadata(&path)
+                .map(|m| m.len() > 65536)
+                .unwrap_or(false)
+            {
                 continue;
             }
             let bytes = std::fs::read(&path).unwrap_or_default();

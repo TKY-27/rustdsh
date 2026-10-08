@@ -1,7 +1,9 @@
 //! Unified settings backed by `$DSH_HOME/rdsh.json` (schema v1).
 //!
 //! `serde_json` + `anyhow` + `std` のみを使います。
-//! ファイル欠落・壊れ JSON は既定値にフォールバックし、不正値は clamp/切詰めで吸収します。
+//! ファイル欠落は既定値にフォールバックし、不正値は clamp/切詰めで吸収します。
+//! 存在するのに壊れた JSON は既定値に置き換えず hard error にします
+//!（guard.deny 空での fail-open 起動と `settings set` による上書き消去を防ぐため）。
 //! 旧 `rdsh-context.json` は読み取り専用で context 節の補完に使います（書き込みません）。
 
 /// rdsh.json のスキーマ版。
@@ -32,6 +34,24 @@ pub struct RdshSettings {
     pub setup: SetupSection,
     pub beta: BetaSection,
     pub context: ContextSection,
+    pub extras: ExtrasSection,
+}
+
+/// Optional server-type features, off by default. Known ids are listed in
+/// KNOWN_EXTRAS; unknown entries are ignored by the gate.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ExtrasSection {
+    pub enable: Vec<String>,
+}
+
+/// Extra feature ids that can be enabled via `extras.enable`.
+/// `serve` = `rdsh serve` dashboard, `search-web` = `rdsh search-web`.
+/// Setup itself (`rdsh setup --web`) always runs: it hosts the switches.
+pub const KNOWN_EXTRAS: &[&str] = &["serve", "search-web"];
+
+/// True when the named extra is enabled in settings (unknown ids never match).
+pub fn extra_enabled(cfg: &RdshSettings, id: &str) -> bool {
+    KNOWN_EXTRAS.contains(&id) && cfg.extras.enable.iter().any(|e| e == id)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -64,6 +84,8 @@ pub struct CompactSection {
 pub struct SessionsSection {
     pub limit: usize,
     pub with_tokens: bool,
+    /// Stale-estimate window for growing session files (0 disables).
+    pub stale_secs: u64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -93,7 +115,7 @@ pub struct SetupSection {
     pub web_port: u16,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct BetaSection {
     pub context_engine: bool,
 }
@@ -155,6 +177,7 @@ impl Default for SessionsSection {
         Self {
             limit: 20,
             with_tokens: false,
+            stale_secs: 60,
         }
     }
 }
@@ -167,21 +190,13 @@ impl Default for LogsSection {
 
 impl Default for ServeSection {
     fn default() -> Self {
-        Self { port: 3080 }
+        Self { port: 38080 }
     }
 }
 
 impl Default for BenchSection {
     fn default() -> Self {
         Self { n: 5 }
-    }
-}
-
-impl Default for BetaSection {
-    fn default() -> Self {
-        Self {
-            context_engine: true,
-        }
     }
 }
 
@@ -220,6 +235,7 @@ impl Default for RdshSettings {
             setup: SetupSection::default(),
             beta: BetaSection::default(),
             context: ContextSection::default(),
+            extras: ExtrasSection::default(),
         }
     }
 }
@@ -231,11 +247,47 @@ pub fn settings_path() -> String {
     format!("{}/rdsh.json", crate::inspect::dsh_home())
 }
 
-/// 設定を読み込む。欠落・壊れ JSON は既定値、不正値は clamp/切詰めで吸収する。
-/// context 節が空なら旧 rdsh-context.json で補完する（読み取り専用）。
+/// 設定を読み込む。ファイル欠落は既定値、不正値は clamp/切詰めで吸収する。
+/// context 節が未設定/nullなら旧 rdsh-context.json で補完する（読み取り専用）。
+///
+/// 存在するのに壊れた JSON は fail-open しない: エラーを出して exit(1) で
+/// 終了する（guard.deny 空での起動を防ぐため）。表示形式は main の cmd
+/// エラー処理 (`[rdsh] error: ...` + exit(1)) に合わせている。
+/// テストや Result が欲しい呼び出し側は [`try_load`] を使う。
 pub fn load() -> RdshSettings {
-    let raw = std::fs::read_to_string(settings_path()).unwrap_or_default();
-    let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
+    match try_load() {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            eprintln!("[rdsh] error: {e:#}");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// `load` の実体。ファイル欠落は既定値 (Ok) を返し、有効な設定の
+/// 読み込み結果は従来と同一。存在するのに壊れた JSON はファイルパス・
+/// 行/列・復旧手順つきの Err を返す（guard 系設定の fail-open 禁止）。
+pub fn try_load() -> anyhow::Result<RdshSettings> {
+    let path = settings_path();
+    let (raw, existed) = match std::fs::read_to_string(&path) {
+        Ok(raw) => (raw, true),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => (String::new(), false),
+        Err(e) => {
+            return Err(anyhow::anyhow!("cannot read settings file at {path}: {e}"));
+        }
+    };
+    let parsed: serde_json::Value = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        // 欠落ファイルは従来どおり Null 扱い（既定値 + legacy 補完）。
+        Err(_) if !existed => serde_json::Value::Null,
+        Err(e) => {
+            return Err(anyhow::anyhow!(
+                "invalid settings file at {path}: {e} (line {}, column {}); run `rdsh settings init --force` (rdsh settings reset) to restore defaults",
+                e.line(),
+                e.column()
+            ));
+        }
+    };
     let has_context = parsed.get("context").is_some_and(|c| !c.is_null());
     let mut cfg = if parsed.is_null() {
         RdshSettings::default()
@@ -243,7 +295,7 @@ pub fn load() -> RdshSettings {
         RdshSettings::from_value(&parsed)
     };
     complement_from_legacy(&mut cfg, has_context);
-    cfg
+    Ok(cfg)
 }
 
 impl RdshSettings {
@@ -325,12 +377,13 @@ impl RdshSettings {
             sessions: SessionsSection {
                 limit: clamp_u64(num(&ss, "limit"), 20, 1, 100) as usize,
                 with_tokens: flag(&ss, "with_tokens", false),
+                stale_secs: clamp_u64(num(&ss, "stale_secs"), 60, 0, 3600),
             },
             logs: LogsSection {
                 tail: clamp_u64(num(&l, "tail"), 50, 1, 500) as usize,
             },
             serve: ServeSection {
-                port: clamp_u64(num(&sv, "port"), 3080, 1, 65535) as u16,
+                port: clamp_u64(num(&sv, "port"), 38080, 1, 65535) as u16,
             },
             guard: GuardSection {
                 deny: list(&gd, "deny", TEXT_CHARS),
@@ -347,7 +400,7 @@ impl RdshSettings {
                 },
             },
             beta: BetaSection {
-                context_engine: flag(&be, "context_engine", true),
+                context_engine: flag(&be, "context_engine", false),
             },
             context: ContextSection {
                 token_budget: clamp_u64(num(&cx, "token_budget"), 4000, 500, 200000) as usize,
@@ -357,18 +410,17 @@ impl RdshSettings {
                 goal: text(&cx, "goal", GOAL_CHARS),
                 decisions: list(&cx, "decisions", TEXT_CHARS),
                 constraints: list(&cx, "constraints", TEXT_CHARS),
-                working_files: {
-                    let w = list(&cx, "working_files", PATH_CHARS);
-                    if w.is_empty() {
-                        list(&cx, "files", PATH_CHARS)
-                    } else {
-                        w
-                    }
-                },
+                working_files: working_file_list(&cx),
                 open_tasks: list(&cx, "open_tasks", TEXT_CHARS),
                 max_code_hits: clamp_u64(num(&cx, "max_code_hits"), 20, 1, 100) as usize,
-                max_sessions: clamp_u64(num(&cx, "max_sessions"), 10, 1, 100) as usize,
+                max_sessions: clamp_u64(num(&cx, "max_sessions"), 10, 0, 100) as usize,
                 include_git_diff: flag(&cx, "include_git_diff", true),
+            },
+            extras: ExtrasSection {
+                enable: list(&sec("extras"), "enable", TEXT_CHARS)
+                    .into_iter()
+                    .filter(|e| KNOWN_EXTRAS.contains(&e.as_str()))
+                    .collect(),
             },
         };
         out.sanitize();
@@ -415,10 +467,11 @@ impl RdshSettings {
             .unwrap_or(serde_json::Value::Null);
         out.sessions.limit = clamp_u64(num(&ss, "limit"), 20, 1, 100) as usize;
         out.sessions.with_tokens = flag(&ss, "with_tokens", false);
+        out.sessions.stale_secs = clamp_u64(num(&ss, "stale_secs"), 60, 0, 3600);
         let l = v.get("logs").cloned().unwrap_or(serde_json::Value::Null);
         out.logs.tail = clamp_u64(num(&l, "tail"), 50, 1, 500) as usize;
         let sv = v.get("serve").cloned().unwrap_or(serde_json::Value::Null);
-        out.serve.port = clamp_u64(num(&sv, "port"), 3080, 1, 65535) as u16;
+        out.serve.port = clamp_u64(num(&sv, "port"), 38080, 1, 65535) as u16;
         let gd = v.get("guard").cloned().unwrap_or(serde_json::Value::Null);
         out.guard.deny = list(&gd, "deny", TEXT_CHARS);
         out.guard.reason = text(&gd, "reason", TEXT_CHARS);
@@ -431,7 +484,12 @@ impl RdshSettings {
             Some(n) => n.clamp(1, 65535) as u16,
         };
         let be = v.get("beta").cloned().unwrap_or(serde_json::Value::Null);
-        out.beta.context_engine = flag(&be, "context_engine", true);
+        out.beta.context_engine = flag(&be, "context_engine", false);
+        let ex = v.get("extras").cloned().unwrap_or(serde_json::Value::Null);
+        out.extras.enable = list(&ex, "enable", TEXT_CHARS)
+            .into_iter()
+            .filter(|e| KNOWN_EXTRAS.contains(&e.as_str()))
+            .collect();
         let cx = v.get("context").cloned().unwrap_or(serde_json::Value::Null);
         out.context.token_budget = clamp_u64(num(&cx, "token_budget"), 4000, 500, 200000) as usize;
         out.context.enable_retriever = flag(&cx, "enable_retriever", true);
@@ -440,17 +498,10 @@ impl RdshSettings {
         out.context.goal = text(&cx, "goal", GOAL_CHARS);
         out.context.decisions = list(&cx, "decisions", TEXT_CHARS);
         out.context.constraints = list(&cx, "constraints", TEXT_CHARS);
-        out.context.working_files = {
-            let w = list(&cx, "working_files", PATH_CHARS);
-            if w.is_empty() {
-                list(&cx, "files", PATH_CHARS)
-            } else {
-                w
-            }
-        };
+        out.context.working_files = working_file_list(&cx);
         out.context.open_tasks = list(&cx, "open_tasks", TEXT_CHARS);
         out.context.max_code_hits = clamp_u64(num(&cx, "max_code_hits"), 20, 1, 100) as usize;
-        out.context.max_sessions = clamp_u64(num(&cx, "max_sessions"), 10, 1, 100) as usize;
+        out.context.max_sessions = clamp_u64(num(&cx, "max_sessions"), 10, 0, 100) as usize;
         out.context.include_git_diff = flag(&cx, "include_git_diff", true);
         out
     }
@@ -472,13 +523,14 @@ impl RdshSettings {
                 "searxng_url": self.search.searxng_url,
             },
             "compact": { "max_tokens": self.compact.max_tokens },
-            "sessions": { "limit": self.sessions.limit, "with_tokens": self.sessions.with_tokens },
+            "sessions": { "limit": self.sessions.limit, "with_tokens": self.sessions.with_tokens, "stale_secs": self.sessions.stale_secs },
             "logs": { "tail": self.logs.tail },
             "serve": { "port": self.serve.port },
             "guard": { "deny": self.guard.deny, "reason": self.guard.reason },
             "bench": { "n": self.bench.n },
             "setup": { "web_port": self.setup.web_port },
             "beta": { "context_engine": self.beta.context_engine },
+            "extras": { "enable": self.extras.enable },
             "context": {
                 "token_budget": self.context.token_budget,
                 "enable_retriever": self.context.enable_retriever,
@@ -495,6 +547,182 @@ impl RdshSettings {
             },
         })
     }
+
+    /// dotted key (`section.field`) の現在値を JSON で返す。section単体も可。
+    pub fn get_dotted(&self, key: &str) -> Option<serde_json::Value> {
+        let v = self.to_value();
+        let key = key.trim().trim_matches('.');
+        if key.is_empty() || key == "all" {
+            return Some(v);
+        }
+        let mut cur = &v;
+        for part in key.split('.') {
+            cur = cur.get(part)?;
+        }
+        Some(cur.clone())
+    }
+
+    /// dotted keyへ値を設定する。不正キーはErr。保存は呼び出し側が行う。
+    pub fn set_dotted(&mut self, key: &str, raw: &str) -> anyhow::Result<()> {
+        let key = key.trim().trim_matches('.').to_string();
+        let bad = || anyhow::anyhow!("unknown settings key: {key} (try: rdsh settings keys)");
+        match key.as_str() {
+            "general.slim" => self.general.slim = parse_bool(raw)?,
+            "general.passthrough" => self.general.passthrough = parse_bool(raw)?,
+            "general.dry_run" => self.general.dry_run = parse_bool(raw)?,
+            "general.default_profile" => {
+                self.general.default_profile = parse_string(raw, PROFILE_CHARS)
+            }
+            "tokens.default_budget" => {
+                self.tokens.default_budget = parse_usize(raw, 4000)? as usize
+            }
+            "search.dir" => {
+                let d = parse_string(raw, PATH_CHARS);
+                self.search.dir = if d.trim().is_empty() {
+                    ".".to_string()
+                } else {
+                    d
+                };
+            }
+            "search.max" => self.search.max = parse_usize(raw, 100)? as usize,
+            "search.web_limit" => self.search.web_limit = parse_usize(raw, 10)? as usize,
+            "search.searxng_url" => self.search.searxng_url = parse_string(raw, URL_CHARS),
+            "compact.max_tokens" => self.compact.max_tokens = parse_usize(raw, 8000)? as usize,
+            "sessions.limit" => self.sessions.limit = parse_usize(raw, 20)? as usize,
+            "sessions.with_tokens" => self.sessions.with_tokens = parse_bool(raw)?,
+            "sessions.stale_secs" => self.sessions.stale_secs = parse_usize(raw, 60)? as u64,
+            "logs.tail" => self.logs.tail = parse_usize(raw, 50)? as usize,
+            "serve.port" => self.serve.port = parse_usize(raw, 38080)? as u16,
+            "guard.deny" => self.guard.deny = parse_list(raw, TEXT_CHARS),
+            "guard.reason" => self.guard.reason = parse_string(raw, TEXT_CHARS),
+            "bench.n" => self.bench.n = parse_usize(raw, 5)? as u32,
+            "setup.web_port" => self.setup.web_port = parse_usize(raw, 0)? as u16,
+            "beta.context_engine" => self.beta.context_engine = parse_bool(raw)?,
+            "extras.enable" => self.extras.enable = parse_list(raw, TEXT_CHARS),
+            "context.token_budget" => self.context.token_budget = parse_usize(raw, 4000)? as usize,
+            "context.enable_retriever" => self.context.enable_retriever = parse_bool(raw)?,
+            "context.enable_packer" => self.context.enable_packer = parse_bool(raw)?,
+            "context.enable_verifier" => self.context.enable_verifier = parse_bool(raw)?,
+            "context.goal" => self.context.goal = parse_string(raw, GOAL_CHARS),
+            "context.decisions" => self.context.decisions = parse_list(raw, TEXT_CHARS),
+            "context.constraints" => self.context.constraints = parse_list(raw, TEXT_CHARS),
+            "context.working_files" | "context.files" => {
+                self.context.working_files = parse_list(raw, PATH_CHARS)
+            }
+            "context.open_tasks" => self.context.open_tasks = parse_list(raw, TEXT_CHARS),
+            "context.max_code_hits" => self.context.max_code_hits = parse_usize(raw, 20)? as usize,
+            "context.max_sessions" => self.context.max_sessions = parse_usize(raw, 10)? as usize,
+            "context.include_git_diff" => self.context.include_git_diff = parse_bool(raw)?,
+            _ => return Err(bad()),
+        }
+        self.sanitize();
+        Ok(())
+    }
+
+    /// dotted keyを既定値に戻す。section単体で節全体を初期化する。
+    pub fn reset_dotted(&mut self, key: &str) -> anyhow::Result<()> {
+        let key = key.trim().trim_matches('.').to_string();
+        // 先に未知キー判定（d を動かす前に）
+        let known_section = matches!(
+            key.as_str(),
+            "general"
+                | "tokens"
+                | "search"
+                | "compact"
+                | "sessions"
+                | "logs"
+                | "serve"
+                | "guard"
+                | "bench"
+                | "setup"
+                | "beta"
+                | "extras"
+                | "context"
+                | "all"
+                | ""
+        );
+        if !known_section && RdshSettings::default().get_dotted(&key).is_none() {
+            return Err(anyhow::anyhow!(
+                "unknown settings key: {key} (try: rdsh settings keys)"
+            ));
+        }
+        let d = RdshSettings::default();
+        match key.as_str() {
+            "general" => self.general = d.general,
+            "tokens" => self.tokens = d.tokens,
+            "search" => self.search = d.search,
+            "compact" => self.compact = d.compact,
+            "sessions" => self.sessions = d.sessions,
+            "logs" => self.logs = d.logs,
+            "serve" => self.serve = d.serve,
+            "guard" => self.guard = d.guard,
+            "bench" => self.bench = d.bench,
+            "setup" => self.setup = d.setup,
+            "beta" => self.beta = d.beta,
+            "extras" => self.extras = d.extras,
+            "context" => self.context = d.context,
+            "all" | "" => *self = d,
+            _ => {
+                // 単項目は既定節から写す
+                let tmp = d.clone();
+                self.set_dotted_fallback(&key, &tmp)?;
+            }
+        }
+        self.sanitize();
+        Ok(())
+    }
+
+    fn set_dotted_fallback(&mut self, key: &str, src: &RdshSettings) -> anyhow::Result<()> {
+        let v = src
+            .get_dotted(key)
+            .ok_or_else(|| anyhow::anyhow!("unknown settings key: {key}"))?;
+        let raw = if v.is_string() {
+            v.as_str().unwrap_or_default().to_string()
+        } else {
+            serde_json::to_string(&v).unwrap_or_default()
+        };
+        // 空文字の扱い: 文字列節はそのまま空に戻す
+        self.set_dotted(key, &raw)
+    }
+
+    /// 設定キー一覧（help用）。
+    pub fn keys() -> &'static [&'static str] {
+        &[
+            "general.slim(bool)",
+            "general.passthrough(bool)",
+            "general.dry_run(bool)",
+            "general.default_profile(string)",
+            "tokens.default_budget(500-200000)",
+            "search.dir(string)",
+            "search.max(1-100)",
+            "search.web_limit(1-100)",
+            "search.searxng_url(string)",
+            "compact.max_tokens(500-200000)",
+            "sessions.limit(1-100)",
+            "sessions.with_tokens(bool)",
+            "sessions.stale_secs(0-3600, 0=off)",
+            "logs.tail(1-500)",
+            "serve.port(1-65535)",
+            "guard.deny(list)",
+            "guard.reason(string)",
+            "bench.n(1-20)",
+            "setup.web_port(0-65535, 0=random)",
+            "beta.context_engine(bool, default OFF)",
+            "extras.enable(list: serve,search-web; default OFF)",
+            "context.token_budget(500-200000)",
+            "context.enable_retriever(bool)",
+            "context.enable_packer(bool)",
+            "context.enable_verifier(bool)",
+            "context.goal(string)",
+            "context.decisions(list)",
+            "context.constraints(list)",
+            "context.working_files(list)",
+            "context.open_tasks(list)",
+            "context.max_code_hits(1-100)",
+            "context.max_sessions(0-100)",
+            "context.include_git_diff(bool)",
+        ]
+    }
 }
 
 // ---- legacy (旧 rdsh-context.json: 読み取り専用) ----
@@ -503,10 +731,10 @@ fn legacy_context_path() -> String {
     format!("{}/rdsh-context.json", crate::inspect::dsh_home())
 }
 
-/// context 節が空（未設定または既定値のまま）なら旧ファイルで項目ごとに補完する。
+/// context 節が未設定なら旧ファイルで項目ごとに補完する。
 /// 旧ファイルへの書き込みはしない。
 fn complement_from_legacy(cfg: &mut RdshSettings, has_context: bool) {
-    if has_context && cfg.context != ContextSection::default() {
+    if has_context {
         return;
     }
     let raw = std::fs::read_to_string(legacy_context_path()).unwrap_or_default();
@@ -544,12 +772,7 @@ fn complement_from_legacy(cfg: &mut RdshSettings, has_context: bool) {
         c.constraints = list(&v, "constraints", TEXT_CHARS);
     }
     if c.working_files.is_empty() {
-        let w = list(&v, "working_files", PATH_CHARS);
-        c.working_files = if w.is_empty() {
-            list(&v, "files", PATH_CHARS)
-        } else {
-            w
-        };
+        c.working_files = working_file_list(&v);
     }
     if c.open_tasks.is_empty() {
         c.open_tasks = list(&v, "open_tasks", TEXT_CHARS);
@@ -561,7 +784,7 @@ fn complement_from_legacy(cfg: &mut RdshSettings, has_context: bool) {
     }
     if c.max_sessions == ContextSection::default().max_sessions {
         if let Some(n) = num(&v, "max_sessions") {
-            c.max_sessions = n.clamp(1, 100) as usize;
+            c.max_sessions = n.clamp(0, 100) as usize;
         }
     }
 }
@@ -596,12 +819,110 @@ fn list(v: &serde_json::Value, key: &str, max_chars: usize) -> Vec<String> {
     }
 }
 
+fn working_file_list(v: &serde_json::Value) -> Vec<String> {
+    // An explicit empty list clears the selection; only missing/null uses the alias.
+    let key = if v.get("working_files").is_some_and(|value| !value.is_null()) {
+        "working_files"
+    } else {
+        "files"
+    };
+    list(v, key, PATH_CHARS)
+}
+
 fn truncate(s: &str, max_chars: usize) -> String {
     s.chars().take(max_chars).collect()
 }
 
 fn clamp_u64(n: Option<u64>, default: u64, lo: u64, hi: u64) -> u64 {
     n.unwrap_or(default).clamp(lo, hi)
+}
+
+fn parse_bool(raw: &str) -> anyhow::Result<bool> {
+    let s = raw.trim().to_lowercase();
+    match s.as_str() {
+        "true" | "1" | "yes" | "on" | "enable" | "enabled" => Ok(true),
+        "false" | "0" | "no" | "off" | "disable" | "disabled" => Ok(false),
+        _ => {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(raw.trim()) {
+                if let Some(b) = v.as_bool() {
+                    return Ok(b);
+                }
+            }
+            Err(anyhow::anyhow!("bool ではありません: {raw} (true/false)"))
+        }
+    }
+}
+
+fn parse_usize(raw: &str, _fallback: u64) -> anyhow::Result<u64> {
+    let s = raw.trim();
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(s) {
+        if let Some(n) = v.as_u64() {
+            return Ok(n);
+        }
+        if let Some(n) = v.as_i64() {
+            if n >= 0 {
+                return Ok(n as u64);
+            }
+        }
+    }
+    s.parse::<u64>()
+        .map_err(|_| anyhow::anyhow!("数値ではありません: {raw}"))
+}
+
+fn parse_string(raw: &str, max_chars: usize) -> String {
+    let s = raw.trim();
+    if (s.starts_with('"') && s.ends_with('"') && s.len() >= 2)
+        || (s.starts_with('\'') && s.ends_with('\'') && s.len() >= 2)
+    {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(s) {
+            if let Some(st) = v.as_str() {
+                return truncate(st, max_chars);
+            }
+        }
+        return truncate(&s[1..s.len() - 1], max_chars);
+    }
+    truncate(s, max_chars)
+}
+
+fn parse_list(raw: &str, max_chars: usize) -> Vec<String> {
+    let s = raw.trim();
+    if s.is_empty() {
+        return vec![];
+    }
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(s) {
+        if let Some(arr) = v.as_array() {
+            return arr
+                .iter()
+                .filter_map(|x| x.as_str().map(|t| truncate(t, max_chars)))
+                .filter(|t| !t.trim().is_empty())
+                .take(MAX_ITEMS)
+                .collect();
+        }
+        if let Some(st) = v.as_str() {
+            return split_list(st, max_chars);
+        }
+    }
+    split_list(s, max_chars)
+}
+
+fn split_list(s: &str, max_chars: usize) -> Vec<String> {
+    // 改行・カンマ区切りを許容し、JSON配列でなくても1行1件で入る
+    let mut out = vec![];
+    for part in s.split(['\n', ',']).map(str::trim) {
+        if part.is_empty() {
+            continue;
+        }
+        // 余分な引用を剥がす
+        let t = part.trim_matches('"').trim_matches('\'').trim();
+        if t.is_empty() {
+            continue;
+        }
+        out.push(truncate(t, max_chars));
+        if out.len() >= MAX_ITEMS {
+            break;
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -644,11 +965,11 @@ mod rdsh_config_tests {
         assert_eq!(d.compact.max_tokens, 8000);
         assert_eq!((d.sessions.limit, d.sessions.with_tokens), (20, false));
         assert_eq!(d.logs.tail, 50);
-        assert_eq!(d.serve.port, 3080);
+        assert_eq!(d.serve.port, 38080);
         assert!(d.guard.deny.is_empty() && d.guard.reason.is_empty());
         assert_eq!(d.bench.n, 5);
         assert_eq!(d.setup.web_port, 0);
-        assert!(d.beta.context_engine);
+        assert!(!d.beta.context_engine);
         assert_eq!(d.context.token_budget, 4000);
         assert!(d.context.enable_retriever && d.context.enable_packer && d.context.enable_verifier);
         assert!(d.context.goal.is_empty());
@@ -663,16 +984,58 @@ mod rdsh_config_tests {
         with_home("missing", |_| {
             assert!(!std::path::Path::new(&settings_path()).exists());
             assert_eq!(load(), RdshSettings::default());
+            assert_eq!(try_load().unwrap(), RdshSettings::default());
         });
     }
 
     #[test]
-    fn broken_json_returns_default() {
-        with_home("broken", |_| {
+    fn corrupt_json_is_hard_error_with_location() {
+        with_home("corrupt", |_| {
             let p = settings_path();
             std::fs::create_dir_all(std::path::Path::new(&p).parent().unwrap()).unwrap();
-            std::fs::write(&p, "{oops,,,").unwrap();
-            assert_eq!(load(), RdshSettings::default());
+            std::fs::write(&p, "{\n  \"search\": {\n    oops\n").unwrap();
+            let err = try_load().unwrap_err().to_string();
+            assert!(err.contains(&p), "path missing: {err}");
+            assert!(err.contains("line"), "line missing: {err}");
+            assert!(err.contains("column"), "column missing: {err}");
+            assert!(
+                err.contains("settings reset"),
+                "recovery hint missing: {err}"
+            );
+            // 壊れファイルは既定値に置き換えない（fail-open 禁止）。
+            assert_eq!(
+                std::fs::read_to_string(&p).unwrap(),
+                "{\n  \"search\": {\n    oops\n"
+            );
+        });
+    }
+
+    #[test]
+    fn empty_file_is_hard_error() {
+        with_home("empty", |_| {
+            let p = settings_path();
+            std::fs::create_dir_all(std::path::Path::new(&p).parent().unwrap()).unwrap();
+            std::fs::write(&p, "").unwrap();
+            let err = try_load().unwrap_err().to_string();
+            assert!(err.contains(&p), "path missing: {err}");
+            assert!(
+                err.contains("settings reset"),
+                "recovery hint missing: {err}"
+            );
+        });
+    }
+
+    #[test]
+    fn guard_deny_list_survives_reload() {
+        with_home("guard", |_| {
+            let mut cfg = RdshSettings::default();
+            cfg.guard.deny = vec!["rm -rf *".to_string(), "shutdown*".to_string()];
+            cfg.guard.reason = "safety".to_string();
+            cfg.save().unwrap();
+            let back = try_load().unwrap();
+            assert_eq!(back.guard.deny, cfg.guard.deny);
+            assert_eq!(back.guard.reason, "safety");
+            assert_eq!(load(), cfg);
         });
     }
 
@@ -774,6 +1137,38 @@ mod rdsh_config_tests {
     }
 
     #[test]
+    fn explicit_working_files_override_legacy_alias() {
+        for (context, expected) in [
+            (
+                serde_json::json!({"working_files": [], "files": ["stale.rs"]}),
+                vec![],
+            ),
+            (
+                serde_json::json!({"working_files": ["current.rs"], "files": ["stale.rs"]}),
+                vec!["current.rs"],
+            ),
+            (
+                serde_json::json!({"files": ["legacy.rs"]}),
+                vec!["legacy.rs"],
+            ),
+            (
+                serde_json::json!({"working_files": null, "files": ["legacy.rs"]}),
+                vec!["legacy.rs"],
+            ),
+        ] {
+            let value = serde_json::json!({"context": context});
+            assert_eq!(
+                RdshSettings::from_value(&value).context.working_files,
+                expected
+            );
+            assert_eq!(
+                RdshSettings::from_value_raw(&value).context.working_files,
+                expected
+            );
+        }
+    }
+
+    #[test]
     fn legacy_file_completes_empty_context_without_writing() {
         with_home("legacy", |_| {
             let legacy = legacy_context_path();
@@ -799,6 +1194,55 @@ mod rdsh_config_tests {
             assert_eq!(c.context.working_files, vec!["src/tokens.rs".to_string()]);
             assert_eq!(c.context.open_tasks, vec!["packing評価".to_string()]);
             assert!(!std::path::Path::new(&settings_path()).exists());
+
+            std::fs::write(
+                settings_path(),
+                serde_json::json!({"context": {"working_files": []}}).to_string(),
+            )
+            .unwrap();
+            assert_eq!(load().context, ContextSection::default());
+
+            std::fs::remove_file(settings_path()).unwrap();
+            std::fs::write(
+                &legacy,
+                serde_json::json!({"working_files": [], "files": ["stale.rs"]}).to_string(),
+            )
+            .unwrap();
+            assert!(load().context.working_files.is_empty());
         });
+    }
+
+    #[test]
+    fn dotted_get_set_unset_cover_all_sections() {
+        let mut c = RdshSettings::default();
+        // get
+        assert_eq!(c.get_dotted("search.max").unwrap(), serde_json::json!(100));
+        assert!(c.get_dotted("beta.context_engine").unwrap().as_bool() == Some(false));
+        // set: 数値・真偽・文字・配列
+        c.set_dotted("search.max", "42").unwrap();
+        assert_eq!(c.search.max, 42);
+        c.set_dotted("beta.context_engine", "true").unwrap();
+        assert!(c.beta.context_engine);
+        c.set_dotted("context.goal", "v2-goal").unwrap();
+        assert_eq!(c.context.goal, "v2-goal");
+        c.set_dotted("guard.deny", r#"["a*","b"]"#).unwrap();
+        assert_eq!(c.guard.deny, vec!["a*".to_string(), "b".to_string()]);
+        c.set_dotted("context.working_files", "src/a.rs, src/b.rs")
+            .unwrap();
+        assert_eq!(c.context.working_files.len(), 2);
+        c.set_dotted("serve.port", "38080").unwrap();
+        assert_eq!(c.serve.port, 38080);
+        assert!(c.set_dotted("unknown.key", "1").is_err());
+        // unset: 単項目と節全体
+        c.set_dotted("search.max", "7").unwrap();
+        c.reset_dotted("search.max").unwrap();
+        assert_eq!(c.search.max, 100);
+        c.set_dotted("context.goal", "tmp").unwrap();
+        c.reset_dotted("context").unwrap();
+        assert!(c.context.goal.is_empty());
+        c.set_dotted("search.max", "7").unwrap();
+        c.reset_dotted("all").unwrap();
+        assert_eq!(c, RdshSettings::default());
+        assert!(c.reset_dotted("unknown.key").is_err());
     }
 }
