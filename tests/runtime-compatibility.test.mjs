@@ -52,6 +52,10 @@ test('metadata delegation uses the selected DSH tree interpreter, resolves alias
   check(path.join(foreign,'lib','bin.js'),systemNode);
   rmSync(treeNode);check(entry,systemNode);
   mkdirSync(treeNode);check(entry,systemNode);
+  if (process.platform === 'win32') {
+    const rootNode=path.join(tree,nodeName);copyFileSync(process.execPath,rootNode);
+    check(entry,rootNode);
+  }
   const standalone=path.join(root,'standalone.js');copyFileSync(entry,standalone);check(standalone,systemNode);
 });
 
@@ -93,4 +97,14 @@ test('sync --check-only follows SemVer precedence and never upgrades to a lower 
     assert.equal(result.status,1,result.stdout+result.stderr);
     assert.match(result.stdout,/binaries untouched/);
   }
+  writeFileSync(path.join(pkg,'package.json'),JSON.stringify({version:'1.0.0'}));
+  for (const versions of ['not-json','[]','{}','["1.0.0", 2]']) {
+    writeFileSync(versionsFile,versions);
+    const result=spawnSync('sh',['sync-dsh.sh','--check-only'],{env:{...env,NPM_BIN:npm,FIXTURE_PACKAGE_ROOT:pkgRoot,FIXTURE_VERSIONS:versionsFile},encoding:'utf8',timeout:15000});
+    assert.equal(result.status,1,result.stdout+result.stderr);
+    assert.match(result.stdout,/binaries untouched/);
+  }
+  const invalidChannel=spawnSync('sh',['sync-dsh.sh','--check-only','--channel=typo'],{env,encoding:'utf8',timeout:15000});
+  assert.equal(invalidChannel.status,2,invalidChannel.stdout+invalidChannel.stderr);
+  assert.match(invalidChannel.stderr,/unsupported channel/);
 });

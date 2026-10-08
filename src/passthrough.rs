@@ -231,6 +231,14 @@ fn node_for_dsh(orig: &str) -> Option<String> {
         if node.is_file() {
             return Some(node.to_string_lossy().into_owned());
         }
+        #[cfg(windows)]
+        {
+            // The official Windows archive keeps node.exe at the tree root.
+            let node = ancestor.join("node.exe");
+            if node.is_file() {
+                return Some(node.to_string_lossy().into_owned());
+            }
+        }
     }
     None
 }
