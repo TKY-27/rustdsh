@@ -3,12 +3,17 @@
   "source_sha256": {
     "src/file_security.rs": "ce4a56111eec0682bb1c374c6e709987226441cb124f94196a8def5bacfc96be",
     "src/search.rs": "a953da24a4ca973469508cd3133d9688ea946ffcf89c419e908fe14e89204b6c",
-    "src/inspect.rs": "eda316dd278c3a413f547d56304a803604ee1a36c2e8a2bcea8ff567068439e7",
-    "src/websearch.rs": "080803352b8cd6e40ac4059ffda4ef032d6904759e9389065456de280dc3b776",
+    "src/inspect.rs": "29ec79e89cecdf5ad279978ee42b21e1e92039841d52ac3a98a217b6884e0b6e",
+    "src/websearch.rs": "b959e710ac1b6479f807490ee0b05d8a76468572125a3f8cf2e867bebf2be15d",
     "src/setup.html": "687294f77985766e311b7d214326d5430ac6fdb49c6a9ea66db57c29164db80d",
-    "tests/log_session_boundaries.rs": "48134b1f5d000c185bf774fb0c1b2341d050510f88aecf8813d81ab3bef0345a"
+    "tests/log_session_boundaries.rs": "c6655d4386a6c3148e012a7f0066a2bd999bc0e5d45f03ee7928ac46582d3ee2",
+    "src/main.rs": "7e4d500ff40b35512f9cb1e62f72383d32e3202d90849de5537aa8c320beb355",
+    "src/rdsh_config.rs": "3a50ac0ac3f8f03b2ebf1b9dbc8fb30e46b80a6ac19076a5b02f94f50385dfb5",
+    "src/setup_web.rs": "c83e81ee0c869a2875a593e29043861bcb337fca428336a816393338ac6b136b",
+    "tests/native_e2e.rs": "a823cde79e75be20c895d3a73c1639cc18c455b3fb0c267a0683f87c56c913b0",
+    "tests/regress.sh": "096844d4a437826bdb3f2c879014d125734b3394a4daed9b900afa43ea0b3303"
   },
-  "candidate_binary_sha256": "00e3c0541bb087bfd936efe0f0c47da8d817b0a2a8f04acd35d621b4048dba3f",
+  "candidate_binary_sha256": "e16a9aece63f671d9a318417755a8b7e8c950252f50e6ea8ebb3c01fd72caa88",
   "review": {
     "correctness": 3,
     "style": 3,
@@ -20,14 +25,19 @@
     "rust_unit_passed": 78,
     "rust_cli_boundaries_passed": 11,
     "cli_regress_passed": 53,
-    "node_security_passed": 29,
+    "node_security_passed": 36,
     "node_security_skipped": 0,
     "release_assets_passed": 6,
     "patched_approval_fixture_passed": 4,
     "guarded_tool_runtime": "passed",
     "fmt": "passed",
-    "release_clippy_warnings_denied": "passed"
+    "release_clippy_warnings_denied": "passed",
+    "rust_native_e2e_passed": 11,
+    "rust_settings_cli_passed": 3,
+    "rust_examples_passed": 7,
+    "browser_e2e": "passed; 3 complete flows, no page/console errors"
   },
   "performance_cases_output_equal": 12,
-  "compatibility_cases_output_equal": 192
+  "compatibility_cases_output_equal": 192,
+  "integrated_main_commit": "98abc67d7e5c5d3f2a5321d9a56adb6a83ff93e2"
 }

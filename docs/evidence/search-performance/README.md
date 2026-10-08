@@ -13,20 +13,20 @@ Default affinity permits 12 CPUs; grep still caps its workers at eight.
 
 | Fixture, `--max 10` | Before median | After median | Speedup | Before/after RSS, KiB |
 | --- | ---: | ---: | ---: | ---: |
-| Dense: 160 files × 6,000 matching lines | 197.500ms | 4.973ms | 39.71x | 132892 / 4316 |
-| Sparse: 1,500 files × 40 nonmatching lines | 7.888ms | 4.948ms | 1.59x | 3692 / 3684 |
-| Deep: 800 files × 40 nonmatching lines, depth 5 | 7.479ms | 5.828ms | 1.28x | 3580 / 3496 |
-| Mixed: 160 files × 1,000 lines, depth 2; one in 13 files matches | 6.846ms | 3.261ms | 2.10x | 6232 / 3608 |
+| Dense: 160 files × 6,000 matching lines | 197.774ms | 4.607ms | 42.93x | 132848 / 4344 |
+| Sparse: 1,500 files × 40 nonmatching lines | 8.680ms | 5.237ms | 1.66x | 3716 / 3688 |
+| Deep: 800 files × 40 nonmatching lines, depth 5 | 7.421ms | 5.604ms | 1.32x | 3612 / 3548 |
+| Mixed: 160 files × 1,000 lines, depth 2; one in 13 files matches | 7.376ms | 3.466ms | 2.13x | 6040 / 3544 |
 
-Dense peak RSS decreased by 96.75%. RSS is a single separate run per binary;
+Dense peak RSS decreased by 96.73%. RSS is a single separate run per binary;
 timings are medians of ten runs. WSL scheduling and filesystem caching affect
 absolute values, particularly the dense baseline. The benchmark does not
 simulate a cold cache or an independently isolated production machine.
 
 | Affinity | Dense before/after | Sparse before/after | Deep before/after | Mixed before/after |
 | --- | ---: | ---: | ---: | ---: |
-| 1 CPU | 286.370 / 2.089ms | 32.504 / 14.845ms | 30.529 / 20.668ms | 16.999 / 2.651ms |
-| 2 CPUs | 179.974 / 2.312ms | 18.883 / 9.712ms | 16.919 / 12.015ms | 10.172 / 2.886ms |
+| 1 CPU | 277.886 / 2.133ms | 31.505 / 14.631ms | 40.303 / 27.572ms | 24.483 / 4.027ms |
+| 2 CPUs | 181.312 / 2.495ms | 18.657 / 9.657ms | 18.898 / 14.390ms | 10.162 / 2.944ms |
 
 Raw reports: [default](default.json), [one CPU](one-cpu.json),
 [two CPUs](two-cpu.json). These reports also contain 64 compatibility

@@ -285,6 +285,7 @@ fn token_sizes_ignore_linked_zstd() {
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     // 40 decompressed bytes -> 10 tokens; the linked 200-byte frame is out.
     assert_eq!(v["sessions"][0]["tokens"], 10);
+    assert_eq!(v["sessions"][0]["tokens_exact"], false);
 }
 
 /// Drives a real cache write: one `.zstd` frame with a header-known size.

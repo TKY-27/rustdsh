@@ -393,6 +393,11 @@ impl TokensCache {
                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
                     if let Some(obj) = v.as_object() {
                         for (k, e) in obj {
+                            // Older cache writers could store an inexact value as
+                            // exact. Its provenance cannot be recovered: recompute.
+                            if e.get("schema").and_then(|x| x.as_u64()) != Some(2) {
+                                continue;
+                            }
                             // Cap on load so a foreign huge file stays harmless.
                             if map.len() >= 2000 {
                                 break;
@@ -488,7 +493,7 @@ impl TokensCache {
             if let Some((m, b, d, t, c)) = self.map.get(k) {
                 obj.insert(
                     k.clone(),
-                    serde_json::json!({"mtime": m, "bytes": b, "decomp": d, "ts": t, "cli": c}),
+                    serde_json::json!({"schema": 2, "mtime": m, "bytes": b, "decomp": d, "ts": t, "cli": c}),
                 );
             }
         }
@@ -539,7 +544,7 @@ fn batch_decompressed(
     for (i, sess) in shown.iter().enumerate() {
         let key = TokensCache::key(root, &sess.project, &sess.id);
         match cache.get(&key, sess.mtime, sess.bytes, zstd_cli) {
-            Some(hit) => out[i] = (hit, true),
+            Some(hit) => out[i] = (hit, hit.is_some()),
             None => pending.push((i, (*sess).clone())),
         }
     }
@@ -565,17 +570,9 @@ fn batch_decompressed(
                 ));
             }
             for (i, h) in handles {
-                if let Ok(((r, _), local)) = h.join() {
+                if let Ok(((r, exact), local)) = h.join() {
                     cache.merge(&local);
-                    let sess = &shown[i];
-                    cache.put(
-                        &TokensCache::key(root, &sess.project, &sess.id),
-                        sess.mtime,
-                        sess.bytes,
-                        r,
-                        zstd_cli,
-                    );
-                    out[i] = (r, true);
+                    out[i] = (r, exact);
                 }
             }
         });
@@ -604,7 +601,7 @@ fn session_decompressed_bytes(
 ) -> (Option<u64>, bool) {
     let key = TokensCache::key(root, &sess.project, &sess.id);
     if let Some(hit) = cache.get(&key, sess.mtime, sess.bytes, zstd_cli) {
-        return (hit, true);
+        return (hit, hit.is_some());
     }
     let (r, exact) = session_decompressed_bytes_uncached(
         root,
@@ -614,7 +611,11 @@ fn session_decompressed_bytes(
         stale_secs,
         cache,
     );
-    cache.put(&key, sess.mtime, sess.bytes, r, zstd_cli);
+    // A reused value from a growing file is deliberately inexact. Do not
+    // associate it with the new content identity and promote it on a cache hit.
+    if exact || r.is_none() {
+        cache.put(&key, sess.mtime, sess.bytes, r, zstd_cli);
+    }
     (r, exact)
 }
 
@@ -636,15 +637,17 @@ fn session_decompressed_bytes_uncached(
     let mut estimated = false;
     let mut deferred = vec![];
     for e in entries.filter_map(|e| e.ok()) {
-        // Never measure through a link: sizes must describe files inside.
-        if !e.file_type().is_ok_and(|t| t.is_file()) {
-            continue;
-        }
         let p = e.path();
         let Some(name) = p.file_name().map(|s| s.to_string_lossy().into_owned()) else {
             continue;
         };
         if !name.ends_with(".zstd") {
+            continue;
+        }
+        // Never measure through a link, and never label the remaining partial
+        // sum exact when a compressed entry was deliberately omitted.
+        if !e.file_type().is_ok_and(|t| t.is_file()) {
+            estimated = true;
             continue;
         }
         match zstd_frame_content_size(&p) {
@@ -666,6 +669,7 @@ fn session_decompressed_bytes_uncached(
                 continue;
             };
             let Some((mtime, bytes)) = file_meta(p) else {
+                estimated = true;
                 continue;
             };
             let fkey = TokensCache::file_key(root, project, id, &name);
@@ -674,6 +678,8 @@ fn session_decompressed_bytes_uncached(
                     if let Some(n) = hit {
                         total += n;
                         any = true;
+                    } else {
+                        estimated = true;
                     }
                 }
                 None => todo.push(p.clone()),
@@ -684,15 +690,18 @@ fn session_decompressed_bytes_uncached(
         let stale_window = stale_secs;
         let mut todo2: Vec<std::path::PathBuf> = vec![];
         for p in &todo {
-            let stale_hit = p
-                .file_name()
-                .map(|s| s.to_string_lossy().into_owned())
-                .and_then(|name| {
-                    cache.stale(
-                        &TokensCache::file_key(root, project, id, &name),
-                        stale_window,
-                    )
-                });
+            let stale_hit = (stale_window > 0)
+                .then(|| {
+                    p.file_name()
+                        .map(|s| s.to_string_lossy().into_owned())
+                        .and_then(|name| {
+                            cache.stale(
+                                &TokensCache::file_key(root, project, id, &name),
+                                stale_window,
+                            )
+                        })
+                })
+                .flatten();
             match stale_hit {
                 Some(n) => {
                     total += n;
@@ -718,7 +727,11 @@ fn session_decompressed_bytes_uncached(
                     if let Some(n) = n {
                         total += n;
                         any = true;
+                    } else {
+                        estimated = true;
                     }
+                } else {
+                    estimated = true;
                 }
             }
         } else if !todo.is_empty() {
@@ -736,6 +749,8 @@ fn session_decompressed_bytes_uncached(
                         if let Some(n) = stream_decompressed_bytes(p) {
                             total += n;
                             any = true;
+                        } else {
+                            estimated = true;
                         }
                     }
                 }
@@ -1377,7 +1392,8 @@ mod tests {
         // Batch path: the resolvable session is cached, the `?` one is not.
         let mut cache = tmp_cache(&dir);
         let out = batch_decompressed(&root, &[&s1, &s2], false, 0, &mut cache);
-        assert_eq!(out, vec![(Some(5), true), (None, true)]);
+        // Batch marks a freshly unresolvable row inexact, like the session path.
+        assert_eq!(out, vec![(Some(5), true), (None, false)]);
         assert_eq!(cache.get(&k1, s1.mtime, s1.bytes, true), Some(Some(5)));
         assert!(!cache.map.contains_key(&k2));
         cache.save();
@@ -1404,7 +1420,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
             dir.join("cache.json"),
-            r#"{"n":{"mtime":1,"bytes":2,"decomp":null,"ts":0},"v":{"mtime":1,"bytes":2,"decomp":40,"ts":0}}"#,
+            r#"{"n":{"schema":2,"mtime":1,"bytes":2,"decomp":null,"ts":0},"v":{"schema":2,"mtime":1,"bytes":2,"decomp":40,"ts":0}}"#,
         )
         .unwrap();
         let mut cache = tmp_cache(&dir);

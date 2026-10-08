@@ -172,7 +172,7 @@ rm -rf $SW
 SWB="$RR_SANDBOX/searchweb"
 mkdir -p $SWB
 printf "%s" "<html><body><article class=\"result\"><h3><a href=\"https://example.com/a\">Alpha result</a></h3><p class=\"content\">first snippet</p></article><article class=\"result\"><h3><a href=\"https://example.com/b\">Beta result</a></h3></article></body></html>" > $SWB/fixture.html
-python3 - "$SWB/fixture.html" 38083 <<PYEOF >/dev/null 2>&1 &
+python3 - "$SWB/fixture.html" "$SWB/port" <<PYEOF >"$SWB/server.log" 2>&1 &
 import http.server, sys
 page = open(sys.argv[1], "rb").read()
 class H(http.server.BaseHTTPRequestHandler):
@@ -185,18 +185,23 @@ class H(http.server.BaseHTTPRequestHandler):
         self.wfile.write(body)
     def log_message(self, *a):
         pass
-http.server.HTTPServer(("127.0.0.1", int(sys.argv[2])), H).serve_forever()
+server = http.server.HTTPServer(("127.0.0.1", 0), H)
+with open(sys.argv[2], "w") as ready:
+    ready.write(str(server.server_address[1]))
+server.serve_forever()
 PYEOF
 HTTPSRV=$!
 i=0
-until curl -fsS --max-time 1 http://127.0.0.1:38083/ >/dev/null 2>&1; do
+until [ -s "$SWB/port" ]; do
   i=$((i+1)); [ "$i" -ge 10 ] && break
   kill -0 "$HTTPSRV" 2>/dev/null || break
   sleep 1
 done
+if [ ! -s "$SWB/port" ]; then echo "FAIL(setup): search-web fixture"; cat "$SWB/server.log"; kill "$HTTPSRV" 2>/dev/null; exit 1; fi
+SWB_PORT=$(cat "$SWB/port")
 if $BIN search-web "hello world" 2>&1 | grep -q "disabled by default"; then ok "search-web refused while extra off"; else echo "FAIL(output): extras gate"; kill $HTTPSRV 2>/dev/null; exit 1; fi
 $BIN settings set extras.enable search-web >/dev/null 2>&1
-if SEARXNG_URL="http://127.0.0.1:38083" $BIN search-web "hello world" --limit 5 2>/dev/null | grep -q "Alpha result"; then ok "search-web via fixture"; else echo "FAIL(output): search-web via fixture"; kill $HTTPSRV 2>/dev/null; exit 1; fi
+if SEARXNG_URL="http://127.0.0.1:$SWB_PORT" $BIN search-web "hello world" --limit 5 >"$SWB/result" 2>"$SWB/client.log" && grep -q "Alpha result" "$SWB/result"; then ok "search-web via fixture"; else echo "FAIL(output): search-web via fixture"; cat "$SWB/server.log" "$SWB/client.log"; kill $HTTPSRV 2>/dev/null; exit 1; fi
 kill $HTTPSRV 2>/dev/null
 wait $HTTPSRV 2>/dev/null || true
 rm -rf $SWB
