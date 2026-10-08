@@ -26,7 +26,7 @@ printed the local server URL and Ctrl-C instructions. After: it waits for the
 server and real tray to be ready, prints the notification-area message, and
 returns. Other subcommands, MCP streams, and explicit terminal mode stay foreground.
 
-Native Windows Dashboard suite: **194 passed**. The latest focused tray/launcher
+Native Windows Dashboard suite: **195 passed after installation without lifecycle scripts**. The latest focused tray/launcher
 checks: **13 passed**, including real PowerShell forwarding and MCP stdin/stdout,
 quoted/Unicode project paths, duplicate startup rejection, separate project
 survival, actual menu callbacks, NotifyIcon disposal, failed stop retry and lost

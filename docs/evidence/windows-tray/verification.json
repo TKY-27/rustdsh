@@ -4,8 +4,9 @@
   "model_calls": 0,
   "results": {
     "windows_dashboard_suite": {
-      "passed": 194,
-      "failed": 0
+      "passed": 195,
+      "failed": 0,
+      "after_install_without_lifecycle_scripts": true
     },
     "latest_windows_tray_tests": {
       "passed": 13,
