@@ -171,7 +171,7 @@ OAuthは `rdsh auth --import --provider openai-codex --source codex` のよう�
 
 ### エージェントの実行制限
 
-Linux x86_64・bubblewrap・prlimit・監査対象DSH 0.2.0-rc.2で、モデルのツールを
+Linux x86_64・bubblewrap・prlimit・監査対象DSH 0.2.0-rc.2／0.2.1-alpha.1で、モデルのツールを
 `rdsh_inspect` に限定します。ツールには認証ストア・ホスト環境変数を渡さず、
 ネットワークとホスト・プロジェクトへの書き込みをカーネルで拒否します。
 隔離環境内の使い捨て一時領域は利用できます。利用者が指定したファイルの

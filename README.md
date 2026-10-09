@@ -200,7 +200,7 @@ key with `--ref OPENAI_API_KEY`. Bulk import and `RDSH_AUTH_AUTOSYNC` are
 
 ### Mandatory agent tool isolation
 
-On Linux x86_64, with bubblewrap, prlimit and audited DSH 0.2.0-rc.2, model tools
+On Linux x86_64, with bubblewrap, prlimit and audited DSH 0.2.0-rc.2 / 0.2.1-alpha.1, model tools
 are restricted to `rdsh_inspect`. Only copies of files explicitly shared
 by the human are mounted, read-only. Kernel policies deny network access
 and writes to the host and project; host credentials and environment variables
