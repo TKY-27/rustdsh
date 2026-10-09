@@ -70,3 +70,22 @@ disagree while a child exits or spawns. Both must be empty before an
 the existing stop verification and journal checks. The regression covers both
 query orders without relaxing any startup or stop deadline. Full-suite and
 hosted runner results must still be checked on the final PR head.
+
+## Verification after main 492bae4
+
+The latest Windows run used Node 24.18.0 and PowerShell 7.6.6. All 50 targeted
+routing, launcher, tray, adapter and process-scope tests passed after the
+main sync. The routing fixture kept its original 20-second outer deadline and
+recorded bind at 295 ms, probe at 1,663 ms and inspect at 272 ms. A normal tray
+helper reported ready at 708 ms and exited normally at 890 ms. The virtual
+timeout case observed readiness timeout at 498 ms and the same helper's
+SIGTERM exit at 511 ms, with cleanup confirmation.
+
+This run does not reproduce the hosted runner's intermittent timeout, so it
+does not establish Issue #209's root cause. The CI failure boundary remains
+open for evidence from a recurrence. Reproduce the complete targeted set from
+the repository root with:
+
+```powershell
+node --test dashboard/test/model-routing.test.mjs dashboard/test/windows-launcher.test.mjs dashboard/test/windows-tray.test.mjs dashboard/test/adapters.test.mjs dashboard/test/process-scope.test.mjs
+```
