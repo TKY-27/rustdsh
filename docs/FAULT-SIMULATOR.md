@@ -48,6 +48,12 @@ normal stopping uses the existing owned-kernel-group backend.
 Each scenario has a bounded worker lifetime. The seeded logical clock labels
 the fixture event order. Native RPC deadlines, OS process observations and kernel
 stopping remain real; a logical timestamp is not an OS liveness observation.
+An ENOSPC boundary becomes one seeded fault event. Further write/fsync attempts
+while that device remains full are recorded individually in
+`runtime_observations.journal_failures`, with attempt numbers, elapsed wall-clock
+milliseconds and the preceding logical event. Cleanup polling can produce a
+different number of those attempts on each replay without shifting the seeded
+event order; no observed failed write is discarded.
 The seed also selects the ENOSPC boundary. Run both seeds 0 and 1 to cover write
 and fsync failure. Hard-process termination is not a power-loss/storage-device test.
 
@@ -57,8 +63,9 @@ and fsync failure. Hard-process termination is not a power-loss/storage-device t
   settings and fault points. Unknown fields and arbitrary executable/endpoint
   additions are rejected before creating a new output directory.
 - `report.json` and each scenario's `result.json` contain individual checks,
-  observed effect counts, ack/persistence/resource results, logical events and
-  failure phase/code. A failed worker is recorded as failed, never as skipped.
+  observed effect counts, ack/persistence/resource results, logical events,
+  runtime I/O observations and failure phase/code. A failed worker is recorded
+  as failed, never as skipped.
 - The mock CLI trace and isolated state remain beside each result. Bounded worker
   diagnostics are retained when present. Simulator state is disposable, but the
   command never deletes it. Do not use these mock sessions to resume a real run.

@@ -70,6 +70,13 @@ test("CLI replay retains the exact seed and fault point; ENOSPC before write dis
   assert.equal(second.source_fingerprint, first.source_fingerprint);
   assert.deepEqual(second.results[0].facts, first.results[0].facts);
   assert.deepEqual(second.results[0].events, first.results[0].events);
+  for (const report of [first, second]) {
+    assert.equal(report.results[0].events.filter((e) => e.event === "injected_ENOSPC").length, 1);
+    const attempts = report.results[0].runtime_observations.journal_failures;
+    assert(attempts.length > 0);
+    assert(attempts.every((attempt, i) => attempt.attempt === i + 1 &&
+      attempt.boundary === "write" && Number.isFinite(attempt.elapsed_ms) && attempt.elapsed_ms >= 0));
+  }
   assert.deepEqual(await fs.readFile(path.join(root, "first", "input.json")),
     await fs.readFile(path.join(root, "replay", "input.json")));
 });

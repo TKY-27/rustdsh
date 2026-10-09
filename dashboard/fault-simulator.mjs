@@ -41,7 +41,7 @@ async function readManifest(file) {
 }
 async function sourceFingerprint() {
   const hash = createHash("sha256");
-  for (const name of ["fault-simulator.mjs", "fault-simulator-worker.mjs", "fault-simulator-cli.mjs",
+  for (const name of ["fault-simulator.mjs", "fault-simulator-worker.mjs", "fault-simulator-trace.mjs", "fault-simulator-cli.mjs",
     "fault-simulator-network.mjs", "adapters.mjs", "tracked-adapter.mjs", "session-ledger.mjs",
     "run-history.mjs", "process-scope.mjs", "process-scope-backends.mjs", "retry.mjs"]) {
     hash.update(name + "\0");

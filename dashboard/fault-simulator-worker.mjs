@@ -10,6 +10,7 @@ import { identity } from "./state.mjs";
 import { RunHistory } from "./run-history.mjs";
 import { SessionLedger, attachRecordedSession } from "./session-ledger.mjs";
 import { RetryHistory, RetryFailure, runWithRetry } from "./retry.mjs";
+import { createFaultTrace } from "./fault-simulator-trace.mjs";
 
 const config = JSON.parse(process.argv[2]);
 if (
@@ -20,12 +21,8 @@ if (
 )
   throw new Error("Missing isolated simulator ownership marker");
 const trace = path.join(config.root, "mock-cli.jsonl");
-const checks = [], events = [];
-let tick = 0;
-const observe = (event, data = {}) => {
-  tick += 1 + (config.seed % 7);
-  events.push({ logical_time_ms: tick, event, ...data });
-};
+const checks = [];
+const { events, observe, journalFailure, runtime_observations } = createFaultTrace(config.seed);
 const verify = (name, actual, expected) =>
   checks.push({ name, expected, actual, passed: isDeepStrictEqual(actual, expected) });
 const id = (label) => {
@@ -148,7 +145,7 @@ try {
         const original = handle[method].bind(handle);
         handle[method] = async (...values) => {
           if (!diskArmed) return original(...values);
-          observe("injected_ENOSPC", { boundary: method });
+          journalFailure(method);
           throw Object.assign(new Error("Simulated full journal device"), { code: "ENOSPC" });
         };
       }
@@ -245,6 +242,6 @@ try {
   }
 }
 const result = { scenario: config.scenario, seed: config.seed, passed: !failure && checks.every((c) => c.passed),
-  failure, checks, facts, events, network: globalThis.rdshFaultNetwork };
+  failure, checks, facts, events, runtime_observations, network: globalThis.rdshFaultNetwork };
 await new Promise((resolve) => process.send({ type: "result", result }, resolve));
 process.disconnect();
