@@ -33,3 +33,25 @@ paid APIs or real tools, and do not prove physical phone or Tailscale behavior.
 and [browser observations](browser-results.json) are from this run. The
 [previous review](../issue-13-rereview.md) retains the earlier source's PNG/GIF
 and acceptance details; its counts are not substituted for this run.
+
+## Setup completion response correction
+
+On 2026-10-09, head `1d37a5963dd8568cd4fcf560bd5464665178472a`
+failed the hosted Ubuntu native test because an HTTP response was empty.
+The authorized `/api/done` handler set the completion flag before writing
+its acknowledgement, allowing the main thread to exit first. Source
+`dc60b12e9c67a34fb139bd048af6b26a7ac9b180` sets the flag only after the
+complete response has been written successfully.
+
+That immutable source passed Linux debug and release Rust suites (103 tests
+each), release Clippy with zero warnings, examples 7, model fence 2, CLI
+regression 53, security boundaries 11 and the 8 existing browser flows.
+The authenticated completion/restart flow passed 15 additional runs in
+each build mode. It also verifies that an unauthenticated completion request
+returns 401 and leaves setup available, and that successful completion
+returns the full `{"ok":true}` body before the owned process exits.
+
+The [before/after output](setup-completion-before-after.txt) retains the
+failed Actions job URL. [Source and validation data](setup-completion-validation.json)
+separate this local Linux result from later Windows/macOS and head CI.
+Dashboard files, the inbox UI and its original screenshots are unchanged.
