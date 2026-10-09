@@ -22,7 +22,7 @@ if (
   throw new Error("Missing isolated simulator ownership marker");
 const trace = path.join(config.root, "mock-cli.jsonl");
 const checks = [];
-const { events, observe, journalFailure, runtime_observations } = createFaultTrace(config.seed);
+const { events, observe, journalFailure, clock, runtime_observations } = createFaultTrace(config.seed);
 const verify = (name, actual, expected) =>
   checks.push({ name, expected, actual, passed: isDeepStrictEqual(actual, expected) });
 const id = (label) => {
@@ -91,8 +91,8 @@ try {
     const options = {
       history, kind: "external_send", scope_digest: scope,
       authorize: async () => ({ allowed: true, scope_digest: scope }),
-      now: () => tick,
-      wait: async (ms) => { tick += ms; },
+      now: clock.now,
+      wait: clock.wait,
       budget: { max_attempts: 3, total_ms: 10000, base_ms: 10, max_delay_ms: 100 },
       execute: async (context) => {
         observe("mock_send_dispatched");

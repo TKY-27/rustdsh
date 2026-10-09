@@ -23,6 +23,7 @@ export function createFaultTrace(seed, now = () => performance.now()) {
       observe("injected_ENOSPC", { boundary });
     }
   };
-  return { events, observe, journalFailure,
+  const clock = { now: () => tick, wait: async (ms) => { tick += ms; } };
+  return { events, observe, journalFailure, clock,
     runtime_observations: { journal_failures: journalFailures } };
 }

@@ -35,3 +35,16 @@ test("cleanup timing and repeated ENOSPC writes do not shift the seeded replay, 
     assert(attempts.slice(1).every((attempt) => attempt.after_event === "control_result_observed"));
   }
 });
+
+test("network retry deadlines and backoff advance the same seeded clock as fault events", async () => {
+  const trace = createFaultTrace(1, () => 0);
+  assert.equal(trace.clock.now(), 0);
+  trace.observe("mock_send_dispatched");
+  assert.equal(trace.clock.now(), 2);
+  await trace.clock.wait(100);
+  assert.equal(trace.clock.now(), 102);
+  trace.observe("tcp_response_lost");
+  assert.equal(trace.clock.now(), 104);
+  assert.equal(trace.events[1].logical_time_ms, 104);
+  assert.deepEqual(trace.runtime_observations.journal_failures, []);
+});
