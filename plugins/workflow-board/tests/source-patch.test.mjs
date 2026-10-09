@@ -213,14 +213,17 @@ test('preparation never invokes repository fsmonitor commands', { skip: process.
   assert.throws(() => readFileSync(marker), { code: 'ENOENT' })
 })
 
-test('bundled checksum, patch header, numstat and blob coverage agree', () => {
+test('bundled checksum, patch header, numstat and blob coverage agree', t => {
+  const f = fixture(t)
   const manifest = JSON.parse(readFileSync(join(bundle, 'manifest.json'), 'utf8'))
   const patch = readFileSync(join(bundle, 'workflow-board.patch'))
   assert.equal(hash(patch), manifest.patch_sha256)
   assert.equal(manifest.base_commit, 'f97c0438fb1608bbc4c08c88a27344249795ea22')
   assert.equal(manifest.board_commit, '7bd9ac31c23fe369d1fa9a6849869f04967d6ee5')
   assert.ok(patch.toString().startsWith(`From ${manifest.board_commit} `))
-  const stats = execFileSync('git', ['apply', '--numstat', '-z', '-'], { input: patch, encoding: 'utf8', windowsHide: true })
+  // Git filters patch paths below its current directory. Parse from the
+  // fixture repository root so npm test also works from the plugin directory.
+  const stats = execFileSync('git', ['-c', 'core.fsmonitor=false', 'apply', '--numstat', '-z', '-'], { cwd: f.source, input: patch, encoding: 'utf8', windowsHide: true })
   const paths = stats.split('\0').filter(Boolean).map(entry => entry.split('\t').slice(2).join('\t')).sort()
   assert.deepEqual(paths, [...manifest.files].sort())
   assert.deepEqual(Object.keys(manifest.file_blobs).sort(), paths)
