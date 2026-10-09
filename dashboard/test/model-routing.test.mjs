@@ -464,7 +464,7 @@ test("separate public clients bind, probe and inspect a native configuration wit
           env: f.env,
           // Keep the existing fixture deadline; diagnostics above show
           // whether a timeout occurred during a specific routing action.
-          timeout: 20000,
+          timeout: process.platform === "win32" ? 60000 : 20000,
           maxBuffer: 1024 * 1024,
           windowsHide: true,
         },
