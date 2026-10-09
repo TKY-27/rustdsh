@@ -24,6 +24,9 @@ and separates recorded run state, root-process observations and UI connectivity.
 [Bounded retry](../docs/SAFE-RETRY.md) preserves original permission and reconciles
 uncertain writes. Public retry is opt-in for original CLI version queries only.
 
+[Offline fault simulator](../docs/FAULT-SIMULATOR.md) reproduces six seeded
+control-plane failures with local mock peers, saved input/reports, and Windows/Linux CI.
+
 [Checkpoint recovery](../docs/CHECKPOINTS.md) distinguishes a verified native
 resume from an explicit new conversation with an operator-provided summary.
 
