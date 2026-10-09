@@ -12,6 +12,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { metricNames } from "./state.mjs";
 import { attentionSchema } from "./attention.mjs";
+import { observationSchema } from "./observations.mjs";
 import { feedbackValidity } from "./question-contracts.mjs";
 import { costScopeSchema, costReportSchema } from "./cost-ledger.mjs";
 
@@ -72,7 +73,7 @@ export const tools = [
   {
     name: "dashboard_update_metrics",
     description:
-      "Replace reported project metrics with measured values. Counters are cumulative snapshots, not increments. Optional cost_scope declares an immutable period and expected workers/sessions; cost_report records a source-labelled observation with stable event ID and sequence. Repeat IDs never add costs. Report an API estimate only with explicit external calculation basis; unknown costs remain null. Provider/CLI reports, estimates and invoices remain separate.",
+      "Report cumulative metric snapshots, not increments. Include observation kind, source, observed_at, session_id and reference; observation applies only to supplied fields and ratio counters must be sent together. Optional cost_scope declares an immutable period and expected workers/sessions; cost_report records a source-labelled observation with stable event ID and sequence. Repeat IDs never add costs. Report API estimates only with explicit external calculation basis; unknown costs remain null. Provider/CLI reports, estimates and invoices remain separate.",
     inputSchema: object(
       Object.fromEntries([
         ...metricNames.map((name) => [
@@ -80,6 +81,7 @@ export const tools = [
           { type: ["number", "null"], minimum: 0 },
         ]),
         ["session_id", string],
+        ["observation", observationSchema],
         ["cost_scope", costScopeSchema],
         ["cost_report", costReportSchema],
       ]),
@@ -97,6 +99,7 @@ export const tools = [
         milestone: string,
         blocker: string,
         attention: attentionSchema("task"),
+        observation: observationSchema,
       },
       ["id", "title", "status"],
     ),
@@ -130,6 +133,7 @@ export const tools = [
         title: string,
         detail: string,
         artifact: string,
+        observation: observationSchema,
       },
       ["title"],
     ),
