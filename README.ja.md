@@ -259,6 +259,8 @@ rdsh --profile web                             # slim 環境変数付きで起�
 
 ## Web UI
 
+DSHの会話GUIに読み取り専用のworkflow進捗ボードを追加する場合は、[対応sourceへの適用・診断ツール](plugins/workflow-board/README.ja.md)を隔離した対応checkoutに使います。boardと共通表示projectionを変更する18ファイルのpatch・fixtureテストを同梱し、patched DSHのbuild・採用は別工程です。
+
 ```sh
 rdsh settings set extras.enable serve  # 有効な補助機能の一覧を置き換えます
 rdsh serve
