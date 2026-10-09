@@ -791,8 +791,7 @@ fn is_code_file(p: &std::path::Path) -> bool {
     }
     p.extension()
         .and_then(|s| s.to_str())
-        .map(|x| CODE_EXTS.contains(&x.to_lowercase().as_str()))
-        .unwrap_or(false)
+        .is_some_and(|x| CODE_EXTS.contains(&x.to_lowercase().as_str()))
 }
 
 fn code_hits(query: &str, max: usize) -> Vec<String> {
@@ -1260,7 +1259,7 @@ pub fn cmd_status(json: bool) -> anyhow::Result<()> {
         cfg.max_sessions,
         if cfg.include_git_diff { "on" } else { "off" }
     )?;
-    writeln!(out, "working memory: {} (~{} tokens)", wm, wm_tokens)?;
+    writeln!(out, "working memory: {wm} (~{wm_tokens} tokens)")?;
     if cfg.goal.trim().is_empty() {
         writeln!(
             out,
