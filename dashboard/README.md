@@ -1,5 +1,8 @@
 # Project dashboard and private Harness access
 
+[Worker scopes and worktrees](../docs/WORKER-WORKSPACES.md): local CLI allocation,
+source/worker conflict scans and retained checkouts after lease expiry or release.
+
 [Budget admission control](../docs/BUDGET-CONTROL.md): soft warnings, hard guarded
 DSH job/model-call limits, durable parallel reservations and delayed usage holds.
 Native guard registration is required; ordinary/unsupported CLIs are display-only.
