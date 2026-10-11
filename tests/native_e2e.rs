@@ -367,7 +367,15 @@ impl Server {
         // never reported as a failure.
         let mut last = String::from("no attempt");
         for attempt in 0..3 {
-            let mut stream = TcpStream::connect(("127.0.0.1", self.port)).unwrap();
+            let mut stream = match TcpStream::connect(("127.0.0.1", self.port)) {
+                Ok(stream) => stream,
+                Err(error) => {
+                    // The listener can briefly refuse while it is (re)starting.
+                    last = error.to_string();
+                    std::thread::sleep(Duration::from_millis(50 * (attempt + 1)));
+                    continue;
+                }
+            };
             stream
                 .set_read_timeout(Some(Duration::from_secs(12)))
                 .unwrap();
