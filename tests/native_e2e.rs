@@ -366,13 +366,18 @@ impl Server {
         // arrived and retry a bounded number of times so a healthy server is
         // never reported as a failure.
         let mut last = String::from("no attempt");
-        for attempt in 0..3 {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
             let mut stream = match TcpStream::connect(("127.0.0.1", self.port)) {
                 Ok(stream) => stream,
                 Err(error) => {
                     // The listener can briefly refuse while it is (re)starting.
                     last = error.to_string();
-                    std::thread::sleep(Duration::from_millis(50 * (attempt + 1)));
+                    assert!(
+                        Instant::now() < deadline,
+                        "listener did not accept within 5s: {last}"
+                    );
+                    std::thread::sleep(Duration::from_millis(50));
                     continue;
                 }
             };
@@ -394,9 +399,12 @@ impl Server {
                     return (status, body.to_owned());
                 }
             }
-            std::thread::sleep(Duration::from_millis(50 * (attempt + 1)));
+            assert!(
+                Instant::now() < deadline,
+                "no complete HTTP response within 5s (last error: {last})"
+            );
+            std::thread::sleep(Duration::from_millis(50));
         }
-        panic!("no complete HTTP response after 3 attempts (last error: {last})");
     }
     fn stopped(&mut self) {
         let deadline = Instant::now() + Duration::from_secs(5);
