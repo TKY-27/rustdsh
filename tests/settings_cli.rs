@@ -266,6 +266,16 @@ fn feature_switches_list_defaults_and_round_trip_through_the_cli() {
     // Defaults mirror the behavior that existed before the switches.
     assert_eq!(feature_state(&fixture, "discord"), (true, false));
     assert_eq!(feature_state(&fixture, "serve"), (false, false));
+    // Delegated agent tools keep normal file access unless the boundary is on.
+    assert_eq!(
+        feature_state(&fixture, "agent_tool_sandbox"),
+        (false, false)
+    );
+    assert!(fixture
+        .run(&["features", "on", "agent_tool_sandbox"])
+        .status
+        .success());
+    assert_eq!(feature_state(&fixture, "agent_tool_sandbox"), (true, true));
 
     assert!(fixture
         .run(&["features", "off", "discord"])

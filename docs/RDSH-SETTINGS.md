@@ -66,6 +66,7 @@ rdsh context status   # 有効化後に記憶の状態を見る
 | context_engine | off | 実験的なコンテキストエンジン |
 | compute | off | 常駐 pure-compute worker 連携（RDSH_COMPUTE=1） |
 | budget_guard | on | 予算ガードフック |
+| agent_tool_sandbox | off | 委譲したエージェントツールを --share-file の範囲に限定（ネットワーク・ホスト書き込みなし） |
 | release_probe | off | リリース検証プローブ（環境変数がある時だけ実行） |
 | setup_web | on | rdsh setup --web |
 | sessions_token_cache | on | セッションの token サイズキャッシュ |

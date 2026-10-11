@@ -24,7 +24,11 @@ Format follows Keep a Changelog, versioning follows Semantic Versioning.
 
 ### Added
 
-- Feature switches: `rdsh features` lists every optional capability with its
+- Agent tools keep **normal file access by default**: the model can read and
+  write the project like any other tool. The strict bubblewrap boundary is now
+  opt-in through `--share-file`, `features.agent_tool_sandbox=true`, or
+  `RDSH_SECURITY=1`.
+- Feature switches: `rdsh features` lists all optional capabilities with their
   effective state, and `rdsh features on|off <id>` (or
   `rdsh settings set features.<id> true|false`) turns one off. Bundled plugins
   honor the same switches, so Discord Rich Presence, update checks and

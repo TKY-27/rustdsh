@@ -116,6 +116,11 @@ pub const FEATURES: &[FeatureDef] = &[
         summary: "budget guard hook in the DSH plugin",
     },
     FeatureDef {
+        id: "agent_tool_sandbox",
+        default: false,
+        summary: "confine delegated agent tools to --share-file files (no network, no host writes)",
+    },
+    FeatureDef {
         id: "release_probe",
         default: false,
         summary: "run the release qualification probe when its environment is set",

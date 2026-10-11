@@ -331,6 +331,7 @@ fn main() {
                 !passthrough::env_passthrough() && !scfg.general.passthrough && scfg.general.slim;
             let dry = passthrough::env_dry() || scfg.general.dry_run;
             crate::slim::configure(&scfg);
+            crate::tool_security::configure(agent_tool_sandbox(&scfg, false));
             if let Err(e) = passthrough::exec_raw(&raw, dry, slim) {
                 eprintln!("[rdsh] error: {e:#}");
                 std::process::exit(1);
@@ -366,6 +367,7 @@ fn main() {
     // Feature switches (rdsh features) steer the delegated-run env and the
     // native session caches; an explicit environment variable still wins.
     crate::slim::configure(&cfg);
+    crate::tool_security::configure(agent_tool_sandbox(&cfg, !cli.share_file.is_empty()));
     if !rdsh_config::feature_enabled(&cfg, "sessions_token_cache")
         && std::env::var_os("RDSH_TOKENS_CACHE").is_none()
     {
@@ -784,6 +786,16 @@ fn native_dump_config_json(profile: &str, home: &str, patches: &[String]) -> Str
         "patches": patches,
     })
     .to_string()
+}
+
+/// Delegated agent tools: normal file access by default. The strict boundary
+/// applies when the setting is explicit, when `--share-file` is used, or when
+/// `RDSH_SECURITY=1` forces it.
+fn agent_tool_sandbox(cfg: &rdsh_config::RdshSettings, share_files_requested: bool) -> bool {
+    if rdsh_config::feature_is_explicit(cfg, "agent_tool_sandbox") {
+        return rdsh_config::feature_enabled(cfg, "agent_tool_sandbox");
+    }
+    share_files_requested
 }
 
 /// `rdsh features`: every optional capability with its effective state.
