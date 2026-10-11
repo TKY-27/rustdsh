@@ -1,6 +1,7 @@
 use clap::{CommandFactory, Parser, Subcommand};
 mod auth;
 mod compact;
+mod compute;
 mod context;
 mod dsh_args;
 mod file_lock;
@@ -25,7 +26,7 @@ mod websearch;
     name = "rdsh",
     version,
     about = "Rust fast launcher for dsh (safe: native fast-paths + passthrough)",
-    after_help = "USAGE:\n  rdsh [profile] [--profile <name>] [--patch <yml>...] [app-args...]\n  rdsh <native-subcommand> ...   (tokens|prune|search|compact|doctor|bench|serve|sessions|profiles|skills|logs|guard|dump-config|boot)\n\nEXAMPLES:\n  rdsh tui                        boot tui profile (slim env ON, delegates to dsh)\n  rdsh --profile web --patch x.yml boot web with overlay\n  rdsh dump-config --profile tui  delegate exact dump to dsh\n  rdsh tokens ./AGENTS.md         estimate input tokens natively\n  rdsh auth --import --provider openai-codex   import only the selected provider\n  rdsh setup                      first-run connect: import, login flow, next steps\n  rdsh search hello --dir .       fast file search without Node\n  rdsh search-web \"rust async\"      web search via SearXNG (no API key)\n  rdsh --passthrough tui          no slim env; mandatory tool isolation remains\n  rdsh --dry-run tui -- --resume abc   show what would exec"
+    after_help = "USAGE:\n  rdsh [profile] [--profile <name>] [--patch <yml>...] [app-args...]\n  rdsh <native-subcommand> ...   (tokens|prune|search|compact|doctor|bench|serve|sessions|profiles|skills|logs|guard|compute|dump-config|boot)\n\nEXAMPLES:\n  rdsh tui                        boot tui profile (slim env ON, delegates to dsh)\n  rdsh --profile web --patch x.yml boot web with overlay\n  rdsh dump-config --profile tui  delegate exact dump to dsh\n  rdsh tokens ./AGENTS.md         estimate input tokens natively\n  rdsh auth --import --provider openai-codex   import only the selected provider\n  rdsh setup                      first-run connect: import, login flow, next steps\n  rdsh search hello --dir .       fast file search without Node\n  rdsh search-web \"rust async\"      web search via SearXNG (no API key)\n  rdsh --passthrough tui          no slim env; mandatory tool isolation remains\n  rdsh --dry-run tui -- --resume abc   show what would exec"
 )]
 struct Cli {
     /// Explicitly share a project file with isolated model tools (repeatable).
@@ -180,6 +181,13 @@ enum Commands {
         #[command(subcommand)]
         action: ContextAction,
     },
+    /// Resident pure-compute worker (stdio NDJSON, opt-in Web PoC).
+    /// No filesystem/auth/session access; DSH keeps the original path.
+    Compute {
+        /// Handle one request line then exit (for IPC cost comparison).
+        #[arg(long = "once")]
+        once: bool,
+    },
     /// Hook helper for hooks.json: block stdin text matching --deny (exit 2)
     Guard {
         #[arg(long = "deny")]
@@ -276,6 +284,7 @@ const NATIVE_FIRST: &[&str] = &[
     "skills",
     "logs",
     "guard",
+    "compute",
     "auth",
     "setup",
     "search-web",
@@ -384,6 +393,7 @@ fn main() {
             }
         }
         Some(Commands::Bench { n }) => bench(n.unwrap_or(cfg.bench.n)),
+        Some(Commands::Compute { once }) => compute::cmd_compute(once),
         Some(Commands::Guard { deny, reason, json }) => {
             let mut merged = cfg.guard.deny.clone();
             merged.extend(deny);
