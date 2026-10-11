@@ -62,6 +62,30 @@ test("source references reject credential-bearing URLs and secret-shaped locator
     ...source.origin, reference: "https://example.test/articles/42?access_token=fixture-secret",
   } }), /omit credentials, queries and fragments/);
 });
+test("noncanonical HTTP and file URL schemes do not fall through as opaque locators", () => {
+  const content = "untrusted source text";
+  const valid = externalSource("web", "https://example.test/private", content);
+  const cases = [
+    ["web", "https:/alice:fixture-password@example.test/private"],
+    ["web", "https:alice:fixture-password@example.test/private"],
+    ["web", "https:\\alice:fixture-password@example.test/private"],
+    ["repository", "file:/tmp/private"],
+  ];
+  for (const [kind, reference] of cases) {
+    assert.throws(() => externalSource(kind, reference, content), /Source reference must omit credentials|Source URL reference is invalid/);
+    const tampered = structuredClone(valid);
+    tampered.origin.reference = reference;
+    assert.throws(() => validateExternalSource(tampered), /Source reference must omit credentials|Source URL reference is invalid/);
+  }
+});
+test("noncanonical credential URL cannot enter a DSH provenance audit", async (t) => {
+  const host = hostFixture(), f = await guardFixture(t, host.ctx);
+  const tampered = structuredClone(externalSource("web", "https://example.test/private", "public fixture"));
+  tampered.origin.reference = "https:/alice:fixture-password@example.test/private";
+  assert.throws(() => f.controller.bindCall("call-credential", f.binding([tampered])),
+    /Source reference must omit credentials/);
+  assert.equal(f.reports.length, 0);
+});
 test("valid human approval still cannot override missing enforcement, replay bindings or stopped guard", async (t) => {
   const host = hostFixture(), f = await guardFixture(t, host.ctx);
   await f.grant();

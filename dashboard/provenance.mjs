@@ -12,7 +12,10 @@ function safeReference(kind, value) {
       /\b(?:gh[pousr]_[a-z0-9_]{10,}|github_pat_[a-z0-9_]{10,}|xox[baprs]-[a-z0-9-]{10,}|sk-[a-z0-9]{16,})\b/i.test(reference))
     throw new Error("Source reference must omit credentials, queries and fragments");
 
-  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(reference)) return reference;
+  const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(reference)?.[1].toLowerCase();
+  const urlScheme = ["http", "https", "file"].includes(scheme);
+  const explicitUrl = /^[a-z][a-z0-9+.-]*:\/\//i.test(reference);
+  if (!urlScheme && !explicitUrl) return reference;
   let url;
   try { url = new URL(reference); } catch {
     throw new Error("Source URL reference is invalid");
@@ -22,6 +25,8 @@ function safeReference(kind, value) {
       (kind !== "web" && ["http:", "https:"].includes(url.protocol)) ||
       (kind !== "repository" && url.protocol === "file:"))
     throw new Error("Source reference must omit credentials, queries and fragments");
+  if (!/^(?:https?|file):\/\//i.test(reference))
+    throw new Error("Source URL reference is invalid");
   return url.href;
 }
 
