@@ -7,6 +7,10 @@ const bearerValue = /\bbearer\s+[a-z0-9._~+\/-]+=*/i;
 
 function safeReference(kind, value) {
   const reference = text(value, "source reference", 2000);
+  // Classify only canonical strings. URL parsers ignore some ASCII controls,
+  // while the opaque-reference fallback must preserve exact input bytes.
+  if (reference !== reference.trim() || /[\u0000-\u001f\u007f]/.test(reference))
+    throw new Error("Source reference must omit credentials, queries and fragments");
   if (/[?#]/.test(reference) || /%(?:3f|23)/i.test(reference) ||
       credentialField.test(reference) || bearerValue.test(reference) ||
       /\b(?:gh[pousr]_[a-z0-9_]{10,}|github_pat_[a-z0-9_]{10,}|xox[baprs]-[a-z0-9-]{10,}|sk-[a-z0-9]{16,})\b/i.test(reference))
