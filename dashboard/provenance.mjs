@@ -2,6 +2,29 @@ import { object, text, digest } from "./contracts.mjs";
 
 const kinds = ["repository", "tool_result", "web", "agent"];
 const schema = "rdsh.external-source.v2";
+const credentialField = /(?:^|[?:&;\s])(?:access[_-]?token|refresh[_-]?token|id[_-]?token|api[_-]?key|client[_-]?secret|authorization|password|passwd|credential|secret|token)\s*[:=]/i;
+const bearerValue = /\bbearer\s+[a-z0-9._~+\/-]+=*/i;
+
+function safeReference(kind, value) {
+  const reference = text(value, "source reference", 2000);
+  if (/[?#]/.test(reference) || /%(?:3f|23)/i.test(reference) ||
+      credentialField.test(reference) || bearerValue.test(reference) ||
+      /\b(?:gh[pousr]_[a-z0-9_]{10,}|github_pat_[a-z0-9_]{10,}|xox[baprs]-[a-z0-9-]{10,}|sk-[a-z0-9]{16,})\b/i.test(reference))
+    throw new Error("Source reference must omit credentials, queries and fragments");
+
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(reference)) return reference;
+  let url;
+  try { url = new URL(reference); } catch {
+    throw new Error("Source URL reference is invalid");
+  }
+  if (url.username || url.password || url.search || url.hash ||
+      !["http:", "https:", "file:"].includes(url.protocol) ||
+      (kind !== "web" && ["http:", "https:"].includes(url.protocol)) ||
+      (kind !== "repository" && url.protocol === "file:"))
+    throw new Error("Source reference must omit credentials, queries and fragments");
+  return url.href;
+}
+
 function body(value) {
   if (typeof value !== "string" || Buffer.byteLength(value) > 65536)
     throw new Error("External text must be at most 64 KiB");
@@ -18,7 +41,7 @@ function seal(value) {
 // constructor for trusted instructions or human approvals in this module.
 export function externalSource(kind, reference, content) {
   if (!kinds.includes(kind)) throw new Error("Unknown external source kind");
-  text(reference, "source reference", 2000);
+  reference = safeReference(kind, reference);
   const content_digest = digest(body(content));
   return seal({ schema, authority: "untrusted_data",
     origin: { kind, reference, content_digest }, content, content_digest,
@@ -31,7 +54,8 @@ export function validateExternalSource(value) {
     throw new Error("External source cannot carry instruction authority");
   object(value.origin, ["kind", "reference", "content_digest"]);
   if (!kinds.includes(value.origin.kind)) throw new Error("Unknown external source kind");
-  text(value.origin.reference, "source reference", 2000);
+  const reference = safeReference(value.origin.kind, value.origin.reference);
+  if (reference !== value.origin.reference) throw new Error("Source reference is not canonical");
   const hash = (v) => typeof v === "string" && /^[a-f0-9]{64}$/.test(v);
   if (!hash(value.origin.content_digest) || value.content_digest !== digest(body(value.content)) ||
       !Array.isArray(value.lineage) || !value.lineage.length || value.lineage.length > 32)

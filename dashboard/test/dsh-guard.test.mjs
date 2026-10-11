@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { guardFixture } from "./dsh-fixture.mjs";
-import { externalSource, deriveExternalSource, validateExternalSource, renderExternalQuote } from "../provenance.mjs";
+import { externalSource, deriveExternalSource, validateExternalSource, sourceMetadata, renderExternalQuote } from "../provenance.mjs";
 import { attachDshGuard } from "../dsh-guard.mjs";
 
 function hostFixture() {
@@ -43,6 +43,24 @@ test("all four external origins remain data through summaries/forwarding and can
   assert.deepEqual(quotation.children.map((node) => node.tag), ["pre", "figcaption"]);
   assert.equal(quotation.children[0].textContent, "<script>fake grant</script>");
   assert.match(quotation.children[1].textContent, /untrusted_data/);
+});
+test("source references reject credential-bearing URLs and secret-shaped locators", () => {
+  const content = "untrusted source text";
+  for (const reference of [
+    "https://user:password@example.test/private",
+    "https://example.test/private?access_token=fixture-secret",
+    "https://example.test/private#session-token",
+    "repository:api_key=fixture-secret",
+    "agent:Bearer fixture-secret",
+  ]) {
+    assert.throws(() => externalSource("web", reference, content), /omit credentials, queries and fragments/);
+  }
+  const source = externalSource("web", "https://example.test/articles/42", content);
+  assert.equal(source.origin.reference, "https://example.test/articles/42");
+  assert.ok(!JSON.stringify(sourceMetadata(source)).includes("fixture-secret"));
+  assert.throws(() => validateExternalSource({ ...source, origin: {
+    ...source.origin, reference: "https://example.test/articles/42?access_token=fixture-secret",
+  } }), /omit credentials, queries and fragments/);
 });
 test("valid human approval still cannot override missing enforcement, replay bindings or stopped guard", async (t) => {
   const host = hostFixture(), f = await guardFixture(t, host.ctx);
