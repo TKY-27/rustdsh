@@ -166,7 +166,7 @@ test('release_probe=true keeps the loopback credential requirement', async (t) =
 });
 
 // -------------------------------------------------------------- install.sh
-test('install.sh offers sound only with SOUND=1 and features.sound=true', { skip: process.platform === 'win32' }, async (t) => {
+test('install.sh offers sound with SOUND=1 unless features.sound is false', { skip: process.platform === 'win32' }, async (t) => {
   const home = await mkdtemp(join(tmpdir(), 'rdsh-install-features-'));
   t.after(() => rm(home, { recursive: true, force: true }));
   const script = join(repo, 'plugins', 'install.sh');
@@ -179,11 +179,13 @@ test('install.sh offers sound only with SOUND=1 and features.sound=true', { skip
     return (await exec('sh', [script], { cwd: repo, env })).stdout;
   };
   const sound = /dsh-sound-notifications/;
-  assert.doesNotMatch(await run({ SOUND: '1' }), sound); // no rdsh.json yet
+  // No rdsh.json yet: the SOUND=1 opt-in still offers it (legacy behavior).
+  assert.match(await run({ SOUND: '1' }), sound);
   await writeFile(join(home, 'rdsh.json'), JSON.stringify({ features: { sound: false } }));
   assert.doesNotMatch(await run({ SOUND: '1' }), sound);
+  // A corrupt file must not silently remove the offer.
   await writeFile(join(home, 'rdsh.json'), '{broken json');
-  assert.doesNotMatch(await run({ SOUND: '1' }), sound);
+  assert.match(await run({ SOUND: '1' }), sound);
   await writeFile(join(home, 'rdsh.json'), JSON.stringify({ features: { sound: true } }));
   const offered = await run({ SOUND: '1' });
   assert.match(offered, /dsh plugin --profile web add github:cwd514\/dsh-sound-notifications/);

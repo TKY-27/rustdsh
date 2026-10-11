@@ -11,19 +11,19 @@ PROFILE="${PROFILE:-headless}"
 DRY_RUN="${DRY_RUN:-0}"
 SOUND="${SOUND:-0}"
 
-# The sound offer follows the same rdsh.json feature switch as the CLI: SOUND=1
-# alone is not enough unless features.sound is explicitly true. A missing or
-# corrupt file, or an absent id, keeps the offer off.
+# SOUND=1 is this installer's own opt-in; features.sound=false in rdsh.json is
+# the veto. A missing/corrupt file, an absent id, or no node keeps the previous
+# behavior, so the feature switch never removes an offer by surprise.
 sound_enabled() {
   [ "$SOUND" = "1" ] || return 1
-  command -v node >/dev/null 2>&1 || return 1
+  command -v node >/dev/null 2>&1 || return 0
   settings="${DSH_HOME:-${HOME:-}/.dsh}/rdsh.json"
   node -e '
     const fs = require("node:fs");
     try {
       const doc = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-      process.exit(doc && doc.features && doc.features.sound === true ? 0 : 1);
-    } catch { process.exit(1); }
+      process.exit(doc && doc.features && doc.features.sound === false ? 1 : 0);
+    } catch { process.exit(0); }
   ' "$settings" 2>/dev/null
 }
 PKGS="

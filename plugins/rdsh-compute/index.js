@@ -60,7 +60,9 @@ function jsEstimate(text) {
 }
 
 export function isEnabled(env = process.env) {
-  return env.RDSH_COMPUTE === "1" && featureEnabled("compute", false, env);
+  // features.compute wins in both directions; without the key the historical
+  // RDSH_COMPUTE=1 opt-in still decides.
+  return featureEnabled("compute", env.RDSH_COMPUTE === "1", env);
 }
 
 export function createComputeBridge({ bin = "rdsh", timeoutMs = DEFAULT_TIMEOUT_MS, spawnImpl = spawn } = {}) {

@@ -60,13 +60,13 @@ rdsh context status   # 有効化後に記憶の状態を見る
 | discord | on | Discord Rich Presence（DSH Web が動いているときだけ表示） |
 | update_check | on | 更新確認と更新バナーの表示 |
 | update_notifications | on | 更新が見つかったときの通知 |
-| sound | off | DSH サウンド通知の導入提案 |
+| sound | off | DSH サウンド通知の導入（インストーラの SOUND=1） |
 | serve | off | ローカル閲覧画面（rdsh serve） |
 | search-web | off | SearXNG 経由の Web 検索 |
 | context_engine | off | 実験的なコンテキストエンジン |
-| compute | off | 常駐 pure-compute worker 連携 |
+| compute | off | 常駐 pure-compute worker 連携（RDSH_COMPUTE=1） |
 | budget_guard | on | 予算ガードフック |
-| release_probe | off | リリース検証プローブ |
+| release_probe | off | リリース検証プローブ（環境変数がある時だけ実行） |
 | setup_web | on | rdsh setup --web |
 | sessions_token_cache | on | セッションの token サイズキャッシュ |
 | node_compile_cache | on | Node コンパイルキャッシュ |

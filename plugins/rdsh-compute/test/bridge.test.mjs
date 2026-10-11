@@ -75,15 +75,18 @@ test("features.compute=true with RDSH_COMPUTE=1 reaches spawn and still falls ba
   b.close();
 });
 
-test("absent id and corrupt rdsh.json fall back to disabled compute", async (t) => {
+test("absent or unreadable rdsh.json follows the RDSH_COMPUTE opt-in", async (t) => {
   await featureHome(t, undefined); // no rdsh.json at all
   process.env.RDSH_COMPUTE = "1";
   t.after(() => { delete process.env.RDSH_COMPUTE; });
-  assert.equal(isEnabled(), false);
+  // The feature switch is a veto: without the key the historical env opt-in wins.
+  assert.equal(isEnabled(), true);
   await writeFile(join(process.env.DSH_HOME, "rdsh.json"), "{ not json");
-  assert.equal(isEnabled(), false);
+  assert.equal(isEnabled(), true);
   await writeFile(join(process.env.DSH_HOME, "rdsh.json"), JSON.stringify({ features: { compute: "yes" } }));
-  assert.equal(isEnabled(), false);
+  assert.equal(isEnabled(), true);
+  delete process.env.RDSH_COMPUTE;
+  assert.equal(isEnabled(), false); // no env opt-in and no explicit true: off
 });
 
 test("oversize input is rejected before spawn", async () => {

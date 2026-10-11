@@ -804,8 +804,8 @@ fn features_list(cfg: &rdsh_config::RdshSettings, json: bool) -> anyhow::Result<
     let _ = writeln!(out, "config: {}", rdsh_config::settings_path());
     let _ = writeln!(
         out,
-        "{:<24} {:<5} {:<7} {}",
-        "feature", "state", "default", "what it does"
+        "{:<24} {:<5} {:<7} what it does",
+        "feature", "state", "default"
     );
     for def in rdsh_config::FEATURES {
         let _ = writeln!(

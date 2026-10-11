@@ -88,7 +88,7 @@ pub const FEATURES: &[FeatureDef] = &[
     FeatureDef {
         id: "sound",
         default: false,
-        summary: "offer the opt-in DSH sound notifications install",
+        summary: "allow the DSH sound notifications install (installer SOUND=1)",
     },
     FeatureDef {
         id: "serve",
@@ -108,7 +108,7 @@ pub const FEATURES: &[FeatureDef] = &[
     FeatureDef {
         id: "compute",
         default: false,
-        summary: "resident pure-compute worker bridge (rdsh compute)",
+        summary: "allow the resident compute bridge (RDSH_COMPUTE=1)",
     },
     FeatureDef {
         id: "budget_guard",
@@ -118,7 +118,7 @@ pub const FEATURES: &[FeatureDef] = &[
     FeatureDef {
         id: "release_probe",
         default: false,
-        summary: "release qualification probe plugin",
+        summary: "run the release qualification probe when its environment is set",
     },
     FeatureDef {
         id: "setup_web",

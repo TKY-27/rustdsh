@@ -20,7 +20,9 @@ function featureEnabled(id, fallback, env = process.env) {
 }
 
 export function apply() {
-  if (!featureEnabled("release_probe", false)) return;
+  // Absent keeps the legacy behavior (run when the qualification env is set);
+  // an explicit features.release_probe=false is the kill switch.
+  if (!featureEnabled("release_probe", true)) return;
   const base = new URL(process.env.RDSH_RELEASE_PROBE_BASE);
   const key = process.env.RDSH_RELEASE_PROBE_KEY;
   if (
