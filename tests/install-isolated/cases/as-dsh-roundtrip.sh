@@ -9,8 +9,10 @@ chmod 755 "$PREFIX/dsh"
 
 install_rdsh --from-release --as-dsh
 [ -x "$PREFIX/dsh-orig" ] || { echo "no dsh-orig backup" >&2; exit 1; }
-out="$("$PREFIX/dsh" --version)"
-case "$out" in rdsh\ *) ;; *) echo "dsh is not rdsh after --as-dsh: $out" >&2; exit 1 ;; esac
+# `dsh --version` is delegated verbatim to the original dsh by design, so the
+# shadowing check uses a native command instead.
+out="$("$PREFIX/dsh" doctor 2>&1)"
+case "$out" in *rdsh*) ;; *) echo "dsh is not rdsh after --as-dsh: $out" >&2; exit 1 ;; esac
 expect_version
 
 bash /install.sh --restore
