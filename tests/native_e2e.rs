@@ -356,24 +356,39 @@ impl Server {
         authorized: bool,
         extra: &str,
     ) -> (u16, String) {
-        let mut stream = TcpStream::connect(("127.0.0.1", self.port)).unwrap();
-        stream
-            .set_read_timeout(Some(Duration::from_secs(12)))
-            .unwrap();
         let key = if authorized {
             format!("X-RDSH-Token: {}\r\n", self.token)
         } else {
             String::new()
         };
-        write!(stream, "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\n{key}{extra}Content-Length: {}\r\nConnection: close\r\n\r\n{body}", self.port, body.len()).unwrap();
-        let mut bytes = Vec::new();
-        stream.read_to_end(&mut bytes).unwrap();
-        let response = String::from_utf8(bytes).unwrap();
-        let (head, body) = response.split_once("\r\n\r\n").unwrap();
-        (
-            head.split_whitespace().nth(1).unwrap().parse().unwrap(),
-            body.to_owned(),
-        )
+        // A server that closes with unread request bytes can reset the socket
+        // (ECONNRESET) before the client drains the response. Keep whatever
+        // arrived and retry a bounded number of times so a healthy server is
+        // never reported as a failure.
+        let mut last = String::from("no attempt");
+        for attempt in 0..3 {
+            let mut stream = TcpStream::connect(("127.0.0.1", self.port)).unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(12)))
+                .unwrap();
+            write!(stream, "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\n{key}{extra}Content-Length: {}\r\nConnection: close\r\n\r\n{body}", self.port, body.len()).unwrap();
+            let mut bytes = Vec::new();
+            if let Err(error) = stream.read_to_end(&mut bytes) {
+                last = error.to_string();
+            }
+            let response = String::from_utf8_lossy(&bytes).into_owned();
+            if let Some((head, body)) = response.split_once("\r\n\r\n") {
+                if let Some(status) = head
+                    .split_whitespace()
+                    .nth(1)
+                    .and_then(|value| value.parse().ok())
+                {
+                    return (status, body.to_owned());
+                }
+            }
+            std::thread::sleep(Duration::from_millis(50 * (attempt + 1)));
+        }
+        panic!("no complete HTTP response after 3 attempts (last error: {last})");
     }
     fn stopped(&mut self) {
         let deadline = Instant::now() + Duration::from_secs(5);
