@@ -82,7 +82,6 @@ rdsh context status   # 有効化後に記憶の状態を見る
 - slim のヒント（`slim_lazy_plugins` / `slim_disable_voice` / `slim_disable_auto_review`）と `node_compile_cache` は、委譲起動する DSH プロセスの環境変数に反映されます。
 - プラグイン側（`discord` / `sound` / `compute` / `budget_guard` / `release_probe` / `update_check` / `update_notifications`）は `rdsh.json` を読んで自分を止めます。DSH を再起動すると反映されます。
 
-
 ## context engine（実験的、既定OFF）
 
 ```sh

@@ -118,14 +118,14 @@ register_cases() {
   add_case "release/fallback-unrunnable-glibc" "ubuntu-24.04" "fallback-unrunnable-glibc.sh" ok \
     "CASE OK: fallback-unrunnable-glibc" "" 1 ""
   add_case "release/pinned-version" "ubuntu-24.04" "pinned-version.sh" ok \
-    "CASE OK: pinned-version" "" 0 "RDSH_RELEASE_VERSION=$RESOLVED_TAG"
+    "CASE OK: pinned-version" "" 0 "RDSH_RELEASE_VERSION=__TAG__"
   # Fail-closed guards.
-  add_case "guard/checksum-mismatch" "ubuntu-24.04" "checksum-mismatch.sh" fail \
-    "CHECKSUM MISMATCH" "installed " 0 ""
-  add_case "guard/missing-sidecar" "ubuntu-24.04" "missing-sidecar.sh" fail \
-    "no checksum sidecar" "installed " 0 ""
-  add_case "guard/unsupported-arch" "debian-12" "unsupported-arch.sh" fail \
-    "no prebuilt binary" "" 0 ""
+  add_case "guard/checksum-mismatch" "ubuntu-24.04" "checksum-mismatch.sh" ok \
+    "CASE OK: checksum-mismatch" "" 0 ""
+  add_case "guard/missing-sidecar" "ubuntu-24.04" "missing-sidecar.sh" ok \
+    "CASE OK: missing-sidecar" "" 0 ""
+  add_case "guard/unsupported-arch" "debian-12" "unsupported-arch.sh" ok \
+    "CASE OK: unsupported-arch" "" 0 ""
   # CLI behaviors that a new user hits right after installing.
   add_case "cli/as-dsh-roundtrip" "ubuntu-24.04" "as-dsh-roundtrip.sh" ok \
     "CASE OK: as-dsh-roundtrip" "" 0 ""
@@ -295,6 +295,9 @@ stage_assets() {
   stage_layout "$dir"
   stage_installer
   if [ "$MUSL_AVAILABLE" = 0 ]; then
+    if [ "$REQUIRE_MUSL" = 1 ]; then
+      die "--require-musl is set but no static musl asset is available"
+    fi
     note "warning: no static musl asset available; musl-dependent cases will be skipped"
   fi
 }
@@ -391,7 +394,7 @@ run_case() {
       [ -z "$entry" ] && continue
       case "$entry" in
         USER=*) args+=(--user "${entry#USER=}") ;;
-        *) args+=(-e "$entry") ;;
+        *) args+=(-e "${entry//__TAG__/$RESOLVED_TAG}") ;;
       esac
     done < <(printf '%s\n' "$envs" | tr '|' '\n')
   fi
