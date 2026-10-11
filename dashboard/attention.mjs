@@ -159,6 +159,20 @@ export function buildAttentionHistory(state, now = Date.now()) {
     history.push({ source: "question", id: reply.question_id, action: "answered",
       title: reply.question, recorded_at: reply.created_at, attention: reply.attention || {} });
   }
+  for (const [id, card] of Object.entries(state.question_contracts?.cards || {})) {
+    for (const record of card.history || []) {
+      if (!record.terminal_status) continue;
+      history.push({
+        source: "question",
+        id,
+        revision: record.revision,
+        action: record.terminal_status,
+        title: record.snapshot.question,
+        recorded_at: record.terminal_recorded_at,
+        attention: record.attention || {},
+      });
+    }
+  }
   for (const question of state.questions || []) {
     const status = questionAttentionStatus(state, question, now);
     if (status === "open" || (status === "answered" && answered.has(question.id))) continue;

@@ -58,6 +58,106 @@ test("typed revisions preserve omitted metadata and keep answered report history
   assert.ok(!state.questions.some((question) => question.id === "invalid"));
 });
 
+test("cancelled and expired typed-question reports survive revision and restart", async (t) => {
+  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "rdsh-question-history-"));
+  t.after(() => fs.rm(temporary, { recursive: true, force: true }));
+  const project = {
+    id: "project-question-history",
+    name: "Fixture",
+    root: temporary,
+    directory: path.join(temporary, "state"),
+  };
+  const store = await ProjectStore.open(project);
+  const cancelledAttention = {
+    cause_id: "original-cause",
+    impact: "high",
+    next_action: "Review original report",
+  };
+  await store.mutate("question", {
+    id: "cancelled",
+    question: "Review the original target",
+    decision: { kind: "consultation" },
+    attention: cancelledAttention,
+  });
+  await store.mutate("question", {
+    id: "cancelled",
+    action: "cancel",
+    expected_revision: 1,
+    cancel_reason: "Target retired",
+  });
+  const cancelledAt = store.value.question_contracts.cards.cancelled.updated_at;
+  await store.mutate("question", {
+    id: "cancelled",
+    action: "revise",
+    expected_revision: 1,
+    question: "Review the replacement target",
+    decision: { kind: "consultation" },
+    attention: { next_action: "Review replacement report" },
+  });
+
+  const expiredAttention = {
+    cause_id: "time-limited-cause",
+    impact: "critical",
+    next_action: "Review the expired report",
+  };
+  const expiresAt = "2000-01-01T00:00:00.000Z";
+  await store.mutate("question", {
+    id: "expired",
+    question: "Review the time-limited target",
+    decision: { kind: "consultation", expires_at: expiresAt },
+    attention: expiredAttention,
+  });
+  await store.mutate("question", {
+    id: "expired",
+    action: "revise",
+    expected_revision: 1,
+    question: "Review the replacement time window",
+    decision: { kind: "consultation" },
+    attention: { next_action: "Review replacement window" },
+  });
+
+  const reopened = await ProjectStore.open(project);
+  const history = buildAttentionHistory(reopened.value, Date.UTC(2026, 0, 1));
+  const cancelled = history.find(
+    (entry) => entry.id === "cancelled" && entry.action === "cancelled",
+  );
+  assert.deepEqual(
+    {
+      revision: cancelled.revision,
+      title: cancelled.title,
+      recorded_at: cancelled.recorded_at,
+      attention: cancelled.attention,
+    },
+    {
+      revision: 1,
+      title: "Review the original target",
+      recorded_at: cancelledAt,
+      attention: cancelledAttention,
+    },
+  );
+  const expired = history.find(
+    (entry) => entry.id === "expired" && entry.action === "expired",
+  );
+  assert.deepEqual(
+    {
+      revision: expired.revision,
+      title: expired.title,
+      recorded_at: expired.recorded_at,
+      attention: expired.attention,
+    },
+    {
+      revision: 1,
+      title: "Review the time-limited target",
+      recorded_at: expiresAt,
+      attention: expiredAttention,
+    },
+  );
+  assert.equal(reopened.value.question_contracts.cards.cancelled.history[0].terminal_status, "cancelled");
+  assert.equal(reopened.value.question_contracts.cards.expired.history[0].terminal_status, "expired");
+  assert.equal(reopened.value.questions.find((question) => question.id === "cancelled").attention.next_action, "Review replacement report");
+  assert.equal(reopened.value.questions.find((question) => question.id === "expired").attention.next_action, "Review replacement window");
+});
+
 test("reported attention preserves omission and records explicit resolution and recurrence", () => {
   const state = initial();
   applyOperation(state, "task", task("T1", { attention: issue }));
