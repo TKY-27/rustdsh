@@ -263,8 +263,12 @@ fn apply_slim(cmd: &mut std::process::Command, slim: bool) {
     if !slim {
         return;
     }
-    for &(k, v) in crate::slim::slim_env() {
+    for (k, v) in crate::slim::slim_env() {
         cmd.env(k, v);
+    }
+    // features.node_compile_cache=false leaves NODE_COMPILE_CACHE untouched.
+    if !crate::slim::features().node_compile_cache {
+        return;
     }
     // V8 code cache for the delegated Node process. Set unconditionally:
     // Node < 22.1 ignores the variable, and a version probe would cost a

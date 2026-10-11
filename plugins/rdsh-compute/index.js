@@ -14,10 +14,26 @@
 
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
 export const PROTOCOL_VERSION = 1;
 export const MAX_TEXT_BYTES = 1_048_576;
 const DEFAULT_TIMEOUT_MS = 5000;
+
+// Feature switches live in $DSH_HOME/rdsh.json. An id that is absent (or a
+// missing, unreadable or corrupt file) keeps the caller's fallback; an explicit
+// false disables the capability and must never throw.
+function featureEnabled(id, fallback, env = process.env) {
+  try {
+    const path = join(env.DSH_HOME || join(homedir(), ".dsh"), "rdsh.json");
+    const value = JSON.parse(readFileSync(path, "utf8"))?.features?.[id];
+    return typeof value === "boolean" ? value : fallback;
+  } catch {
+    return fallback;
+  }
+}
 
 function jsEstimate(text) {
   // Same heuristic as src/tokens.rs: ASCII 4 bytes = 1 token,
@@ -44,7 +60,7 @@ function jsEstimate(text) {
 }
 
 export function isEnabled(env = process.env) {
-  return env.RDSH_COMPUTE === "1";
+  return env.RDSH_COMPUTE === "1" && featureEnabled("compute", false, env);
 }
 
 export function createComputeBridge({ bin = "rdsh", timeoutMs = DEFAULT_TIMEOUT_MS, spawnImpl = spawn } = {}) {
