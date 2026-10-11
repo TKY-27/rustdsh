@@ -19,6 +19,16 @@ test("jsEstimate matches Rust heuristic on mixed input", async () => {
   b.close();
 });
 
+test("batch fallback matches per-item estimates", async () => {
+  delete process.env.RDSH_COMPUTE;
+  const b = createComputeBridge();
+  const { result, usedRust } = await b.estimateBatch(["abcd1234", "あ"]);
+  assert.equal(usedRust, false);
+  assert.deepEqual(result.tokens, [2, 1]);
+  assert.equal(result.total, 3);
+  b.close();
+});
+
 test("oversize input is rejected before spawn", async () => {
   process.env.RDSH_COMPUTE = "1";
   let spawned = false;

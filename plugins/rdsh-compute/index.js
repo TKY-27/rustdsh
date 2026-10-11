@@ -143,6 +143,31 @@ export function createComputeBridge({ bin = "rdsh", timeoutMs = DEFAULT_TIMEOUT_
     }
   }
 
+  async function estimateBatch(texts) {
+    const fallback = () => ({
+      tokens: texts.map(jsEstimate),
+      chars: texts.map((t) => Buffer.byteLength(t, "utf8")),
+      total: texts.map(jsEstimate).reduce((a, b) => a + b, 0),
+    });
+    if (!isEnabled()) return { result: fallback(), usedRust: false, timings: null };
+    const t0 = process.hrtime.bigint();
+    try {
+      const msg = await request("tokens.estimate_batch", { texts });
+      const timings = {
+        total_us: Number(process.hrtime.bigint() - t0) / 1000,
+        rust_us: msg.elapsed_us ?? null,
+      };
+      if (msg.ok !== true || !Array.isArray(msg.tokens)) throw new Error(msg.error ?? "bad response");
+      return {
+        result: { tokens: msg.tokens, chars: msg.chars, total: msg.total },
+        usedRust: true,
+        timings,
+      };
+    } catch {
+      return { result: fallback(), usedRust: false, timings: null };
+    }
+  }
+
   async function prune(text, maxTokens = 4000) {
     const fallback = () => ({ pruned: text, before: jsEstimate(text), after: jsEstimate(text), budget: maxTokens });
     if (!isEnabled()) return { result: fallback(), usedRust: false, timings: null };
@@ -172,7 +197,7 @@ export function createComputeBridge({ bin = "rdsh", timeoutMs = DEFAULT_TIMEOUT_
     child = null;
   }
 
-  return { estimate, prune, close, jsEstimate, isEnabled };
+  return { estimate, estimateBatch, prune, close, jsEstimate, isEnabled };
 }
 
 // Cordis plugin entry: registers nothing by default; exposes the bridge on
