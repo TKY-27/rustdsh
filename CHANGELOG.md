@@ -3,7 +3,7 @@
 All notable changes to this project are documented here.
 Format follows Keep a Changelog, versioning follows Semantic Versioning.
 
-## [0.3.0] - 2026-10-11
+## [0.3.0] - 2026-10-12
 
 ### Security
 
