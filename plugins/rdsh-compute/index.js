@@ -107,16 +107,33 @@ export function resolveRdshBin(env = process.env, platform = process.platform, e
 
 export function createComputeBridge({ bin = "rdsh", timeoutMs = DEFAULT_TIMEOUT_MS, spawnImpl = spawn } = {}) {
   let child = null;
-  let ready = false;
   let seq = 0;
   const pending = new Map();
-  let buffer = "";
+  const failedWorkers = new WeakSet();
+
+  function failWorker(worker, err) {
+    if (failedWorkers.has(worker)) return;
+    failedWorkers.add(worker);
+    for (const [id, slot] of pending) {
+      if (slot.worker !== worker) continue;
+      pending.delete(id);
+      clearTimeout(slot.timer);
+      slot.reject(err);
+    }
+    if (child === worker) child = null;
+    try {
+      worker.kill();
+    } catch {}
+  }
 
   function ensureChild() {
     if (child) return child;
-    child = spawnImpl(bin, ["compute"], { stdio: ["pipe", "pipe", "inherit"] });
-    child.stdout.setEncoding("utf8");
-    child.stdout.on("data", (chunk) => {
+    const worker = spawnImpl(bin, ["compute"], { stdio: ["pipe", "pipe", "inherit"] });
+    child = worker;
+    let buffer = "";
+    worker.stdout.setEncoding("utf8");
+    worker.stdout.on("data", (chunk) => {
+      if (child !== worker) return;
       buffer += chunk;
       let idx;
       while ((idx = buffer.indexOf("\n")) >= 0) {
@@ -130,26 +147,18 @@ export function createComputeBridge({ bin = "rdsh", timeoutMs = DEFAULT_TIMEOUT_
           continue; // one bad line never resolves pending calls
         }
         const slot = pending.get(msg.id);
-        if (slot) {
+        if (slot?.worker === worker) {
           pending.delete(msg.id);
           clearTimeout(slot.timer);
           slot.resolve(msg);
         }
       }
     });
-    const failAll = (err) => {
-      for (const [, slot] of pending) {
-        clearTimeout(slot.timer);
-        slot.reject(err);
-      }
-      pending.clear();
-      child = null;
-      ready = false;
-    };
-    child.on("exit", () => failAll(new Error("rdsh compute exited")));
-    child.on("error", failAll);
-    ready = true;
-    return child;
+    worker.stdin.on("error", (err) => failWorker(worker, err));
+    worker.stdout.on("error", (err) => failWorker(worker, err));
+    worker.on("exit", () => failWorker(worker, new Error("rdsh compute exited")));
+    worker.on("error", (err) => failWorker(worker, err));
+    return worker;
   }
 
   function request(op, payload) {
@@ -168,13 +177,19 @@ export function createComputeBridge({ bin = "rdsh", timeoutMs = DEFAULT_TIMEOUT_
         pending.delete(id);
         reject(new Error(`rdsh compute timeout after ${timeoutMs}ms`));
       }, timeoutMs);
-      pending.set(id, { resolve, reject, timer, started });
+      const slot = { resolve, reject, timer, started, worker: null };
+      pending.set(id, slot);
       try {
-        ensureChild().stdin.write(JSON.stringify({ v: PROTOCOL_VERSION, id, op, ...payload }) + "\n");
+        slot.worker = ensureChild();
+        slot.worker.stdin.write(JSON.stringify({ v: PROTOCOL_VERSION, id, op, ...payload }) + "\n");
       } catch (err) {
-        pending.delete(id);
-        clearTimeout(timer);
-        reject(err);
+        if (slot.worker) {
+          failWorker(slot.worker, err);
+        } else if (pending.get(id) === slot) {
+          pending.delete(id);
+          clearTimeout(timer);
+          reject(err);
+        }
       }
     }).then((msg) => ({
       ...msg,
