@@ -897,7 +897,13 @@ fn context_search_finds_two_char_ascii_terms() {
         "{\"content\":\"CI pipeline UI Go TypeScript \u{65e5}\u{672c}\u{8a9e}\u{691c}\u{7d22}\"}\n",
     )
     .unwrap();
-    for query in ["CI", "UI", "Go", "pipeline", "\u{65e5}\u{672c}\u{8a9e}\u{691c}\u{7d22}"] {
+    for query in [
+        "CI",
+        "UI",
+        "Go",
+        "pipeline",
+        "\u{65e5}\u{672c}\u{8a9e}\u{691c}\u{7d22}",
+    ] {
         let out = f.ok(&["context", "search", query], b"");
         let text = String::from_utf8_lossy(&out);
         assert!(
