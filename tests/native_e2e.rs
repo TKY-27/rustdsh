@@ -277,6 +277,12 @@ fn concurrent_session_writers_leave_parseable_correct_cache() {
     }
 }
 
+/// Tests run in parallel and each one spawns a server on loopback; on loaded
+/// CI runners several simultaneous startups were refused for the whole 15s
+/// readiness window. Serializing the startup (not the serving) keeps the
+/// fixture deterministic without changing what is tested.
+static SERVER_STARTUP: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 struct Server {
     child: Child,
     port: u16,
@@ -285,6 +291,9 @@ struct Server {
 }
 impl Server {
     fn start(f: &Fixture, args: &[&str]) -> Self {
+        let _startup_guard = SERVER_STARTUP
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let mut child = f
             .command(args)
             .stdin(Stdio::null())
