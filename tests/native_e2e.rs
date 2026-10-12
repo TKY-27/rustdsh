@@ -433,7 +433,7 @@ fn setup_extras_follow_explicit_feature_switches() {
     // UI shows and the value its switches write.
     let f = Fixture::new();
     f.settings(serde_json::json!({"features": {"serve": false}}));
-    let mut setup = Server::start(&f, &["setup", "--web", "--port", "0"]);
+    let setup = Server::start(&f, &["setup", "--web", "--port", "0"]);
     let (status, body) = setup.request("GET", "/api/extras", "", true, "");
     assert_eq!(status, 200);
     let listed: serde_json::Value = serde_json::from_str(&body).unwrap();
