@@ -1,7 +1,8 @@
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { readFile, writeFile, mkdir, access, rename, unlink } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
+import { execFile } from 'node:child_process';
 
 import { discordDefaults, normalizeDiscord, installDiscordPresence } from './discord.js';
 
@@ -13,6 +14,39 @@ function dshHome() {
 }
 function cfgPath() { return join(dshHome(), 'rdsh-context.json'); }
 function settingsPath() { return join(dshHome(), 'rdsh.json'); }
+
+// The settings card shows the running versions (issue #397). rdsh exports
+// RDSH_VERSION when it launches DSH; otherwise the installed CLI is asked.
+function runRdshVersion() {
+  return new Promise((resolve) => {
+    execFile('rdsh', ['--version'], { timeout: 2000, windowsHide: true }, (error, stdout) => {
+      if (error) return resolve('');
+      const match = String(stdout).match(/^rdsh\s+(\S+)/m);
+      resolve(match ? match[1] : '');
+    });
+  });
+}
+async function readDshVersion() {
+  try {
+    const entry = process.argv[1];
+    if (!entry) return '';
+    const manifest = JSON.parse(await readFile(join(dirname(dirname(entry)), 'package.json'), 'utf8'));
+    return typeof manifest.version === 'string' ? manifest.version : '';
+  } catch {
+    return '';
+  }
+}
+let versionsPromise;
+function versions() {
+  if (!versionsPromise) {
+    versionsPromise = (async () => {
+      const fromEnv = (process.env.RDSH_VERSION || '').trim();
+      const rdsh = /^[0-9][0-9A-Za-z.+-]{0,31}$/.test(fromEnv) ? fromEnv : await runRdshVersion();
+      return { rdsh, dsh: await readDshVersion() };
+    })().catch(() => ({ rdsh: '', dsh: '' }));
+  }
+  return versionsPromise;
+}
 
 async function savePrivateJson(path, value) {
   const temporary = `${path}.tmp.${randomBytes(16).toString('hex')}`;
@@ -323,7 +357,12 @@ function registerWeb(ctx, presence) {
         }
         let legacyPresent = false;
         try { await access(cfgPath()); legacyPresent = true; } catch (e) {}
-        json(res, 200, { ok: true, config: cfg, legacy_present: legacyPresent });
+        json(res, 200, {
+          ok: true,
+          config: cfg,
+          legacy_present: legacyPresent,
+          versions: await versions(),
+        });
       },
     });
     const offPostSettings = ctx.webServer.register({
