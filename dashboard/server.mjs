@@ -451,6 +451,7 @@ export async function startDashboard(options) {
           route === "/observations.mjs" ||
           route === "/reports-view.mjs" ||
           route === "/question-cards-ui.mjs" ||
+          route === "/model-catalog-ui.mjs" ||
           route === "/project-overview.mjs" ||
           route === "/connection-diagnostics-ui.mjs" ||
           route === "/answer-applications-ui.mjs" ||
@@ -551,6 +552,7 @@ export async function startDashboard(options) {
           "/observations.mjs",
           "/reports-view.mjs",
           "/question-cards-ui.mjs",
+          "/model-catalog-ui.mjs",
           "/project-overview.mjs",
           "/connection-diagnostics-ui.mjs",
           "/answer-applications-ui.mjs",
