@@ -428,6 +428,30 @@ impl Drop for Server {
 }
 
 #[test]
+fn setup_extras_follow_explicit_feature_switches() {
+    // Issue #384: an explicit features.<id> must drive both the value the setup
+    // UI shows and the value its switches write.
+    let f = Fixture::new();
+    f.settings(serde_json::json!({"features": {"serve": false}}));
+    let mut setup = Server::start(&f, &["setup", "--web", "--port", "0"]);
+    let (status, body) = setup.request("GET", "/api/extras", "", true, "");
+    assert_eq!(status, 200);
+    let listed: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(listed["enable"], serde_json::json!([]));
+    assert_eq!(
+        setup
+            .request("POST", "/api/extras", r#"{"enable":["serve"]}"#, true, "")
+            .0,
+        200
+    );
+    let saved: serde_json::Value =
+        serde_json::from_slice(&fs::read(f.0.join("dsh/rdsh.json")).unwrap()).unwrap();
+    assert_eq!(saved["features"]["serve"], serde_json::json!(true));
+    assert_eq!(saved["extras"]["enable"], serde_json::json!(["serve"]));
+    setup.request("POST", "/api/done", "{}", true, "");
+}
+
+#[test]
 fn setup_save_extras_restart_serve_and_use_real_http_api() {
     let f = Fixture::new();
     let mut setup = Server::start(&f, &["setup", "--web", "--port", "0"]);
