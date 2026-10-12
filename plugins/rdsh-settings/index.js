@@ -1,5 +1,6 @@
 import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
+import { existsSync } from 'node:fs';
 import { readFile, writeFile, mkdir, access, rename, unlink } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import { execFile } from 'node:child_process';
@@ -15,11 +16,40 @@ function dshHome() {
 function cfgPath() { return join(dshHome(), 'rdsh-context.json'); }
 function settingsPath() { return join(dshHome(), 'rdsh.json'); }
 
+function defaultExists(path) {
+  try { return existsSync(path); } catch { return false; }
+}
+
+// Self-contained copy of the compute plugin's resolution order: Desktop can
+// start without the login shell PATH, so RDSH_BIN wins, then PATH, then the
+// well-known install locations. Unresolved keeps the historical bare name;
+// execFile failure still resolves to ''.
+function resolveRdshBin(env = process.env, platform = process.platform, exists = defaultExists) {
+  if (typeof env.RDSH_BIN === 'string' && env.RDSH_BIN.trim() !== '') return env.RDSH_BIN;
+  const name = platform === 'win32' ? 'rdsh.exe' : 'rdsh';
+  const pathSep = platform === 'win32' ? ';' : ':';
+  for (const dir of (env.PATH || env.Path || '').split(pathSep)) {
+    if (dir && exists(join(dir, name))) return 'rdsh'; // PATH hit: the bare name spawns as before
+  }
+  const home = platform === 'win32' ? env.USERPROFILE || env.HOME || homedir() : env.HOME || homedir();
+  const candidates = platform === 'win32'
+    ? [
+      join(env.LOCALAPPDATA || join(home, 'AppData', 'Local'), 'rdsh', 'bin', name),
+      join(home, '.local', 'bin', name),
+      join(env.CARGO_HOME || join(home, '.cargo'), 'bin', name),
+    ]
+    : [join(home, '.local', 'bin', name), join('/usr/local/bin', name), join(home, '.cargo', 'bin', name)];
+  for (const candidate of candidates) {
+    if (exists(candidate)) return candidate;
+  }
+  return 'rdsh';
+}
+
 // The settings card shows the running versions (issue #397). rdsh exports
 // RDSH_VERSION when it launches DSH; otherwise the installed CLI is asked.
 function runRdshVersion() {
   return new Promise((resolve) => {
-    execFile('rdsh', ['--version'], { timeout: 2000, windowsHide: true }, (error, stdout) => {
+    execFile(resolveRdshBin(), ['--version'], { timeout: 2000, windowsHide: true }, (error, stdout) => {
       if (error) return resolve('');
       const match = String(stdout).match(/^rdsh\s+(\S+)/m);
       resolve(match ? match[1] : '');

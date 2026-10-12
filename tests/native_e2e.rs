@@ -324,7 +324,11 @@ impl Server {
             let mut address = None;
             let mut handoff_path = None;
             let mut startup_lines = Vec::new();
+            let mut ready = false;
             for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                if ready {
+                    continue;
+                }
                 startup_lines.push(line.clone());
                 if let Some(url) = line
                     .split_whitespace()
@@ -346,7 +350,10 @@ impl Server {
                         logged_token,
                         has_key_fragment,
                     ));
-                    break;
+                    // Keep draining until the child exits: closing the pipe here
+                    // would make the server's next log write fail.
+                    startup_lines.clear();
+                    ready = true;
                 }
             }
         });
