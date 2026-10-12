@@ -21,7 +21,7 @@ test("all four external origins remain data through summaries/forwarding and can
     assert.deepEqual(forwarded.lineage.map((item) => item.action), ["capture", "summary", "forward"]);
     assert.deepEqual(forwarded.lineage.map((item) => item.parent_digest), [null,
       original.content_digest, summary.content_digest]);
-    assert.throws(() => validateExternalSource({ ...forwarded, authority: "human_browser" }));
+    assert.throws(() => validateExternalSource({ ...forwarded, authority: "browser_owner" }));
     const brokenLineage = structuredClone(forwarded);
     brokenLineage.lineage[1].content_digest = "0".repeat(64);
     assert.throws(() => validateExternalSource(brokenLineage), /lineage is not linked/);
