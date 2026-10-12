@@ -283,6 +283,23 @@ fn concurrent_session_writers_leave_parseable_correct_cache() {
 /// fixture deterministic without changing what is tested.
 static SERVER_STARTUP: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+/// Connect to a fixture port, waiting up to 15s for a loaded runner to accept.
+fn connect_within(port: u16) -> TcpStream {
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        match TcpStream::connect(("127.0.0.1", port)) {
+            Ok(stream) => return stream,
+            Err(error) => {
+                assert!(
+                    Instant::now() < deadline,
+                    "server did not accept within 15s (port {port}): {error}"
+                );
+                std::thread::sleep(Duration::from_millis(250));
+            }
+        }
+    }
+}
+
 struct Server {
     child: Child,
     port: u16,
@@ -383,17 +400,7 @@ impl Server {
         // instead of a fixed attempt count.
         let deadline = Instant::now() + Duration::from_secs(15);
         loop {
-            let mut stream = match TcpStream::connect(("127.0.0.1", self.port)) {
-                Ok(stream) => stream,
-                Err(error) => {
-                    assert!(
-                        Instant::now() < deadline,
-                        "listener did not accept within 15s: {error}"
-                    );
-                    std::thread::sleep(Duration::from_millis(250));
-                    continue;
-                }
-            };
+            let mut stream = connect_within(self.port);
             stream
                 .set_read_timeout(Some(Duration::from_secs(60)))
                 .unwrap();
@@ -666,22 +673,7 @@ fn http_truncated_and_oversized_requests_do_not_damage_serve() {
     .into_iter()
     .enumerate()
     {
-        let mut stream = None;
-        for _ in 0..8 {
-            match TcpStream::connect(("127.0.0.1", server.port)) {
-                Ok(stream_) => {
-                    stream = Some(stream_);
-                    break;
-                }
-                Err(_) => std::thread::sleep(Duration::from_millis(500)),
-            }
-        }
-        let mut stream = stream.unwrap_or_else(|| {
-            panic!(
-                "server should accept connections (port {}, child status unknown)",
-                server.port
-            )
-        });
+        let mut stream = connect_within(server.port);
         stream
             .set_read_timeout(Some(Duration::from_secs(60)))
             .unwrap();
