@@ -369,30 +369,30 @@ impl Server {
             String::new()
         };
         let mut bytes = Vec::new();
-        // Loaded CI runners sometimes reset the connection before responding;
-        // retry the whole request a few times before giving up.
-        let mut attempts = 0;
+        // Loaded CI runners refuse or reset the loopback connection while the
+        // server is still coming up, so retry against a wall-clock deadline
+        // instead of a fixed attempt count.
+        let deadline = Instant::now() + Duration::from_secs(15);
         loop {
-            attempts += 1;
             let mut stream = match TcpStream::connect(("127.0.0.1", self.port)) {
                 Ok(stream) => stream,
-                Err(_) if attempts < 4 => {
-                    std::thread::sleep(Duration::from_millis(500));
+                Err(error) => {
+                    assert!(
+                        Instant::now() < deadline,
+                        "listener did not accept within 15s: {error}"
+                    );
+                    std::thread::sleep(Duration::from_millis(250));
                     continue;
                 }
-                Err(e) => panic!("connect failed: {e}"),
             };
             stream
                 .set_read_timeout(Some(Duration::from_secs(60)))
                 .unwrap();
             write!(stream, "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\n{key}{extra}Content-Length: {}\r\nConnection: close\r\n\r\n{body}", self.port, body.len()).unwrap();
             bytes.clear();
-            if stream.read_to_end(&mut bytes).is_err() && attempts < 4 {
-                std::thread::sleep(Duration::from_millis(500));
-                continue;
-            }
+            let read_failed = stream.read_to_end(&mut bytes).is_err();
             // A reset can truncate the response, so only accept a complete
-            // status line; anything else retries until the attempt budget ends.
+            // status line; anything else retries until the deadline.
             let response = String::from_utf8_lossy(&bytes).into_owned();
             if let Some((head, body)) = response.split_once("\r\n\r\n") {
                 if let Some(status) = head
@@ -404,10 +404,10 @@ impl Server {
                 }
             }
             assert!(
-                attempts < 4,
-                "no complete HTTP response after {attempts} attempts"
+                Instant::now() < deadline,
+                "no complete HTTP response within 15s (read failed: {read_failed})"
             );
-            std::thread::sleep(Duration::from_millis(500));
+            std::thread::sleep(Duration::from_millis(250));
         }
     }
     fn stopped(&mut self) {
