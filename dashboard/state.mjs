@@ -1,4 +1,5 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
@@ -413,9 +414,13 @@ export function applyOperation(state, operation, input) {
         const { attention, ...questionInput } = input;
         const reported = Object.hasOwn(input, "attention")
           ? normalizeAttention(attention, "question") : previousAttention;
+        if (input.action === "cancel" && Object.hasOwn(input, "attention") &&
+            !isDeepStrictEqual(reported, previousAttention ?? {}))
+          throw new Error("Cancellation cannot replace question attention");
         changeQuestionContract(state, questionInput);
         const question = state.questions.find((item) => item.id === input.id);
-        if (reported !== undefined) question.attention = structuredClone(reported);
+        if (reported !== undefined && input.action !== "cancel")
+          question.attention = structuredClone(reported);
         validateReplyRecipient(
           state,
           state.question_contracts.cards[input.id].snapshot.decision,

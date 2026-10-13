@@ -158,6 +158,58 @@ test("cancelled and expired typed-question reports survive revision and restart"
   assert.equal(reopened.value.questions.find((question) => question.id === "expired").attention.next_action, "Review replacement window");
 });
 
+test("a repeated cancellation cannot replace terminal question attention after restart", async (t) => {
+  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "rdsh-question-cancel-replay-"));
+  t.after(() => fs.rm(temporary, { recursive: true, force: true }));
+  const project = {
+    id: "project-question-cancel-replay",
+    name: "Fixture",
+    root: temporary,
+    directory: path.join(temporary, "state"),
+  };
+  const store = await ProjectStore.open(project);
+  const originalAttention = {
+    cause_id: "original-cause",
+    impact: "high",
+    next_action: "Review original report",
+  };
+  await store.mutate("question", {
+    id: "cancelled",
+    question: "Review the original target",
+    decision: { kind: "consultation" },
+    attention: originalAttention,
+  });
+  await store.mutate("question", {
+    id: "cancelled",
+    action: "cancel",
+    expected_revision: 1,
+    cancel_reason: "Target retired",
+    attention: originalAttention,
+  });
+  const before = structuredClone(store.value);
+  const file = path.join(project.directory, "state.json");
+  const saved = await fs.readFile(file);
+
+  await assert.rejects(store.mutate("question", {
+    id: "cancelled",
+    action: "cancel",
+    expected_revision: 1,
+    cancel_reason: "Target retired",
+    attention: {
+      cause_id: "replacement-cause",
+      impact: "critical",
+      next_action: "Review replacement report",
+    },
+  }), /Cancellation cannot replace question attention/);
+  assert.deepEqual(store.value, before);
+  assert.deepEqual(await fs.readFile(file), saved);
+
+  const reopened = await ProjectStore.open(project);
+  const history = buildAttentionHistory(reopened.value);
+  const cancelled = history.find((entry) => entry.id === "cancelled" && entry.action === "cancelled");
+  assert.deepEqual(cancelled.attention, originalAttention);
+});
+
 test("reported attention preserves omission and records explicit resolution and recurrence", () => {
   const state = initial();
   applyOperation(state, "task", task("T1", { attention: issue }));
