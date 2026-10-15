@@ -22,18 +22,31 @@ and removes its own processes and fixtures. It never connects a provider or enab
 Tailscale. It checks persisted settings, tokens/prune, session display, actual MCP
 questions and browser answers, draft retention across SSE, process restart, and
 revocation of the previous browser key. Linux CI installs Chromium and retains PNGs
-and JSON even when the job fails.
+and JSON even when the job fails. It also emits SHA-bound `qa-matrix.json` and a
+filterable `qa-matrix.html`; missing, stale, or mismatched-mode evidence stays
+`not-run`. The loopback browser job leaves real-phone, WSL, and Tailscale paths
+unverified.
 
 The default command also runs `update-banner.mjs` with the real React component
 and two independent authenticated plugin hosts. Dummy HOME and loopback ports
-cover live update push, cross-tab/port close events, two-hour boundaries, reload
-notification, project remounts, legacy records and unavailable browser storage.
+cover live update push, cross-tab/port close events, dismiss finality across
+polls, remount, reload and later hours, notification of a newer target or update
+time, project remounts, legacy records and unavailable browser storage.
 Mocked updater responses also cover successful close, failed retry, and a newer
 update arriving during a request; the actual updater never runs in this fixture.
-The browser clock advances the cadence without waiting two hours. It saves real
-PNGs and a verification report; it never restarts production DSH or executes the
-updater. Run just this flow with `npm run test:updates`. Set
-`RDSH_UPDATE_BASELINE_CLIENT` to the previous client file for before/after captures.
+The browser clock advances hours without waiting, proving a dismissed update
+stays hidden. It saves real PNGs and a verification report; it never restarts
+production DSH or executes the updater. Run just this flow with
+`npm run test:updates`. Set `RDSH_UPDATE_BASELINE_CLIENT` to the previous client
+file for before/after captures.
+
+The default command also runs `task-outcomes.mjs` against the actual project
+server and isolated acceptance checks. It covers reported done versus verified,
+partial/full checks, fixed milestones after task splits, stale code and an old
+response arriving after an SSE update. `RDSH_OUTCOMES_OUTPUT` selects its evidence
+directory; `RDSH_OUTCOMES_BASELINE` optionally points to a previous `server.mjs`.
+Full-panel PNGs use extra viewport height to keep the fixed action bar clear;
+separate phone PNGs and overflow checks use the actual 390 x 844 viewport.
 
 ## Optional installed DSH integration
 
@@ -51,8 +64,27 @@ means the settings flow passed, not that mobile UX was accepted.
 For an existing browser installation, set `RDSH_CHROME_PATH`; an environment with
 bundled Playwright can set `RDSH_PLAYWRIGHT_MODULE` to its module path.
 
-See [the verification matrix](../../docs/evidence/e2e-20261008.md) for observed
-coverage and remaining environment-specific checks.
+See [the route-matrix contract](../../docs/evidence/qa-route-matrix.md) for
+coverage rules and [historical E2E evidence](../../docs/evidence/e2e-20261008.md)
+for earlier runs and environment-specific checks.
+
+## Answer guard (installed DSH, no provider)
+
+```sh
+RDSH_NATIVE_MODULES=/path/to/original/dsh/node_modules npm run test:answer-guard --prefix tests/e2e
+```
+
+This composes the real `AgentLoop`, `LlmRuntime`, session store and projections
+in-process and registers a stub `LlmAdapter`, so no provider, network or model
+API is involved. The stub answers the first call with the recorded failure shape
+— one `reasoning` block, no `text`, no tool call — and the second with ordinary
+text. The harness then requires that `plugins/rdsh-answer-guard` caused a second
+model call inside the same turn, that the notice reached that request, and that
+a `text` block landed in the session log. It also runs two contrasting
+scenarios (plugin not applied, `features.answer_guard=false`) that must stop
+after one call, so a passing run shows the guard, not the loop, recovered the
+turn. Like `discord-native.mjs` it needs an installed DSH tree and is not part
+of CI; its exit code is the verdict.
 
 ## Discord integration
 

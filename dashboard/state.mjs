@@ -1,7 +1,10 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
+import { normalizeAttention, updateTaskAttention, validateAttentionState } from "./attention.mjs";
+import { applyTaskOutcomes, validateTaskOutcomes } from "./task-outcomes.mjs";
 import { normalizeObservation } from "./observations.mjs";
 import {
   changeQuestionContract,
@@ -44,7 +47,8 @@ import {
   validateHistoryConflicts,
 } from "./history-backup.mjs";
 
-// Bucket D display notes (no schema change; schema stays 1):
+// Bucket D display notes preserve schema 1; explicit state migrations can move
+// legacy projects to schema 2 without changing nested extension schemas.
 // #12 task contract, #13 review inbox, #14 outcome cards, #15 dependencies.
 // Legacy field shapes remain unchanged. Optional question_contracts metadata
 // has its own schema and explicit revision contract (#40).
@@ -96,9 +100,10 @@ export async function writeJson(file, value) {
   await fs.rename(temp, file);
 }
 export class ProjectStore {
-  constructor(project, value) {
+  constructor(project, value, { instructionQueueWorker } = {}) {
     this.project = project;
     this.value = value;
+    this.instructionQueueWorker = instructionQueueWorker || null;
     this.historyIds = validateRestoredHistory(value);
     this.protectedHistory = freezeHistory(value.history_backups);
   }
@@ -108,7 +113,13 @@ export class ProjectStore {
     if (history_backups !== undefined) next.history_backups = history_backups;
     return next;
   }
-  static async open(project) {
+  static async open(project, options = {}) {
+    try {
+      await fs.access(path.join(project.directory, "state-migration.lock"));
+      throw new Error("Dashboard state migration is in progress");
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
     let value;
     try {
       value = JSON.parse(
@@ -128,26 +139,38 @@ export class ProjectStore {
         feedback: [],
       };
     }
-    if (value.project.id !== project.id || value.schema !== 1)
+    if (
+      value.project.id !== project.id ||
+      ![1, 2].includes(value.schema) ||
+      (value.schema === 2 && !Array.isArray(value.changes))
+    )
       throw new Error(
         "Dashboard state belongs to a different project or version",
       );
+    validateAttentionState(value);
     validateQuestionContracts(value);
     validateAnswerApplications(value);
     validateInstructions(value);
     validateCostLedger(value);
     validateBudgetAdmission(value);
-    return new ProjectStore(project, value);
+    validateTaskOutcomes(value);
+    return new ProjectStore(project, value, options);
   }
   async mutate(operation, input) {
     const next = this.clone();
     applyOperation(next, operation, input);
     validateInstructions(next);
     validateCostLedger(next);
+    validateTaskOutcomes(next);
     return this.commit(next, operation, input);
   }
+  async recordHandoff() {
+    // Expose snapshot creation as a revision change without publishing it as a
+    // task or progress event; MCP resource subscribers still need the update.
+    return this.commit(this.clone());
+  }
   async mutateReply(operation, input, context) {
-    const next = this.clone();
+    let next = this.clone();
     const handlers = {
       register: registerReplyConsumer,
       ack: applyReplyAck,
@@ -155,13 +178,75 @@ export class ProjectStore {
       instruction_resolve: resolveInstruction,
       control: applyInstructionControl,
     };
-    const result = handlers[operation](next, input, context);
+    const nativeOperations = {
+      instruction_submit: "submit",
+      instruction_resolve: "resolve",
+      control: "control",
+    };
+    let result;
+    let workerValidatedState = false;
+    const nativeOperation = nativeOperations[operation];
+    if (this.instructionQueueWorker && nativeOperation) {
+      let response;
+      try {
+        response = await this.instructionQueueWorker.request({
+          operation: nativeOperation,
+          // ProjectStore.open() and every mutation path validate this state.
+          // Rust still validates the returned state before acknowledging it.
+          prevalidated: true,
+          state: {
+            project: { id: next.project.id },
+            feedback: next.feedback,
+            answer_applications: next.answer_applications,
+            ...(Object.hasOwn(next, "instructions")
+              ? { instructions: next.instructions }
+              : {}),
+          },
+          input,
+          context,
+        });
+      } catch (error) {
+        if (error.status !== 413) throw error;
+        // A valid project can outgrow the bounded native transport. Preserve
+        // the existing JS implementation for that request rather than making
+        // a previously valid queue impossible to reconcile.
+        result = handlers[operation](next, input, context);
+      }
+      if (response) {
+        if (
+          response.operation !== nativeOperation ||
+          !response.state ||
+          typeof response.state !== "object" ||
+          Array.isArray(response.state) ||
+          !response.state.instructions ||
+          typeof response.state.instructions !== "object" ||
+          Array.isArray(response.state.instructions) ||
+          !Object.hasOwn(response, "result")
+        ) {
+          throw Object.assign(
+            new Error("Rust instruction worker returned an invalid response"),
+            { status: 500 },
+          );
+        }
+        workerValidatedState = response.state_validated === true;
+        next.instructions = response.state.instructions;
+        result = response.result;
+      }
+    } else {
+      result = handlers[operation](next, input, context);
+    }
     validateAnswerApplications(next);
-    validateInstructions(next);
+    if (!workerValidatedState) validateInstructions(next);
     await this.commit(next);
     return structuredClone(result);
   }
   async commit(next, operation = null, input = {}) {
+    try {
+      await fs.access(path.join(this.project.directory, "state-migration.lock"));
+      throw new Error("Dashboard state migration is in progress");
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
     const historyChanged = next.history_backups !== this.protectedHistory;
     const historyIds = historyChanged
       ? validateRestoredHistory(next)
@@ -396,6 +481,8 @@ export function applyOperation(state, operation, input) {
         }),
       };
       const index = state.tasks.findIndex((item) => item.id === task.id);
+      updateTaskAttention(task, index < 0 ? null : state.tasks[index], input, task.updated_at);
+      applyTaskOutcomes(state, input);
       if (index < 0) state.tasks.push(task);
       else state.tasks[index] = task;
       break;
@@ -406,7 +493,17 @@ export function applyOperation(state, operation, input) {
         input.action !== undefined ||
         input.expected_revision !== undefined
       ) {
-        changeQuestionContract(state, input);
+        const previousAttention = state.questions.find((question) => question.id === input.id)?.attention;
+        const { attention, ...questionInput } = input;
+        const reported = Object.hasOwn(input, "attention")
+          ? normalizeAttention(attention, "question") : previousAttention;
+        if (input.action === "cancel" && Object.hasOwn(input, "attention") &&
+            !isDeepStrictEqual(reported, previousAttention ?? {}))
+          throw new Error("Cancellation cannot replace question attention");
+        changeQuestionContract(state, questionInput);
+        const question = state.questions.find((item) => item.id === input.id);
+        if (reported !== undefined && input.action !== "cancel")
+          question.attention = structuredClone(reported);
         validateReplyRecipient(
           state,
           state.question_contracts.cards[input.id].snapshot.decision,
@@ -430,6 +527,10 @@ export function applyOperation(state, operation, input) {
         created_at: new Date().toISOString(),
         answer: null,
       };
+      if (Object.hasOwn(input, "attention_history"))
+        throw new Error("attention_history is server-managed");
+      if (Object.hasOwn(input, "attention"))
+        question.attention = normalizeAttention(input.attention, "question");
       if (state.questions.some((item) => item.id === question.id))
         throw new Error(
           "Question id already exists; use a new id for a follow-up",
@@ -456,12 +557,14 @@ export function applyOperation(state, operation, input) {
         answer: question.answer,
         created_at: question.answered_at,
         ...(contract || {}),
+        ...(question.attention ? { attention: structuredClone(question.attention) } : {}),
       });
       recordAnswerApplication(state, state.feedback.at(-1));
       break;
     }
     case "event": {
       const event = {
+        event_id: randomUUID(),
         sequence: (state.events.at(-1)?.sequence || 0) + 1,
         type: oneOf(
           input.type || "progress",
