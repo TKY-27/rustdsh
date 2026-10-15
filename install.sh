@@ -582,7 +582,7 @@ fi
 # rpm-based hosts (Fedora, RHEL, ...) ship everything rdsh needs to run, but two
 # optional tools unlock extra features. Naming the exact command here saves a
 # round trip to the docs; nothing here fails the install.
-if [ -r /etc/os-release ] && grep -qE '^ID=(fedora|rhel|centos|rocky|almalinux|oracle)' /etc/os-release; then
+if [ -r /etc/os-release ] && grep -qE '^ID="?(fedora|rhel|centos|rocky|almalinux|ol)"?' /etc/os-release; then
   rpm_missing=""
   command -v zstd >/dev/null 2>&1 || rpm_missing="$rpm_missing zstd"
   if ! command -v bwrap >/dev/null 2>&1 && ! command -v bubblewrap >/dev/null 2>&1; then
