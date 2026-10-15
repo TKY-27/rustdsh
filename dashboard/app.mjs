@@ -559,6 +559,7 @@ $("palette-search").addEventListener("input", (event) =>
   renderPalette(event.target.value),
 );
 $("palette-search").addEventListener("keydown", (event) => {
+  if (event.isComposing || event.keyCode === 229) return;
   if (event.key === "ArrowDown") {
     event.preventDefault();
     setPaletteSelection(paletteSelectedIndex + 1);
