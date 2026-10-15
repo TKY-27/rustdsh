@@ -7,6 +7,7 @@ import { Readable } from 'node:stream';
 import childProcess from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { syncBuiltinESMExports } from 'node:module';
+import { fileURLToPath } from 'node:url';
 
 // Never run the real updater in a regression test.
 let updateCalls = 0;
@@ -29,6 +30,14 @@ childProcess.execFile = (...args) => {
 syncBuiltinESMExports();
 const settings = await import('../plugins/rdsh-settings/index.js');
 const updates = await import('../plugins/rdsh-update-banner/index.js');
+
+// 既存のexecFile差替えと環境変更を混ぜず、CIから独立した子プロセスで実行する。
+test('translation preview suite has its own isolated plugin host', async () => {
+  await new Promise((resolve, reject) => {
+    execFile(process.execPath, ['--test', fileURLToPath(new URL('./translation-preview.test.mjs', import.meta.url))],
+      { timeout: 30000 }, (error, stdout, stderr) => error ? reject(new Error(stdout + stderr)) : resolve());
+  });
+});
 
 test('settings plugin resolves the rdsh binary like the compute bridge', () => {
   // Same order as plugins/rdsh-compute: RDSH_BIN, then PATH, then the
