@@ -7,6 +7,11 @@ import QRCode from "qrcode";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { ProjectStore, writeJson, stateHome, publicState } from "./state.mjs";
+import {
+  InstructionQueueWorker,
+  resolveRdshExecutable,
+  supportsInstructionQueueServe,
+} from "./instruction-queue-worker.mjs";
 import { createMcpServer } from "./mcp.mjs";
 import { enableShare, inspectShare } from "./tailscale.mjs";
 import { startHarness, proxyHarness, upgradeHarness } from "./harness.mjs";
@@ -16,6 +21,7 @@ import { AnswerApplicationServer } from "./answer-application-server.mjs";
 import { BudgetAdmissionServer } from "./budget-server.mjs";
 import { createHistoryBackup, backupMaximum } from "./history-backup.mjs";
 import { AcceptanceStore } from "./acceptance.mjs";
+import { inspectTaskOutcomes } from "./task-outcomes-view.mjs";
 import { ObservedCliStore } from "./observed-cli.mjs";
 import {
   ConnectionObservations,
@@ -158,9 +164,22 @@ export async function startDashboard(options) {
   const connections = new ConnectionObservations();
   const localUrl = `http://127.0.0.1:${port}/`;
   const cookieName = `rdsh_${kind === "project" ? project.id : "harness"}`;
-  let store, eventsHub, humanAnnotations, observedCli;
+  let store, eventsHub, humanAnnotations, observedCli, instructionQueueWorker;
   try {
-    store = kind === "project" ? await ProjectStore.open(project) : null;
+    if (kind === "project") {
+      instructionQueueWorker = options.instructionQueueWorker || null;
+      // Keep the JSONL subprocess experimental until it meets the live
+      // mutation latency gate; tests and benchmarks can still opt in.
+      if (
+        !instructionQueueWorker &&
+        process.env.RDSH_DASHBOARD_RUST_INSTRUCTION_QUEUE === "1"
+      ) {
+        const executable = await resolveRdshExecutable();
+        if (executable && (await supportsInstructionQueueServe(executable)))
+          instructionQueueWorker = new InstructionQueueWorker(executable);
+      }
+      store = await ProjectStore.open(project, { instructionQueueWorker });
+    } else store = null;
     humanAnnotations = store ? await HumanAnnotationStore.open(project) : null;
     eventsHub = store
       ? await EventsHub.open(project, () => store.value, options.webhookPost)
@@ -171,6 +190,7 @@ export async function startDashboard(options) {
         })
       : null;
   } catch (error) {
+    await instructionQueueWorker?.close().catch(() => {});
     await removeDashboardLockIfOwned(lockFile, lockContent).catch(() => {});
     throw error;
   }
@@ -467,6 +487,7 @@ export async function startDashboard(options) {
       const agentRoute =
         route === "/mcp" ||
         route === "/api/state" ||
+        (req.method === "GET" && route === "/api/task-outcomes") ||
         route === "/api/instructions/context" ||
         (req.method === "POST" && route === "/api/instructions/submit") ||
         (req.method === "POST" &&
@@ -525,6 +546,7 @@ export async function startDashboard(options) {
           route === "/instruction-queue-ui.mjs" ||
           route === "/cost-ledger-ui.mjs" ||
           route === "/budget-ui.mjs" ||
+          route === "/task-outcomes-ui.mjs" ||
           route === "/observed-cli-ui.mjs" ||
           route === "/favicon.ico" ||
           route === "/icon.png" ||
@@ -626,6 +648,7 @@ export async function startDashboard(options) {
           "/instruction-queue-ui.mjs",
           "/cost-ledger-ui.mjs",
           "/budget-ui.mjs",
+          "/task-outcomes-ui.mjs",
           "/observed-cli-ui.mjs",
         ].includes(route)
       ) {
@@ -860,6 +883,24 @@ export async function startDashboard(options) {
         }
         if (req.method === "GET" && route === "/api/state")
           return json(res, 200, await visibleState());
+        if (req.method === "GET" && route === "/api/task-outcomes") {
+          const entries = [...url.searchParams.entries()];
+          if (entries.length !== 1)
+            return json(res, 400, {
+              error: "Select exactly one task_id or milestone_id",
+            });
+          const state = store.clone();
+          const result = await inspectTaskOutcomes(
+            project,
+            state,
+            Object.fromEntries(entries),
+          );
+          if (store.value.revision !== state.revision)
+            return json(res, 409, {
+              error: "Project state changed; refresh and inspect again",
+            });
+          return json(res, 200, result);
+        }
         if (req.method === "POST" && route?.startsWith("/api/update/")) {
           const operation = route.slice("/api/update/".length);
           if (
@@ -931,7 +972,7 @@ export async function startDashboard(options) {
       json(res, 404, { error: "Not found" });
     } catch (e) {
       if (!res.headersSent)
-        json(res, [401, 403, 409].includes(e.status) ? e.status : 400, {
+        json(res, [401, 403, 409, 413, 500, 504].includes(e.status) ? e.status : 400, {
           error: e.message,
         });
       else res.end();
@@ -965,6 +1006,7 @@ export async function startDashboard(options) {
       for (const response of live) response.end();
       for (const { mcp } of sessions.values()) await mcp.server.close();
       await updateQueue;
+      await instructionQueueWorker?.close();
       await eventsHub?.queue;
       for (const socket of sockets) socket.destroy();
       await new Promise((resolve) => server.close(resolve));
