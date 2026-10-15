@@ -194,12 +194,8 @@ function validateData(type, data) {
     check(exact(data, ["owner_id"]) && uuid(data.owner_id, "owner"));
   else if (type === "scope_bound")
     check(
-      exact(data, [
-        "owner_id",
-        "kind",
-        "kernel_id",
-        "root_identity",
-        "root_pid",
+      ((exact(data, [
+        "owner_id", "kind", "kernel_id", "root_identity", "root_pid",
       ]) &&
           uuid(data.owner_id, "owner") &&
         ["linux_cgroup_v2", "linux_systemd_scope", "windows_job"].includes(
@@ -212,7 +208,17 @@ function validateData(type, data) {
         data.root_pid <= 2147483647 &&
         (data.root_identity === null ||
           (validProcessIdentity(data.root_identity) &&
-            data.root_identity.pid === data.root_pid)),
+            data.root_identity.pid === data.root_pid))) ||
+        (exact(data, [
+          "owner_id", "kind", "kernel_id", "root_identity", "root_pid",
+          "execution_platform", "transport",
+        ]) &&
+          uuid(data.owner_id, "owner") &&
+          data.kind === "docker_linux_container" &&
+          /^[a-f0-9]{64}$/.test(data.kernel_id) &&
+          data.root_identity === null && data.root_pid === null &&
+          data.execution_platform === "linux" &&
+          data.transport === "colima_docker")),
     );
   else if (type === "stop_stage")
     check(
