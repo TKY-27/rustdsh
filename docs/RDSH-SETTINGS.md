@@ -33,6 +33,13 @@ rdsh settings get search.max
 rdsh settings set search.max 50
 rdsh settings set context.goal "dsh互換性を維持する"
 rdsh settings set guard.deny '["rm -rf /*","*token*"]'
+```
+
+`rdsh guard` に `--policy-file` を付けると、既知のファイル操作スキーマを
+Read/Write/Edit に分類して判定します（未知のツールやシェルはブロック）。
+付けない場合は従来どおり deny パターン照合になります。
+
+```sh
 rdsh settings unset search.max   # 既定値に戻す
 rdsh settings set beta.context_engine true  # 実験機能を使う場合だけ
 rdsh context status   # 有効化後に記憶の状態を見る
@@ -49,6 +56,41 @@ rdsh context status   # 有効化後に記憶の状態を見る
 場合だけ `rdsh settings init --force` を実行してください。
 [復旧後の確認と利用の流れ](USER-FLOW.md#4-設定が読めないとき)。
 
+## 機能スイッチ（on/off）
+
+`rdsh features` で機能一覧を確認でき、`rdsh features on <id>` または `rdsh features off <id>` で切り替えられます。
+
+設定に未記載の id は既定値のまま動作するため、既存の挙動が変わることはありません。また、旧キー（`discord.enabled` / `extras.enable` / `beta.context_engine`）も引き続き動作しますが、`features.<id>` が指定されている場合はそちらが優先されます。
+
+| id | 既定 | 内容 |
+| --- | --- | --- |
+| discord | on | Discord Rich Presence（DSH Web が動いているときだけ表示） |
+| update_check | on | 更新確認と更新バナーの表示 |
+| update_notifications | on | 更新が見つかったときの通知 |
+| sound | off | DSH サウンド通知の導入（インストーラの SOUND=1） |
+| serve | off | ローカル閲覧画面（rdsh serve） |
+| search-web | off | SearXNG 経由の Web 検索 |
+| context_engine | off | 実験的なコンテキストエンジン |
+| compute | off | 常駐 pure-compute worker 連携（RDSH_COMPUTE=1） |
+| budget_guard | on | 予算ガードフック |
+| answer_guard | on | 本文が空（reasoning のみ）でターンが閉じるとき、再出力を1回だけ促す |
+| agent_tool_sandbox | off | 委譲したエージェントツールを --share-file の範囲に限定（ネットワーク・ホスト書き込みなし） |
+| release_probe | off | リリース検証プローブ（環境変数があるときだけ実行） |
+| setup_web | on | rdsh setup --web |
+| sessions_token_cache | on | セッションの token サイズキャッシュ |
+| node_compile_cache | on | Node コンパイルキャッシュ |
+| slim_lazy_plugins | on | slim 時にプラグインを遅延読み込み |
+| slim_disable_voice | on | slim 時に DSH の音声機能を止める |
+| slim_disable_auto_review | on | slim 時に自動レビューを止める |
+
+なお、`rdsh settings set features.<id> true|false` でも同じように設定できます。
+
+## 機能スイッチの効き方
+
+- ネイティブ側（`serve` / `search-web` / `context_engine` / `setup_web`）は、無効なコマンドを実行すると理由と有効化方法を表示して終了します。
+- slim のヒント（`slim_lazy_plugins` / `slim_disable_voice` / `slim_disable_auto_review`）と `node_compile_cache` は、委譲して起動する DSH プロセスの環境変数に反映されます。
+- プラグイン側（`discord` / `sound` / `compute` / `budget_guard` / `answer_guard` / `release_probe` / `update_check` / `update_notifications`）は `rdsh.json` を読み込んで動作を停止します。DSH を再起動すると反映されます。
+
 ## context engine（実験的、既定OFF）
 
 ```sh
@@ -59,3 +101,50 @@ rdsh context build --query "認証" --json
 
 優先度は goal > constraints > related_files > git_diff > decisions >
 open_tasks > retrieved の順で、予算超過時は retrieved から削ります。
+
+## context の自動注入（inject）
+
+`rdsh context inject` は DSH の `UserPromptSubmit` フックとして毎ターンの文脈を注入します。
+組み立てに失敗してもプロンプトを止めない fail-open です。
+
+```sh
+rdsh context hook install          # $DSH_HOME/hooks.json に追記（冪等、バックアップ自動作成）
+rdsh context hook status --json
+rdsh context hook remove           # 追加した1件だけを消す
+```
+
+| 設定キー | 既定 | 範囲 | 意味 |
+| --- | --- | --- | --- |
+| `context.inject_budget` | 1200 | 200-8000 | 1回の注入に使うトークン予算 |
+| `context.inject_deadline_ms` | 1200 | 100-10000 | 組み立ての期限。超えたら検索と依存閉包を省略 |
+| `context.inject_sessions` | true | | 直近セッションの継承を含める |
+| `context.inject_session_count` | 2 | 0-10 | 継承するセッション数 |
+
+`rdsh context build --sessions N` と `--require-stable` は1回だけ既定を上書きします。
+`--require-stable` は、リポジトリが変化した場合に加えて、git 状態を読めない場合も exit 3 で終了します
+（安定性を証明できないときに成功とは言わないため）。
+
+## 記憶（memory）
+
+```sh
+rdsh context remember "APIの互換性を必ず保つ" --kind constraint
+rdsh context memory --json
+rdsh context distill --session <transcript> --json     # 既定は dry-run
+rdsh context distill --session <transcript> --apply
+rdsh context forget <id>
+```
+
+保存先は `$DSH_HOME/rdsh-context-memory.json`（schema 1）。撤回と重複は決定的な規則で
+`superseded_by` を付け、context には active な項目だけが `[mem]` 付きで入ります。
+
+## 依存グラフ（deps）
+
+`dep_graph` は既定 ON です（読み取り専用の解析コマンドのため）。
+
+```sh
+rdsh deps build --json
+rdsh deps query engine_score --json
+rdsh deps impact src/core.rs --depth 3 --json
+```
+
+索引は `$DSH_HOME/rdsh-index/<root-key>.json`。size+mtime が同じファイルは再解析しません。
