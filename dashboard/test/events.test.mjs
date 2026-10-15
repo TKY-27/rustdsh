@@ -308,6 +308,7 @@ test("MCP 2.0 discovers events and serves the same tools on an authenticated end
   assert.ok(
     resources.resources.some((resource) => resource.uri === "dashboard://handoff"),
   );
+  assert.equal((await request("tools/list")).tools.length, 7);
   const diagnostics = async () =>
     (
       await fetch(dashboard.localUrl + "api/diagnostics", {

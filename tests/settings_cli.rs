@@ -299,7 +299,11 @@ fn feature_switches_list_defaults_and_round_trip_through_the_cli() {
         keys.contains("features.discord(bool, default ON)"),
         "{keys}"
     );
-    assert!(keys.contains("features.sound(bool, default OFF)"), "{keys}");
+    assert!(keys.contains("features.sound(bool, default ON)"), "{keys}");
+    assert!(
+        keys.contains("features.gitview(bool, default ON)"),
+        "{keys}"
+    );
     // The bundled answer guard reads this id, so it must stay registered:
     // an id that is missing here is dropped from rdsh.json on the next write.
     assert!(

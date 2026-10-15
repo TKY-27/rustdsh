@@ -49,6 +49,11 @@
 
 ## クイックスタート
 
+**Claude Code／Codex／Cursor／VS Code Copilot／OpenCode／Gemini CLI を利用中の方へ**：
+今のエージェントを使いながら、
+[MCP でダッシュボードを追加](docs/MCP-CLIENTS.md)できます。
+タスク・質問・構造化 UI の共有には Node.js 22 以上が必要です。DSH 本体と Rust は任意です。
+
 ### 1. インストール（ビルド済みバイナリ）
 
 **Linux / macOS / WSL**:
@@ -406,8 +411,9 @@ DeepSeek Harness Desktop は、Web アプリケーション全体を内包した
 
 ```sh
 rdsh desktop status                 # アプリ、コマンドランタイム、プロファイル、プラグインの状態（読み取り専用）
-rdsh desktop install --plugins-dir .   # desktop プロファイルに rdsh-settings を組み込み
+rdsh desktop install --plugins-dir .   # rdsh-settings＋標準サードパーティ（sound、gitview）を組み込み
 rdsh desktop install --plugins-dir . --compute   # 常駐 compute bridge もあわせて追加
+rdsh desktop install --plugins-dir . --no-sound --no-gitview  # サードパーティを省く場合
 rdsh desktop verify                 # プロファイルに rdsh プラグインがない場合は 0 以外で終了
 ```
 
@@ -491,6 +497,7 @@ Linux x86_64 環境での測定値です：
 | [docs/BENCHMARKS.md](docs/BENCHMARKS.md) | ベンチマークの詳細と再現手順 |
 | [docs/RDSH-SETTINGS.md](docs/RDSH-SETTINGS.md) | 設定画面の機能と CLI キー一覧 |
 | [docs/DESKTOP-INTEGRATION.md](docs/DESKTOP-INTEGRATION.md) | デスクトップアプリ (Electron) との連携 |
+| [docs/FEDORA.md](docs/FEDORA.md) | Fedora / RHEL 向けパッケージ・任意ツール・Linux でのデスクトップ事情 |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | 今後の開発ロードマップ |
 | [docs/RELEASING.md](docs/RELEASING.md) | リリース手順 |
 | [docs/SERIAL-PROXY.md](docs/SERIAL-PROXY.md) | 同時リクエスト数制限プロキシ |
@@ -512,6 +519,7 @@ Linux x86_64 環境での測定値です：
 - セキュリティレビュー・脆弱性報告: [GrEarl](https://github.com/GrEarl)、[PENTACoXIAN](https://x.com/PENTACoXIAN)
 - 実装・改善・検証協力: [StudioYebisu](https://github.com/yebisu0529-ship-it)、[RNA4219](https://github.com/RNA4219)、[eightman999](https://github.com/eightman999),[cyrne1-7208](https://github.com/cyrne1-7208)
 - アイディア・製品提案: [@remydre8](https://x.com/remydre8)
+- 標準搭載の Web UI プラグイン（許諾済み、MIT）：[cwd514](https://github.com/cwd514) さんの [dsh-sound-notifications](https://github.com/cwd514/dsh-sound-notifications)（(c) 2026、効果音・デスクトップ通知）、[yugapor](https://github.com/yugapor) さんの [dsh-gitview](https://github.com/yugapor/dsh-gitview)（(c) 2026、差分・履歴・CI付き Git パネル）。どちらもインストール時に上流 GitHub から取得します（詳細は `plugins/recommended.md`）。
 
 rdsh が利用・改変・推薦している第三者製 DSH プラグインです（いずれも MIT、著作権は各作者に帰属します）:
 

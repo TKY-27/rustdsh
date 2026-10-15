@@ -1,5 +1,8 @@
 # Project dashboard and private Harness access
 
+[Coding agent MCP quickstart](../docs/MCP-CLIENTS.md): add tasks, questions
+and structured UI to your existing coding agent through the local stdio bridge.
+
 [Worker scopes and worktrees](../docs/WORKER-WORKSPACES.md): local CLI allocation,
 source/worker conflict scans and retained checkouts after lease expiry or release.
 
@@ -57,6 +60,7 @@ before stopping the live owned Harness run.
 | Mode      | Purpose                                                    | Data source                                      |
 | --------- | ---------------------------------------------------------- | ------------------------------------------------ |
 | `project` | Project metrics, tasks, questions, human answers, progress | Eight project-scoped MCP tools                   |
+| `project` | Project metrics, tasks, questions, human answers, progress | Seven project-scoped MCP tools                   |
 | `harness` | Launch and open the original DeepSeek Harness Web UI       | A separately managed `dsh --profile web` process |
 
 Both bind to loopback and can use **Tailscale Serve** for private HTTPS access.
@@ -195,6 +199,9 @@ appropriate configuration into your agent's MCP settings. The dashboard must be
 running before the stdio bridge is used. The stdio bridge reads the current
 runtime credential on each operation. HTTP clients must reload the generated
 configuration after a restart, because the bearer key rotates.
+画面はライトとダークの2テーマです。初回はOSの設定に従い、ヘッダーの
+「ダーク表示／ライト表示」で切り替えると選択が保存されます。
+
 `runtime.json` の `token` は管理用、`mcp_token` は MCP 用です。ブラウザー用の
 鍵は `browser_url` に含まれます。これらを別用途で使い回さないでください。
 
@@ -208,6 +215,15 @@ configuration after a restart, because the bearer key rotates.
 | `dashboard_get_state`      | Read this project's current state             |
 | `dashboard_create_handoff` | Save a source-linked snapshot for one task    |
 | `dashboard_get_handoff`    | Read the latest snapshot and source freshness |
+| Tool                       | Effect                                       |
+| -------------------------- | -------------------------------------------- |
+| `dashboard_update_metrics` | Report measured cumulative snapshots         |
+| `dashboard_upsert_task`    | Create/update a task by ID                   |
+| `dashboard_ask_question`   | Ask a human a question with a unique ID      |
+| `dashboard_publish_event`  | Report progress or an artifact reference     |
+| `dashboard_get_feedback`   | Read durable answers after a sequence cursor |
+| `dashboard_present_ui`     | Present structured UI a human can act on     |
+| `dashboard_get_state`      | Read this project's current state            |
 
 Example tool arguments:
 

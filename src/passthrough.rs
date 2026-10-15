@@ -1,5 +1,7 @@
-/// Env overrides for drop-in `dsh` mode (see install.sh --as-dsh).
-/// RDSH_PASSTHROUGH=1 disables slim env; RDSH_DRY_RUN=1 only prints the exec.
+//! Env overrides for drop-in `dsh` mode (see install.sh --as-dsh).
+//! RDSH_PASSTHROUGH=1 disables slim env; RDSH_DRY_RUN=1 only prints the exec.
+use crate::executable::is_executable as is_executable_candidate;
+
 pub fn env_passthrough() -> bool {
     std::env::var("RDSH_PASSTHROUGH").is_ok_and(|v| v == "1")
 }
@@ -18,39 +20,6 @@ fn origin_file() -> Option<String> {
         None
     } else {
         Some(s)
-    }
-}
-
-/// Check a PATH candidate without spawning it. On Unix, query whether the
-/// current effective user can execute this regular file; mode bits alone can
-/// accept a file whose only execute bit belongs to another permission class.
-fn is_executable_candidate(path: &std::path::Path) -> bool {
-    let Ok(metadata) = std::fs::metadata(path) else {
-        return false;
-    };
-    if !metadata.is_file() {
-        return false;
-    }
-    #[cfg(unix)]
-    {
-        use std::ffi::CString;
-        use std::os::unix::ffi::OsStrExt;
-        let Ok(c_path) = CString::new(path.as_os_str().as_bytes()) else {
-            return false;
-        };
-        // SAFETY: c_path is NUL-terminated and AT_FDCWD makes this a read-only query.
-        unsafe {
-            libc::faccessat(
-                libc::AT_FDCWD,
-                c_path.as_ptr(),
-                libc::X_OK,
-                libc::AT_EACCESS,
-            ) == 0
-        }
-    }
-    #[cfg(not(unix))]
-    {
-        true
     }
 }
 
@@ -343,18 +312,23 @@ fn node_for_dsh(orig: &str) -> Option<String> {
     None
 }
 
+/// Read-only runtime selection shared by delegation and doctor.
+pub(crate) fn selected_node(orig: &str) -> Option<String> {
+    node_for_dsh(orig).or_else(find_node_bin)
+}
+
 fn base_cmd(orig: &str, dry: bool, metadata_only: bool) -> anyhow::Result<std::process::Command> {
-    let selected_node = || node_for_dsh(orig).or_else(find_node_bin);
     if dry || metadata_only {
         if is_node_entrypoint(orig) {
-            let mut command =
-                std::process::Command::new(selected_node().unwrap_or_else(|| "node".to_string()));
+            let mut command = std::process::Command::new(
+                selected_node(orig).unwrap_or_else(|| "node".to_string()),
+            );
             command.arg(orig);
             return Ok(command);
         }
         return Ok(std::process::Command::new(orig));
     }
-    let bin = selected_node()
+    let bin = selected_node(orig)
         .ok_or_else(|| anyhow::anyhow!("RDSH_SECURITY: compatible Node runtime is required"))?;
     if !crate::tool_security::sandbox_enabled() {
         // Default: hand the run to DSH with its normal tools and normal file

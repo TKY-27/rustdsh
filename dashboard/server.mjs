@@ -228,6 +228,7 @@ export async function startDashboard(options) {
           getHandoff,
           getAcceptance,
         },
+        { getState: visibleState, mutate, presentUi: mutateUiSurface },
         eventsHub,
         connections,
       )
@@ -333,6 +334,7 @@ export async function startDashboard(options) {
               "--project",
               project.root,
             ],
+            env: { RDSH_DASHBOARD_HOME: path.resolve(stateHome()) },
           },
         },
       });
@@ -494,6 +496,32 @@ export async function startDashboard(options) {
     updateQueue = task.catch(() => {});
     return task;
   }
+  // rdsh-ui/1: the agent presents a surface through MCP, and a human action
+  // returns to the same session as feedback. Both go through updateQueue so
+  // live views and MCP subscribers see one ordered revision.
+  async function mutateUiSurface(input) {
+    const task = updateQueue.then(async () => {
+      const result = await store.mutateUiSurface(input);
+      for (const response of live)
+        response.write("event: changed\ndata: " + store.value.revision + "\n\n");
+      for (const { mcp } of sessions.values()) void mcp.notify();
+      return result;
+    });
+    updateQueue = task.catch(() => {});
+    return task;
+  }
+  async function mutateUiAction(input) {
+    const task = updateQueue.then(async () => {
+      const result = await store.mutateUiAction(input);
+      for (const response of live)
+        response.write("event: changed\ndata: " + store.value.revision + "\n\n");
+      for (const { mcp } of sessions.values()) void mcp.notify();
+      void eventsHub.flush().catch(() => {});
+      return result;
+    });
+    updateQueue = task.catch(() => {});
+    return task;
+  }
   async function backupOperation(action, input) {
     const task = updateQueue.then(async () => {
       if (action === "history") {
@@ -577,7 +605,7 @@ export async function startDashboard(options) {
         route === "/api/instructions/context" ||
         (req.method === "POST" && route === "/api/instructions/submit") ||
         (req.method === "POST" &&
-          ["metrics", "task", "question", "event"].some(
+          ["metrics", "task", "question", "event", "ui_surface"].some(
             (operation) => route === `/api/update/${operation}`,
           ));
       const mcpAuthorized =
@@ -638,6 +666,10 @@ export async function startDashboard(options) {
           route === "/model-routing-ui.mjs" ||
           route === "/task-outcomes-ui.mjs" ||
           route === "/observed-cli-ui.mjs" ||
+          route === "/ui/registry.mjs" ||
+          route === "/ui/blocks.mjs" ||
+          route === "/ui/state-adapter.mjs" ||
+          route === "/model-catalog-ui.mjs" ||
           route === "/favicon.ico" ||
           route === "/icon.png" ||
           route === "/icon.svg");
@@ -744,6 +776,10 @@ export async function startDashboard(options) {
           "/model-routing-ui.mjs",
           "/task-outcomes-ui.mjs",
           "/observed-cli-ui.mjs",
+          "/ui/registry.mjs",
+          "/ui/blocks.mjs",
+          "/ui/state-adapter.mjs",
+          "/model-catalog-ui.mjs",
         ].includes(route)
       ) {
         res.writeHead(200, {
@@ -1041,9 +1077,14 @@ export async function startDashboard(options) {
         if (req.method === "POST" && route?.startsWith("/api/update/")) {
           const operation = route.slice("/api/update/".length);
           if (
-            !["metrics", "task", "question", "answer", "event"].includes(
-              operation,
-            )
+            ![
+              "metrics",
+              "task",
+              "question",
+              "answer",
+              "event",
+              "ui_surface",
+            ].includes(operation)
           )
             return json(res, 404, { error: "Unknown project operation" });
           if (
@@ -1054,7 +1095,21 @@ export async function startDashboard(options) {
             return json(res, 403, {
               error: "This credential cannot perform that operation",
             });
-          return json(res, 200, await mutate(operation, await readBody(req)));
+          const body = await readBody(req);
+          if (operation === "ui_surface")
+            return json(res, 200, await mutateUiSurface(body));
+          return json(res, 200, await mutate(operation, body));
+        }
+        if (route === "/api/ui/actions") {
+          // The browser returns a human action to the same session. The action
+          // id came from the server, and no operation is executed here.
+          if (req.method !== "POST")
+            return json(res, 405, { error: "Method not allowed" });
+          if (!humanAuthorized)
+            return json(res, 403, {
+              error: "Dashboard owner browser required",
+            });
+          return json(res, 200, await mutateUiAction(await readBody(req, 65536)));
         }
         if (req.method === "GET" && route === "/api/live") {
           res.writeHead(200, {
@@ -1090,6 +1145,7 @@ export async function startDashboard(options) {
               createHandoff,
               getHandoff,
               getAcceptance,
+              presentUi: mutateUiSurface,
             });
             const transport = new StreamableHTTPServerTransport({
               sessionIdGenerator: randomUUID,
