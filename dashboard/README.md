@@ -24,6 +24,9 @@ explicit interruption with native proof, and honest unsupported-steer fallback.
 [Task preflight](../docs/TASK-PREFLIGHT.md) checks the required CLI, cwd, disk,
 port, dependencies, GPU/WSL and selected authentication before an ACP session.
 
+[Resource admission](../docs/RESOURCE-ADMISSION.md) reserves local CPU, memory,
+heavy-build slots and ports before a managed build or test command starts.
+
 [Durable run recovery](../docs/RUN-RECOVERY.md) records control request/ack IDs
 and separates recorded run state, root-process observations and UI connectivity.
 
@@ -41,6 +44,8 @@ from current full checks, preserves partial results and rejects stale evidence.
 
 [Model assertions](../docs/MODEL-ROUTING.md) compare a declared run's requested
 route with native ACP configuration and block mismatched or unknown prompts.
+`routing enforce` adds the audited native dispatch guard on reattachment; the
+human view compares actual request tuples and retains fallback permission history.
 
 [Mobile overview](../docs/MOBILE-OVERVIEW.md) puts project/task context, observed
 state, last result, pending decisions and stop availability before folded metrics
@@ -51,7 +56,7 @@ before stopping the live owned Harness run.
 
 | Mode      | Purpose                                                    | Data source                                      |
 | --------- | ---------------------------------------------------------- | ------------------------------------------------ |
-| `project` | Project metrics, tasks, questions, human answers, progress | Six project-scoped MCP tools                     |
+| `project` | Project metrics, tasks, questions, human answers, progress | Eight project-scoped MCP tools                   |
 | `harness` | Launch and open the original DeepSeek Harness Web UI       | A separately managed `dsh --profile web` process |
 
 Both bind to loopback and can use **Tailscale Serve** for private HTTPS access.
@@ -193,14 +198,16 @@ configuration after a restart, because the bearer key rotates.
 `runtime.json` の `token` は管理用、`mcp_token` は MCP 用です。ブラウザー用の
 鍵は `browser_url` に含まれます。これらを別用途で使い回さないでください。
 
-| Tool                       | Effect                                       |
-| -------------------------- | -------------------------------------------- |
-| `dashboard_update_metrics` | Report measured cumulative snapshots         |
-| `dashboard_upsert_task`    | Create/update a task by ID                   |
-| `dashboard_ask_question`   | Ask a human a question with a unique ID      |
-| `dashboard_publish_event`  | Report progress or an artifact reference     |
-| `dashboard_get_feedback`   | Read durable answers after a sequence cursor |
-| `dashboard_get_state`      | Read this project's current state            |
+| Tool                       | Effect                                        |
+| -------------------------- | --------------------------------------------- |
+| `dashboard_update_metrics` | Report measured cumulative snapshots          |
+| `dashboard_upsert_task`    | Create/update a task by ID                    |
+| `dashboard_ask_question`   | Ask a human a question with a unique ID       |
+| `dashboard_publish_event`  | Report progress or an artifact reference      |
+| `dashboard_get_feedback`   | Read durable answers after a sequence cursor  |
+| `dashboard_get_state`      | Read this project's current state             |
+| `dashboard_create_handoff` | Save a source-linked snapshot for one task    |
+| `dashboard_get_handoff`    | Read the latest snapshot and source freshness |
 
 Example tool arguments:
 
@@ -329,6 +336,95 @@ Reference strings and sources are displayed as text, never opened or executed.
 Artifact references are displayed as text. Local file contents are never opened
 or served. Treat all user-authored questions, answers, progress, and paths as data.
 
+### Decision inbox
+
+The **判断待ちインボックス** groups unanswered questions, explicit failure or
+dependency reports, and existing `blocked` tasks. A blocked task without attention
+metadata appears as **停止中 · 種類未報告**, with its `blocker` as the reason;
+the inbox does not infer a failure or dependency type. Ordinary events and metric
+errors do not add alerts. Report attention through `dashboard_upsert_task`:
+
+```json
+{
+  "id": "build",
+  "title": "Restore the dependency download",
+  "status": "blocked",
+  "attention": {
+    "cause_id": "package-fetch",
+    "kind": "failure",
+    "deadline": "2026-10-08T12:00:00Z",
+    "impact": "high",
+    "next_action": "Check the download log"
+  }
+}
+```
+
+Task attention requires `kind` (`failure` or `dependency`). Optional fields are
+`cause_id` (1–160 characters), `deadline` (ISO date-time with timezone), `impact`
+(`low`, `medium`, `high`, `critical`), and `next_action` (1–2000 characters).
+Whitespace-only strings, invalid dates, unknown fields, and invalid types are
+rejected without saving. `dashboard_ask_question` accepts the same optional
+attention fields, without `kind`. Missing deadlines and impacts display 未報告.
+Without a reported next action, the inbox offers answering the question or
+reviewing the failure/stop reason.
+
+Within a project, identical explicit `cause_id` values group tasks and questions;
+without a known cause, each item stays separate. The default priority order uses
+question urgency, earliest deadline, greatest impact, next-operation type, oldest
+report, then ID. Urgency is not converted into impact. The selector also sorts by
+deadline, impact, or operation type, using the default priority to break ties.
+Operation order is: answer a question, review a reported next action, then review
+a failure/stop reason; free-text actions are not sorted alphabetically. Missing
+deadlines, impacts, and report times sort last within their comparison. Each
+member retains its reported values, and buttons open the existing task row or
+human answer form.
+
+Each cause starts as a compact summary row; expand it to see every member's full
+report and navigation button. Questions retain the existing approval/consultation
+label and reported urgency, including when grouped with tasks. A question's
+`default_action` is shown separately as informational and never runs automatically.
+Long summary text is shortened visually, with the full text available in the
+expanded report. Sorting and live updates preserve expanded groups and keyboard
+focus within the inbox.
+
+Omitting task `attention` preserves an explicit failure/dependency report until
+`status: "done"`; moving to `doing` alone does not resolve it. An unclassified
+blocked task resolves when its status changes to `todo`, `doing`, or `done`.
+Sending the required task fields with `"attention": null` resolves either kind
+and suppresses the blocked fallback for that stopped episode. A transition from
+another status back to `blocked` starts a new episode and restores legacy reporting;
+an explicit attention report can also reopen it.
+A `done` update with non-null attention is rejected. An elapsed deadline does not
+resolve anything. Resolving one member leaves other members of its cause group
+active; human answers remove only their question. These fields never grant
+permission or execute actions.
+
+Revisioned questions follow their existing question-contract lifecycle: cancelled
+or expired cards leave the actionable inbox and remain in its history. This is
+separate from the reported attention deadline, which does not expire a question.
+Typed approval/consultation labels use the current contract kind. Optional
+attention survives a question revision when omitted; answered history keeps the
+original report snapshot even if that question is later revised. Navigation to
+a task opens its folded section in the current overview layout.
+
+Task attention changes are stored in server-managed `attention_history`, separate
+from the bounded event log. The history includes report snapshots before changes,
+resolution, cause replacement, and recurrence; identical reports do not add
+history entries. Classified reports also retain the blocker and previous blocker,
+including updates that change only the stop reason. Resolving an existing blocked task with no prior history saves
+its original blocker in the resolution snapshot, without inventing an earlier
+report event. Original questions and answers remain in project state. The inbox's
+history section remains available after resolution and restart. Clients cannot
+supply or replace `attention_history`; its unclassified `blocked` snapshots are
+internal, not an accepted input kind.
+
+[#13](https://github.com/sahenjp/rustdsh/issues/13) requires actionable items with
+deadline/impact/operation sorting, same-cause grouping, and retained history after
+resolution. The priority and compatibility rules above are this implementation's
+design proposal. Producers remain the existing MCP tools and HTTP reporting API;
+this adds no automatic Harness monitoring. Dependency execution (#15), question
+contracts (#40), answer application (#41), and notification delivery (#56) remain
+separate work.
 The opt-in [local integration queue](../docs/INTEGRATION-QUEUE.md) applies fixed
 worker commits in order to a dedicated worktree and requires current full-check
 evidence before the next integration. Only explicit local CLI actions execute
@@ -405,9 +501,16 @@ On Windows, extract the client into `%LOCALAPPDATA%\rdsh\tunnel-client`, or set
 5. Verify a real question → human answer → signed webhook → Dot response, then
    stop monitoring and check that unsubscribe removes the subscription.
 
-Legacy MCP clients also have stdio/Streamable HTTP tools and
-`dashboard://state` / `dashboard://feedback` resource subscriptions. Those
-resource notifications are distinct from the native webhook Events integration.
+Project MCP clients expose `dashboard://state`, `dashboard://feedback`,
+`dashboard://handoff`, and `dashboard://acceptance` resources. Legacy and stdio
+clients also support resource subscriptions. The handoff is a human-readable
+snapshot, not a session resume; missing details stay unknown, arbitrary event
+artifact references are not opened, and test commands are not rerun. Registered
+acceptance evidence is inspected read-only for integrity metadata without
+copying file contents or private paths. Reads compare saved source fingerprints
+with current task, decision, artifact, and acceptance records. Resource
+notifications are distinct from the native webhook Events integration. See the
+[handoff packet contract](HANDOFF-PACKETS.md).
 See the [official Events contract](https://developers.openai.com/plugins/build/mcp-events).
 
 Use **接続診断** in the project dashboard or
@@ -436,6 +539,15 @@ subscriptions are never transported. See the
 [history backup contract](../docs/HISTORY-BACKUP.md) for selection, review and
 collision handling. `backup history` exposes imported records through the local
 control CLI; the existing state resource also includes `history_backups`.
+
+## Safe project-state migration
+
+`state-migrate inspect|dry-run|apply|rollback` handles the explicit schema 1 to
+2 transition. Stop the project dashboard before applying it. Dry-run preserves
+the source; apply creates a checksum-linked exact snapshot and atomically cuts
+over the state file. Rollback refuses to discard state written after migration.
+See the [state migration contract](../docs/STATE-MIGRATIONS.md) for recovery
+after interruption and stale-lock handling.
 
 ## Project-scoped pinned updates
 

@@ -315,11 +315,11 @@ struct Fetched {
 /// Read one provider's catalog for one profile. A live listing needs the
 /// profile's own API key, so it is resolved per profile rather than once.
 fn fetch_catalog(source: &CatalogSource, profile_text: &str) -> Result<Fetched> {
+    let lines: Vec<String> = profile_text.lines().map(str::to_string).collect();
+    let site = locate_owned(&lines, source.provider)?;
     match &source.kind {
         SourceKind::CodexCli => codex_catalog(DEFAULT_MAX_TOKENS),
         SourceKind::Live(endpoint) => {
-            let lines: Vec<String> = profile_text.lines().map(str::to_string).collect();
-            let site = locate_owned(&lines, source.provider)?;
             ensure_rename_supported(&lines, &site)?;
             let key_env = scalar_in(&lines, &site, "apiKeyEnv").ok_or_else(|| {
                 anyhow::anyhow!(
@@ -584,10 +584,14 @@ fn selected_sources(provider: Option<&str>) -> Result<Vec<&'static CatalogSource
 
 /// Whether a profile configures a provider at all. A provider a profile does
 /// not name is not this command's business, so it is not reported.
+/// Uninterpreted entries must reach the ownership check and be reported as
+/// skipped rather than hiding a provider in an uninspected entry.
 fn configures(text: &str, provider: &str) -> bool {
     let lines: Vec<String> = text.lines().map(str::to_string).collect();
-    let Some(entry) = llm_pi_ai_entry(&lines) else {
-        return false;
+    let entry = match crate::providers::llm_pi_ai_entry(&lines) {
+        Ok(Some(entry)) => entry,
+        Ok(None) => return false,
+        Err(_) => return true,
     };
     let Some(config) = find_key(&lines, entry + 1, block_end(&lines, entry), "config") else {
         return false;
@@ -749,7 +753,9 @@ struct Site {
 }
 
 fn locate_owned(lines: &[String], provider: &str) -> Result<Site> {
-    let entry = llm_pi_ai_entry(lines).ok_or_else(|| {
+    let entry = crate::providers::llm_pi_ai_entry(lines)
+        .map_err(anyhow::Error::msg)?
+        .ok_or_else(|| {
         anyhow::anyhow!(
             "no llm-pi-ai patch entry: add a `- id: llm-pi-ai` entry with a providers.{provider} block first"
         )
@@ -836,40 +842,6 @@ fn locate_owned(lines: &[String], provider: &str) -> Result<Site> {
             step,
         }),
     }
-}
-
-/// The index of the `- id: llm-pi-ai` (or matching `name:`) patch entry. The
-/// identifying key may sit on the `- ` line itself or on the line below it.
-fn llm_pi_ai_entry(lines: &[String]) -> Option<usize> {
-    let starts: Vec<usize> = (0..lines.len())
-        .filter(|i| indent_of(&lines[*i]) == 0 && lines[*i].starts_with("- "))
-        .collect();
-    for (position, start) in starts.iter().enumerate() {
-        let end = starts.get(position + 1).copied().unwrap_or(lines.len());
-        let head = lines[*start]
-            .trim_start()
-            .strip_prefix("- ")
-            .unwrap_or("")
-            .trim();
-        if identifies_llm_pi_ai(head) {
-            return Some(*start);
-        }
-        let depth = item_field_indent(lines, *start, indent_of(&lines[*start]));
-        if (start + 1..end)
-            .any(|i| Some(indent_of(&lines[i])) == depth && identifies_llm_pi_ai(lines[i].trim()))
-        {
-            return Some(*start);
-        }
-    }
-    None
-}
-
-fn identifies_llm_pi_ai(trimmed: &str) -> bool {
-    key_value(trimmed, "id")
-        .is_some_and(|value| model_scalar(value).is_ok_and(|value| value == "llm-pi-ai"))
-        || key_value(trimmed, "name").is_some_and(|value| {
-            model_scalar(value).is_ok_and(|value| value == "@deepseek-ai/dsh-llm-pi-ai")
-        })
 }
 
 /// The first line after `start` that is indented no deeper than `start`.
@@ -2470,6 +2442,20 @@ mod tests {
         assert!(applied.added.is_empty());
         let profile = "- id: llm-pi-ai\n  config:\n    providers:\n      openai-codex:\n        models:\n          - metadata:\n              id: gpt-6.1-sol\n";
         assert!(apply_profile(profile, CODEX_PROVIDER, &catalog()[..1], false).is_err());
+    }
+
+    #[test]
+    fn ownership_regression_rejects_duplicate_llm_pi_ai_entries() {
+        for first_provider in [CODEX_PROVIDER, "unrelated"] {
+            for second_entry in ["- id: llm-pi-ai", "- name: '@deepseek-ai/dsh-llm-pi-ai'"] {
+                let profile = format!("- id: llm-pi-ai\n  config:\n    providers:\n      {first_provider}:\n        models: []\n{second_entry}\n  config:\n    providers:\n      openai-codex:\n        models: []\n");
+                assert!(configures(&profile, CODEX_PROVIDER));
+                let error = apply_profile(&profile, CODEX_PROVIDER, &catalog(), false)
+                    .unwrap_err()
+                    .to_string();
+                assert!(error.contains("multiple llm-pi-ai"), "{error}");
+            }
+        }
     }
 
     #[test]

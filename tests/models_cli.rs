@@ -198,6 +198,40 @@ fn models_sync_uses_custom_codex_home_without_default_cache() {
 }
 
 #[test]
+fn models_rejects_duplicate_llm_pi_ai_entries_for_show_dry_run_and_sync() {
+    for first_provider in ["openai-codex", "unrelated"] {
+        for operation in ["show", "dry-run", "sync"] {
+            let fixture = Fixture::new();
+            let first = PROFILE.replacen("openai-codex:", &format!("{first_provider}:"), 1);
+            let duplicate = format!("{first}{PROFILE}");
+            std::fs::write(&fixture.patch, &duplicate).unwrap();
+            let mut args = vec!["models"];
+            if operation != "show" {
+                args.push("sync");
+            }
+            args.extend(["--profile", "web", "--provider", "openai-codex", "--json"]);
+            if operation == "dry-run" {
+                args.push("--dry-run");
+            }
+            let output = fixture.run(&args, false);
+            assert!(output.status.success());
+            let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+            let profiles = report["profiles"].as_array().unwrap();
+            assert_eq!(profiles.len(), 1, "{first_provider} {operation}");
+            assert!(profiles[0]["skipped"]
+                .as_str()
+                .is_some_and(|reason| reason.contains("multiple llm-pi-ai")));
+            assert_eq!(profiles[0]["written"], false);
+            assert_eq!(
+                std::fs::read_to_string(&fixture.patch).unwrap(),
+                duplicate,
+                "{first_provider} {operation}"
+            );
+        }
+    }
+}
+
+#[test]
 fn models_sync_custom_codex_home_ignores_stale_default_cache() {
     let fixture = Fixture::new();
     let custom_home = fixture.root.join("custom-codex");
@@ -275,5 +309,49 @@ fn models_sync_custom_codex_home_ignores_stale_default_cache() {
         assert_eq!(report["profiles"][0]["written"], false, "{operation}");
         assert!(report["profiles"][0]["skipped"].is_string(), "{operation}");
         assert_eq!(std::fs::read_to_string(&fixture.patch).unwrap(), PROFILE);
+    }
+}
+
+#[test]
+fn models_refuses_uninterpreted_patch_entries_without_hiding_duplicate_plugins() {
+    let cases: Value =
+        serde_json::from_str(include_str!("fixtures/models-entry-shapes.json")).unwrap();
+    for case in cases.as_array().unwrap() {
+        for operation in ["show", "dry-run", "sync"] {
+            let fixture = Fixture::new();
+            let profile = case["profile"].as_str().unwrap();
+            std::fs::write(&fixture.patch, profile).unwrap();
+            let mut args = vec!["models"];
+            if operation != "show" {
+                args.push("sync");
+            }
+            args.extend(["--profile", "web", "--provider", "openai-codex", "--json"]);
+            if operation == "dry-run" {
+                args.push("--dry-run");
+            }
+            let output = fixture.run(&args, false);
+            assert!(output.status.success());
+            let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+            let profiles = report["profiles"].as_array().unwrap();
+            assert_eq!(profiles.len(), 1, "{} {operation}", case["label"]);
+            if case["refuse"] == true {
+                assert!(
+                    profiles[0]["skipped"]
+                        .as_str()
+                        .is_some_and(|reason| !reason.is_empty()),
+                    "{} {operation}: {report}",
+                    case["label"]
+                );
+                assert_eq!(profiles[0]["written"], false);
+                assert_eq!(std::fs::read_to_string(&fixture.patch).unwrap(), profile);
+            } else {
+                assert_eq!(profiles[0]["skipped"], Value::Null);
+                assert_eq!(profiles[0]["added"], json!(["gpt-6.1-sol"]));
+                assert_eq!(profiles[0]["written"], operation == "sync");
+                if operation != "sync" {
+                    assert_eq!(std::fs::read_to_string(&fixture.patch).unwrap(), profile);
+                }
+            }
+        }
     }
 }
