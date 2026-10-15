@@ -84,6 +84,12 @@ composition. Connections and execution remain owned by the original MCP client
 and ToolRuntime. The current guarded launcher rejects this bundle before any
 registration or connection; its audited Native boundary is unchanged.
 
+The optional [PTC catalog bundle](../plugins/rdsh-ptc-catalog/README.md) adds
+scope-bound discovery and a declaration budget to an existing authorized DSH
+PTC composition. It uses the original registry/renderers and public prompt
+waterfall. The guarded rdsh launcher preserves DSH's selected mode and refuses
+this bundle's activation before any registration or prompt wiring.
+
 ## Original-binary discovery (`dsh` name)
 
 When invoked as `dsh`, the lookup order is: `RDSH_ORIG_BIN` (legacy
