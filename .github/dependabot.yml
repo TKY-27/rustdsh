@@ -101,3 +101,11 @@ updates:
       # action release: dependabot tried to raise the MSRV pin from 1.85.0 to a
       # nonexistent 1.120.0 (#442). Keep that pin under manual review.
       - dependency-name: "dtolnay/rust-toolchain"
+  - package-ecosystem: npm
+    directory: /plugins/rdsh-direct-models
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: chore(deps)
+    open-pull-requests-limit: 5
