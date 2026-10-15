@@ -317,14 +317,18 @@ pick() {
   PATH="$MS/shim:$PATH" HOME="$MS/home" DSH_HOME="$MS/dsh" RDSH_NO_CHECKSUM=0 RDSH_RELEASE_DIGESTS="$MS/release-digests.tsv" RDSH_RELEASE_BASE="file://$MS/rel" bash ./install.sh --from-release --prefix="$MS/prefix" "$@" > "$MS/install.log" 2>&1 || { echo "FAIL(exit): install.sh pick"; tail -n 8 "$MS/install.log"; exit 1; }
   "$MS/prefix/rdsh"
 }
+# install.sh checks native musl loaders before the getconf/ldd shims. Keep the
+# GNU controls on GNU hosts and verify that native musl wins on Alpine, etc.
+MS_NEW_GLIBC=gnu
+if [ -e /lib/ld-musl-x86_64.so.1 ] || [ -e /lib/ld-musl-aarch64.so.1 ]; then MS_NEW_GLIBC=musl; fi
 r="$(pick 'echo "glibc 2.41"' 'exit 1')"
-if [ "$r" = 'rdsh fixture gnu' ]; then ok "install: getconf fallback glibc 2.41 picks gnu"; else echo "FAIL: glibc 2.41 picked $r"; exit 1; fi
+if [ "$r" = "rdsh fixture $MS_NEW_GLIBC" ]; then ok "install: getconf fallback glibc 2.41 picks $MS_NEW_GLIBC"; else echo "FAIL: glibc 2.41 picked $r (want $MS_NEW_GLIBC)"; exit 1; fi
 r="$(pick 'echo "glibc 2.31"' 'exit 1')"
 if [ "$r" = 'rdsh fixture musl' ]; then ok "install: getconf fallback glibc 2.31 picks musl"; else echo "FAIL: glibc 2.31 picked $r"; exit 1; fi
 r="$(pick 'exit 1' 'echo "ldd (Debian GLIBC 2.36-9) 2.36"')"
 if [ "$r" = 'rdsh fixture musl' ]; then ok "install: ldd glibc 2.36 below the release floor picks musl"; else echo "FAIL: ldd 2.36 picked $r"; exit 1; fi
 r="$(pick 'exit 1' 'echo "ldd (GNU libc) 2.41"')"
-if [ "$r" = 'rdsh fixture gnu' ]; then ok "install: ldd glibc 2.41 picks gnu"; else echo "FAIL: ldd 2.41 picked $r"; exit 1; fi
+if [ "$r" = "rdsh fixture $MS_NEW_GLIBC" ]; then ok "install: ldd glibc 2.41 picks $MS_NEW_GLIBC"; else echo "FAIL: ldd 2.41 picked $r (want $MS_NEW_GLIBC)"; exit 1; fi
 r="$(pick 'echo "glibc 2.41"' 'exit 1' --musl)"
 if [ "$r" = 'rdsh fixture musl' ]; then ok "install: --musl forces musl"; else echo "FAIL: --musl picked $r"; exit 1; fi
 rm -rf "$MS"
