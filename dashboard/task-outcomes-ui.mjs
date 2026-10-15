@@ -1,4 +1,5 @@
 import { observationView } from "./observations.mjs";
+import { deepLinkButton } from "./deep-link-ui.mjs";
 
 const statusNames = {
   pass: "成功",
@@ -76,7 +77,11 @@ function checkLabel(condition) {
   if (condition.status === "pass") return "成功の報告・検証は未確認";
   return statusNames[condition.status] || "未確認";
 }
-export function createTaskOutcomesPanel(tasks, milestones, { node, api }) {
+export function createTaskOutcomesPanel(
+  tasks,
+  milestones,
+  { node, api, makeDeepLink },
+) {
   let generation = 0;
   let renderedRevision = -1;
   let observationTimer = null;
@@ -243,6 +248,15 @@ export function createTaskOutcomesPanel(tasks, milestones, { node, api }) {
             node("div", label, reference.confirmation_required ? "warn" : "sub"),
           );
         }
+        // #57: task への project deep link は main 側のカード描画へ引き継ぐ。
+        const deepLink = deepLinkButton(
+          node,
+          makeDeepLink,
+          "task",
+          task.id,
+          `タスク ${task.id}`,
+        );
+        if (deepLink) header.append(deepLink);
         card.append(observationDetails);
         const facts = node("dl", undefined, "decision-details");
         for (const [label, value] of [

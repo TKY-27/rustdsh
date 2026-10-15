@@ -101,6 +101,31 @@ try{
   {action:'mark_instruction_resend',command_id:'C1'},
  ]);
  await metricsPanel.evaluate(element=>element.remove());report.flows.push('human metrics UI: selecting each action target enables its button and submits the selected id');
+ await projectPage.context().grantPermissions(['clipboard-read','clipboard-write'],{origin:new URL(runtime.local_url).origin});
+ await projectPage.locator('#tasks-detail').evaluate(e=>e.open=true);
+ await projectPage.locator('#task-T1').getByRole('button',{name:/認証情報を含まないリンクをコピー/}).click();
+ await projectPage.locator('#task-T1').getByText('リンクをコピーしました。認証情報は含まれません。').waitFor();
+ const taskLink=await projectPage.evaluate(()=>navigator.clipboard.readText());
+ const taskLinkUrl=new URL(taskLink);assert.equal(taskLinkUrl.searchParams.get('rdsh_project'),identityAlpha.id);assert.equal(taskLinkUrl.searchParams.get('rdsh_kind'),'task');assert.equal(taskLinkUrl.searchParams.get('rdsh_id'),'T1');assert.equal(taskLinkUrl.hash,'');assert.equal(taskLinkUrl.searchParams.has('key'),false);
+ await projectPage.locator('#question-Q1').getByRole('button',{name:/認証情報を含まないリンクをコピー/}).click();
+ await projectPage.locator('#question-Q1').getByText('リンクをコピーしました。認証情報は含まれません。').waitFor();
+ const questionLink=await projectPage.evaluate(()=>navigator.clipboard.readText());
+ const questionLinkUrl=new URL(questionLink);assert.equal(questionLinkUrl.searchParams.get('rdsh_kind'),'question');assert.equal(questionLinkUrl.searchParams.get('rdsh_id'),'Q1');assert.equal(questionLinkUrl.hash,'');
+ // Open the shareable target before pairing, then authenticate in another tab
+ // on the same project origin. The navigation hint is restored from localStorage;
+ // the copied URL itself contains no browser credential.
+ const pairedContext=await browser.newContext({viewport:report.viewports[0],locale:'ja-JP'});contexts.push(pairedContext);
+ const unauthenticatedPage=await pairedContext.newPage();await unauthenticatedPage.goto(taskLink);
+ await unauthenticatedPage.waitForFunction(()=>localStorage.getItem('rdsh_pending_project_deep_link_v1')!==null);
+ const pairedPage=await pairedContext.newPage();await pairedPage.goto(runtime.browser_url);await pairedPage.locator('#task-T1').waitFor();
+ await pairedPage.waitForFunction(()=>document.querySelector('#tasks-detail')?.open&&document.activeElement?.id==='task-T1');
+ await pairedPage.waitForTimeout(5200);assert.equal(await pairedPage.evaluate(()=>document.activeElement?.id==='task-T1'),true,'a same-revision refresh must preserve deep-link focus');
+ assert.equal(new URL(pairedPage.url()).hash,'');assert.equal(new URL(pairedPage.url()).searchParams.has('rdsh_id'),false);
+ assert.equal(await pairedPage.evaluate(()=>localStorage.getItem('rdsh_pending_project_deep_link_v1')),null);
+ await pairedPage.setViewportSize(report.viewports[1]);await pairedPage.goto(questionLink);await pairedPage.locator('#question-Q1').waitFor();
+ await pairedPage.waitForFunction(()=>document.activeElement?.id==='question-Q1');await check(pairedPage,/dashboard/i);
+ assert.equal(new URL(pairedPage.url()).hash,'');assert.equal(new URL(pairedPage.url()).searchParams.has('rdsh_id'),false);
+ report.flows.push('project deep links: task/question URLs omit auth key; unauthenticated target resumes after pairing and opens exact task; mobile returns to exact question');
  const observedCli=projectPage.locator('#observed-cli-panel');
  assert.equal(await observedCli.count(),1,'the read-only CLI observation panel should remain in a workspace pane');
  assert.equal(await observedCli.locator('#observed-cli-form').count(),1,'the observation registration form should remain available');

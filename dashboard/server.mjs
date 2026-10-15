@@ -81,6 +81,8 @@ const dashboardAssets = new Set([
   "/contract-view.mjs",
   "/causal-timeline-ui.mjs",
   "/notifications-ui.mjs",
+  "/deep-links.mjs",
+  "/deep-link-ui.mjs",
   "/decision-log-ui.mjs",
   "/human-annotations-ui.mjs",
   "/annotation-identifiers.mjs",
@@ -1018,6 +1020,8 @@ export async function startDashboard(options) {
         return json(res, 403, { error: "Harness UI requires its owner session" });
         (route === "/" ||
           route === "/app.mjs" ||
+          route === "/deep-links.mjs" ||
+          route === "/deep-link-ui.mjs" ||
           route === "/human-annotations-ui.mjs" ||
           route === "/annotation-identifiers.mjs" ||
           route === "/observations.mjs" ||
@@ -1164,6 +1168,8 @@ export async function startDashboard(options) {
           "/attention-view.mjs",
           "/devices-ui.mjs",
           "/contract-view.mjs",
+          "/deep-links.mjs",
+          "/deep-link-ui.mjs",
           "/human-annotations-ui.mjs",
           "/annotation-identifiers.mjs",
           "/observations.mjs",

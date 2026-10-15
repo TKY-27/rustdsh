@@ -1,4 +1,5 @@
 import { metricView, observationView, ratioView } from "./observations.mjs";
+import { deepLinkButton } from "./deep-link-ui.mjs";
 import { eventIdentifier, eventTargetId } from "./annotation-identifiers.mjs";
 
 const $ = (id) => document.getElementById(id);
@@ -115,6 +116,8 @@ export function renderReports(
   now = Date.now(),
   sourceEventIds = [],
   onPreviewArtifact = () => {},
+  makeDeepLink = () => {},
+  focusedEventSequence = null,
 ) {
   openObservations = new Set(
     [...document.querySelectorAll("details.observation-details[open]")]
@@ -186,23 +189,32 @@ export function renderReports(
   // Task outcome cards and milestones have a dedicated renderer. This
   // function can run again for the same SSE revision, so it must not replace
   // content owned by that revision-aware renderer.
-  renderEvents(state, now, sourceEventIds, onPreviewArtifact);
+  // #57: その renderer に project deep link の focus 対応を渡す。
+  renderEvents(state, now, sourceEventIds, onPreviewArtifact, makeDeepLink, focusedEventSequence);
   if (activeDisclosure)
     [...document.querySelectorAll("summary[data-observation-id]")]
       .find((summary) => summary.dataset.observationId === activeDisclosure)?.focus();
 }
-// `sourceEventIds` pins the events the update summary cites and
+// `sourceEventIds` pins the events the update summary cites,
 // `onPreviewArtifact` arrives as an argument (not a module global) so the
-// preview button reaches the handler wired by the shell.
+// preview button reaches the handler wired by the shell, and
+// `makeDeepLink` / `focusedEventSequence` focus the deep-linked event.
 function renderEvents(
   state,
   now,
   sourceEventIds = [],
   onPreviewArtifact = () => {},
+  makeDeepLink = () => {},
+  focusedEventSequence = null,
 ) {
+  const visible = state.events.slice(-30);
+  const focused = focusedEventSequence === null
+    ? null
+    : state.events.find((event) => String(event.sequence) === focusedEventSequence);
+  if (focused && !visible.some((event) => event.sequence === focused.sequence))
+    visible.push(focused);
   $("events").replaceChildren(
-    ...state.events
-      .slice(-30)
+    ...visible
       .reverse()
       .map((event) => {
         const element = node("article", undefined, "event");
@@ -231,6 +243,8 @@ function renderEvents(
           observationView(event.title, event.observation, now),
           undefined, String, "event:" + event.sequence,
         ));
+        const link = deepLinkButton(node, makeDeepLink, "event", String(event.sequence), `報告 ${event.sequence}`);
+        if (link) element.append(link);
         return element;
       }),
   );
