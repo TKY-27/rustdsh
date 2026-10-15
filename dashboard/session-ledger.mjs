@@ -19,6 +19,7 @@ import { prepareBudgetAttachment } from "./budget-client.mjs";
 import { prepareModelAttachment } from "./model-runtime.mjs";
 
 export const gpuLeaseProtocol = "rdsh-gpu-leases/1";
+import { preparePlanAttachment } from "./plan-runtime.mjs";
 
 const exec = promisify(execFile);
 const scopeKeys = [
@@ -586,7 +587,25 @@ export async function attachRecordedSession({
           env,
         );
   if (budgetGuard) env = budgetGuard.env;
+  let planGuard;
   let modelGuard;
+  try {
+    planGuard = await preparePlanAttachment(ledger.project, record, env);
+    if (planGuard) env = planGuard.env;
+  } catch (error) {
+    await budgetGuard?.close();
+    throw error;
+  }
+  const closeGuards = async () => {
+    const results = await Promise.allSettled([
+      budgetGuard?.close(),
+      planGuard?.close(),
+      modelGuard?.close(),
+      gpuGuard?.close(),
+    ]);
+    const failure = results.find((result) => result.status === "rejected");
+    if (failure) throw failure.reason;
+  };
   try {
     modelGuard = await prepareModelAttachment(ledger.project, record, env);
     if (modelGuard) env = modelGuard.env;
@@ -620,8 +639,7 @@ export async function attachRecordedSession({
     await history.transition(record.run_id, "starting", "request_recorded");
     await history.commandPhase(commandId, "dispatched");
   } catch (error) {
-    await closeAttachments();
-    await gpuGuard?.close();
+    await closeGuards();
     throw error;
   }
   let processBound = false;
@@ -686,11 +704,10 @@ export async function attachRecordedSession({
     });
     gpuGuard?.connect(adapter);
   } catch (error) {
-    await closeAttachments();
-    await gpuGuard?.close();
+    await closeGuards();
     throw error;
   }
-  if (budgetGuard || modelGuard || gpuGuard) {
+  if (budgetGuard || modelGuard || gpuGuard || planGuard) {
     const originalStop = adapter.stop.bind(adapter);
     adapter.stop = async () => {
       let stopError;
@@ -702,6 +719,7 @@ export async function attachRecordedSession({
       } finally {
         const closed = await Promise.allSettled([
           budgetGuard?.close(),
+          planGuard?.close(),
           modelGuard?.close(),
           gpuGuard?.close(),
         ]);
@@ -749,9 +767,9 @@ export async function attachRecordedSession({
           gpuGuard.lastError = error.code || "gpu_release_unconfirmed";
         }),
       );
-    if (event.type === "process_exit" && (budgetGuard || modelGuard))
+    if (event.type === "process_exit" && (budgetGuard || modelGuard || planGuard))
       exitWrites.pending.push(
-        closeAttachments().catch((error) => {
+        closeGuards().catch((error) => {
           exitWrites.error ||= error;
         }),
       );
@@ -779,6 +797,7 @@ export async function attachRecordedSession({
     await history.bindSession(record.run_id, attached.session_id);
     if (budgetGuard) adapter.nativeBudgetGuard = await budgetGuard.ready();
     if (modelGuard) adapter.nativeModelGuard = await modelGuard.ready(adapter);
+    if (planGuard) adapter.nativePlanGuard = await planGuard.ready(adapter);
     await history.commandPhase(commandId, "acknowledged", "session_attached");
     const confirmed = await ledger.confirm(
       record.run_id,
@@ -803,6 +822,7 @@ export async function attachRecordedSession({
             throw new LedgerError("native_session_changed");
           if (budgetGuard) await budgetGuard.ready();
           if (gpuGuard) await gpuGuard.ready();
+          if (planGuard) await planGuard.ready(adapter);
           return ModelRouting.open(ledger.project).guard(confirmed, adapter);
         },
       ),

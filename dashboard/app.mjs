@@ -14,6 +14,7 @@ import { createUpdateSummary } from "./update-summary.mjs";
 import { renderModelRouting } from "./model-routing-ui.mjs";
 import { renderReviewEvidence } from "./review-evidence-ui.mjs";
 import { renderManagedRunHealth } from "./run-health-ui.mjs";
+import { createPlanPanel } from "./execution-plan-ui.mjs";
 import { createTaskOutcomesPanel } from "./task-outcomes-ui.mjs";
 import { createHumanAnnotationPanel } from "./human-annotations-ui.mjs";
 import { createHumanMetricsPanel } from "./human-metrics-ui.mjs";
@@ -954,8 +955,10 @@ function render(state) {
   $("updated").textContent =
     `最終受信: ${state.updated_at ? new Date(state.updated_at).toLocaleString("ja-JP") : "まだ報告がありません"} · 鮮度は各項目の観測時刻から判定します。累計欄は報告元のAPI換算値です。台帳は出所ごとの報告値です。`;
 }
+const refreshPlans = createPlanPanel($("execution-plans"), api, node);
 async function refreshState() {
   await refreshModelRouting();
+  void refreshPlans();
 }
 let routingRefreshing = false;
 async function refreshModelRouting() {
