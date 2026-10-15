@@ -165,6 +165,9 @@ fn legacy_cache_cannot_promote_an_old_estimate_to_exact() {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_millis() as u64;
+    // `DSH_HOME` is taken verbatim and `TokensCache::key` joins with a
+    // literal "/", so a key built from that same directory plus "/" separators
+    // matches the CLI on every host, Windows backslash paths included.
     let key = format!("{}/sessions/project/one", f.0.join("dsh").display());
     let cache = f.0.join("cache/rdsh/sessions-tokens.json");
     fs::create_dir_all(cache.parent().unwrap()).unwrap();
@@ -174,8 +177,20 @@ fn legacy_cache_cannot_promote_an_old_estimate_to_exact() {
     )
     .unwrap();
     let rows = f.sessions();
-    assert_eq!(rows["sessions"][0]["tokens"], 2048);
-    assert_eq!(rows["sessions"][0]["tokens_exact"], true);
+    let row = &rows["sessions"][0];
+    // The schemaless entry claims 4096 decompressed bytes (1024 tokens). It
+    // must never surface, or it would promote an old estimate to exact.
+    assert_ne!(row["tokens"], 1024, "legacy estimate was promoted: {row}");
+    // Unix re-measures the 8192-byte body exactly. Windows session reads fail
+    // closed in `open_session_file` (a parent junction swapped after
+    // enumeration cannot be opened beneath a trusted handle there), so the row
+    // legitimately stays on the stored-bytes/4 estimate instead.
+    if cfg!(unix) {
+        assert_eq!(row["tokens"], 2048);
+        assert_eq!(row["tokens_exact"], true);
+    } else {
+        assert_eq!(row["tokens_exact"], false);
+    }
 }
 
 #[test]
