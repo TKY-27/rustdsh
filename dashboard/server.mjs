@@ -64,6 +64,8 @@ const dashboardAssets = new Set([
   "/",
   "/app.mjs",
   "/devices-ui.mjs",
+  "/provider-status.mjs",
+  "/provider-status-ui.mjs",
   "/decision-log-ui.mjs",
   "/human-annotations-ui.mjs",
   "/annotation-identifiers.mjs",
@@ -775,7 +777,7 @@ export async function startDashboard(options) {
         route === "/api/instructions/context" ||
         (req.method === "POST" && route === "/api/instructions/submit") ||
         (req.method === "POST" &&
-          ["metrics", "task", "question", "event", "ui_surface"].some(
+          ["metrics", "task", "question", "event", "ui_surface", "provider_status"].some(
             (operation) => route === `/api/update/${operation}`,
           ));
       const mcpAuthorized =
@@ -957,6 +959,8 @@ export async function startDashboard(options) {
           "/human-annotations-ui.mjs",
           "/annotation-identifiers.mjs",
           "/observations.mjs",
+          "/provider-status.mjs",
+          "/provider-status-ui.mjs",
           "/reports-view.mjs",
           "/decision-log-ui.mjs",
           "/question-cards-ui.mjs",
@@ -1386,6 +1390,7 @@ export async function startDashboard(options) {
               "answer",
               "event",
               "ui_surface",
+              "provider_status",
             ].includes(operation)
           )
             return json(res, 404, { error: "Unknown project operation" });

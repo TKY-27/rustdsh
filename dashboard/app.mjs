@@ -19,6 +19,7 @@ import { createHumanMetricsPanel } from "./human-metrics-ui.mjs";
 import { createDecisionLogPanel } from "./decision-log-ui.mjs";
 import { setupObservedCli } from "./observed-cli-ui.mjs";
 import { setupDeviceAccess } from "./devices-ui.mjs";
+import { renderProviderStatuses } from "./provider-status-ui.mjs";
 
 const $ = (id) => document.getElementById(id);
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -572,6 +573,7 @@ function render(state) {
   renderCosts(state);
   renderCatalog();
   renderAgentUi(state);
+  renderProviderStatuses($("provider-status"), state.provider_statuses, node);
   renderBudget($("budget-admission"), state, node);
   renderDecisions(state);
   updateOverview(state);

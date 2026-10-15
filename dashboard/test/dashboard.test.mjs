@@ -206,7 +206,7 @@ test("project state, HTTP/stdio MCP, subscriptions, answers, and auth work toget
     }),
   );
   const listedTools = (await client.listTools()).tools;
-  assert.equal(listedTools.length, 11);
+  assert.equal(listedTools.length, 12);
   assert.ok(listedTools.some((tool) => tool.name === "dashboard_record_review"));
   assert.ok(
     listedTools.some((tool) => tool.name === "dashboard_get_review_evidence"),
