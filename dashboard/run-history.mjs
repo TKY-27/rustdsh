@@ -146,10 +146,15 @@ const hash = (value) =>
   createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const terminal = (state) => state === "succeeded" || state === "failed";
 export class HistoryError extends Error {
-  constructor(code, eventId = null) {
+  constructor(code, eventId = null, details = null) {
     super("Run history: " + code);
     this.code = code;
     this.event_id = eventId;
+    if (details !== null) {
+      this.committed = details.committed;
+      this.event_ids = [...details.event_ids];
+      this.lock_cleanup_unconfirmed = details.lock_cleanup_unconfirmed;
+    }
   }
 }
 function check(condition, code = "invalid_history") {
@@ -290,8 +295,10 @@ function validateData(type, data) {
         "root_identity",
         "root_pid",
       ]) &&
-        uuid(data.owner_id, "owner") &&
-        ["linux_cgroup_v2", "windows_job"].includes(data.kind) &&
+          uuid(data.owner_id, "owner") &&
+        ["linux_cgroup_v2", "linux_systemd_scope", "windows_job"].includes(
+          data.kind,
+        ) &&
         typeof data.kernel_id === "string" &&
         /^[a-z0-9_-]{1,80}$/.test(data.kernel_id) &&
         Number.isSafeInteger(data.root_pid) &&
@@ -628,7 +635,10 @@ export class RunHistory {
         if (error.code === "EEXIST") throw new HistoryError("history_busy");
         throw new HistoryError("history_write_failed");
       }
-      let output;
+      let output,
+        failure = null,
+        committed = false;
+      const committedEventIds = [];
       try {
         this.writerIdentity ||= readProcessIdentity(process.pid);
         const owner = await this.writerIdentity;
@@ -657,6 +667,7 @@ export class RunHistory {
           apply(state, event);
           state.events.push(event);
           added.push(JSON.stringify(event) + "\n");
+          committedEventIds.push(event.event_id);
           return event;
         };
         const recordObservation = async (id, field, data) => {
@@ -689,6 +700,7 @@ export class RunHistory {
             "history_full",
           );
           const journal = await fs.open(this.file, "a", 0o600);
+          let closeFailure = null;
           try {
             let written = 0;
             while (written < bytes.length) {
@@ -697,23 +709,53 @@ export class RunHistory {
               written += result.bytesWritten;
             }
             await journal.sync();
+            committed = true;
           } finally {
-            await journal.close();
+            try {
+              await journal.close();
+            } catch (error) {
+              // A close failure never replaces a write failure with itself.
+              closeFailure = error;
+            }
           }
+          // The bytes are durable once sync returns; a failing handle close
+          // must not report that committed append as a bare write failure.
+          if (closeFailure !== null)
+            throw new HistoryError("history_journal_close_unconfirmed", null, {
+              committed,
+              event_ids: committed ? [...committedEventIds] : [],
+              lock_cleanup_unconfirmed: false,
+            });
         }
+        if (output?.rejected)
+          throw new HistoryError("invalid_transition", output.rejected);
       } catch (error) {
-        if (error instanceof HistoryError) throw error;
-        throw new HistoryError("history_write_failed");
-      } finally {
-        try {
-          await lock.close();
-          await fs.unlink(this.lock);
-        } catch {
-          throw new HistoryError("history_lock_cleanup_unconfirmed");
-        }
+        failure =
+          error instanceof HistoryError
+            ? error
+            : new HistoryError("history_write_failed");
       }
-      if (output?.rejected)
-        throw new HistoryError("invalid_transition", output.rejected);
+      let lockCleanupUnconfirmed = false;
+      try {
+        await lock.close();
+        await fs.unlink(this.lock);
+      } catch {
+        lockCleanupUnconfirmed = true;
+      }
+      if (failure !== null) {
+        if (lockCleanupUnconfirmed) {
+          failure.committed = committed;
+          failure.event_ids = committed ? [...committedEventIds] : [];
+          failure.lock_cleanup_unconfirmed = true;
+        }
+        throw failure;
+      }
+      if (lockCleanupUnconfirmed)
+        throw new HistoryError("history_lock_cleanup_unconfirmed", null, {
+          committed,
+          event_ids: committed ? committedEventIds : [],
+          lock_cleanup_unconfirmed: true,
+        });
       return output;
     });
     this.queue = job.catch(() => {});
