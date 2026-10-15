@@ -1,5 +1,6 @@
 import { renderAttention } from "./attention-view.mjs";
 import { renderReports } from "./reports-view.mjs";
+import { renderTaskContract, renderOperations } from "./contract-view.mjs";
 import { renderQuestionCards } from "./question-cards-ui.mjs";
 import { renderAnswerApplications } from "./answer-applications-ui.mjs";
 import { renderOverview } from "./project-overview.mjs";
@@ -912,6 +913,15 @@ function render(state) {
     previewArtifact,
   );
   renderReviewEvidence($("review-evidence"), state, node);
+  for (const task of state.tasks) {
+    const title = document.getElementById("task-" + task.id)?.children[2];
+    title?.append(renderTaskContract(task, state, node));
+  }
+  renderOperations(state, $("policy-checks"), $("approvals"), {
+    node,
+    api,
+    refreshState,
+  });
   const unanswered = state.questions.filter((question) => question.answer === null);
   renderTaskOutcomes(state);
   const deviceCapabilities = new Set(deviceAccess?.capabilities || []);

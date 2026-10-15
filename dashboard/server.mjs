@@ -15,6 +15,7 @@ import {
   identity,
 } from "./state.mjs";
 import { acquireProjectIdentityLock } from "./project-identity.mjs";
+import { writeOwnerCredentials } from "./private-runtime.mjs";
 import {
   InstructionQueueWorker,
   resolveRdshExecutable,
@@ -25,6 +26,9 @@ import { enableShare, inspectShare } from "./tailscale.mjs";
 import { startHarness, proxyHarness, upgradeHarness } from "./harness.mjs";
 import { EventsHub } from "./webhooks.mjs";
 import { modernMcpHandler } from "./mcp2.mjs";
+import { activeContract, checkContract } from "./contracts.mjs";
+import { checkWorkerStart } from "./enforcement.mjs";
+import { executeSandboxedOperation, probeSandbox } from "./worker-sandbox.mjs";
 import { AnswerApplicationServer } from "./answer-application-server.mjs";
 import { BudgetAdmissionServer } from "./budget-server.mjs";
 import { HumanMetricsStore } from "./human-metrics.mjs";
@@ -72,6 +76,7 @@ const dashboardAssets = new Set([
   "/provider-status-ui.mjs",
   "/run-health-ui.mjs",
   "/execution-plan-ui.mjs",
+  "/contract-view.mjs",
   "/decision-log-ui.mjs",
   "/human-annotations-ui.mjs",
   "/annotation-identifiers.mjs",
@@ -346,6 +351,13 @@ export async function startDashboard(options) {
           createHandoff,
           getHandoff,
           getAcceptance,
+          checkContract: preflight,
+          checkOperation: policyCheck,
+          requestApproval,
+          checkApproval: approvalCheck,
+          claimApproval: approvalClaim,
+          executeApproval,
+          checkWorkerStart: workerStartCheck,
         },
         { getState: visibleState, mutate, presentUi: mutateUiSurface },
         eventsHub,
@@ -477,10 +489,17 @@ export async function startDashboard(options) {
       pid: process.pid,
       port,
       local_url: localUrl,
-      browser_url: browserUrl(localUrl),
-      token,
       mcp_token: mcpToken,
       share,
+    });
+    await writeOwnerCredentials(directory, {
+      schema: 1,
+      kind,
+      project_id: project?.id || null,
+      instance_id: instanceId,
+      browser_url: browserUrl(localUrl),
+      browser_token: browserToken,
+      admin_token: token,
     });
     if (kind === "project") {
       await writeJson(path.join(directory, "mcp-config.json"), {
@@ -553,11 +572,11 @@ export async function startDashboard(options) {
       diagnosticPromise = null;
     }
   }
-  async function mutate(operation, input) {
+  async function mutate(operation, input, authority = "agent") {
     if (!store)
       throw new Error("Project operations are unavailable in Harness mode");
     const task = updateQueue.then(async () => {
-      const state = await store.mutate(operation, input);
+      const state = await store.mutate(operation, input, authority);
       for (const response of live.keys())
         response.write(`event: changed\ndata: ${state.revision}\n\n`);
       for (const { mcp } of sessions.values()) void mcp.notify();
@@ -768,6 +787,81 @@ export async function startDashboard(options) {
     updateQueue = task.catch(() => {});
     return task;
   }
+  async function preflight(input) {
+    // Share the writer queue so the check observes preceding contract changes.
+    const task = updateQueue.then(() => checkContract(store.value, input));
+    updateQueue = task.catch(() => {});
+    return task;
+  }
+  async function policyCheck(input) {
+    const state = await mutate("policy", input);
+    return state.policy_checks.at(-1);
+  }
+  async function requestApproval(input) {
+    const state = await mutate("approval_request", input);
+    return { id: input.id, ...state.approval_requests.find((item) => item.id === input.id).versions.at(-1) };
+  }
+  async function approvalCheck(input) {
+    const state = await mutate("approval_check", input);
+    return state.approval_checks.at(-1);
+  }
+  async function approvalClaim(input) {
+    const state = await mutate("approval_claim", input);
+    return state.approval_checks.at(-1);
+  }
+  async function workerStartCheck(input) {
+    const probe = options.sandboxProbe || probeSandbox;
+    const task = updateQueue.then(() => checkWorkerStart(store.value, input, { probe }));
+    updateQueue = task.catch(() => {});
+    return task;
+  }
+  async function executeApproval(input) {
+    const checked = await approvalCheck(input);
+    if (checked.decision !== "approval_valid") return checked;
+    const probe = options.sandboxProbe || probeSandbox;
+    const sandbox = await probe();
+    if (!sandbox.supported)
+      return { ...checked, decision: "hold", reason: sandbox.reason || "sandbox_probe_failed",
+        execution: "not_started", enforcement: "not_applied", fallback: "disabled" };
+
+    // Persist the one-use start before any tool side effect. A crash or lost
+    // response leaves this attempt consumed and therefore non-replayable.
+    const state = await mutate("approval_start", input);
+    const started = state.approval_checks.at(-1);
+    if (started.decision !== "approval_started") return started;
+    const request = state.approval_requests
+      ?.find((item) => item.id === input.id)?.versions
+      ?.find((item) => item.version === input.request_version);
+    const contract = activeContract(state, input.task_id);
+    let executed;
+    try {
+      executed = await (options.sandboxExecutor || executeSandboxedOperation)({
+        repository: contract?.repository, contract, workerRole: request.worker_role,
+        input: input.operation, evaluated: started.attributes, capability: sandbox,
+      });
+    } catch {
+      executed = { execution: "unknown", reason: "sandbox_executor_failed" };
+    }
+    const execution = ["completed", "failed"].includes(executed.execution)
+      ? executed.execution : executed.execution === "not_started" ? "failed" : "unknown";
+    const reason = /^[a-z][a-z0-9_]{0,119}$/.test(executed.reason || "")
+      ? executed.reason : null;
+    const exitCode = Number.isSafeInteger(executed.exit_code) &&
+      executed.exit_code >= 0 && executed.exit_code <= 255 ? executed.exit_code : null;
+    try {
+      await mutate("approval_finish", { id: input.id, request_version: input.request_version,
+        attempt: input.attempt, execution, reason, exit_code: exitCode });
+    } catch {
+      // Do not permit replay if the result could not be durably recorded.
+      return { ...started, decision: "execution_unknown", reason: "execution_result_not_persisted",
+        execution: "unknown" };
+    }
+    const output = {};
+    for (const key of ["stdout", "stderr", "status", "content_type", "body", "signal"])
+      if (executed[key] !== undefined) output[key] = executed[key];
+    return { ...started, decision: "execution_finished", reason: reason || "execution_finished",
+      execution, exit_code: exitCode, result: output };
+  }
   const server = http.createServer(async (req, res) => {
     res.setHeader("cache-control", "no-store");
     res.setHeader("referrer-policy", "no-referrer");
@@ -801,6 +895,7 @@ export async function startDashboard(options) {
         `Bearer ${token}`,
       );
       const agentRoute =
+        ["/api/contracts/check", "/api/policy/check", "/api/workers/check", "/api/approvals/request", "/api/approvals/check", "/api/approvals/claim", "/api/approvals/execute"].includes(route) ||
         route === "/mcp" ||
         route === "/api/state" ||
         (req.method === "GET" &&
@@ -950,7 +1045,7 @@ export async function startDashboard(options) {
           return json(res, 409, { error: "No owned Harness process" });
         if (!adminAuthorized && !humanAuthorized)
           return json(res, 401, {
-            error: "Human browser or administrator required",
+            error: "Owner browser or administrator required",
           });
         void harness.stop().catch(() => {});
         return json(res, 202, { requested: true, run_id: harness.run_id });
@@ -995,6 +1090,7 @@ export async function startDashboard(options) {
           "/attention.mjs",
           "/attention-view.mjs",
           "/devices-ui.mjs",
+          "/contract-view.mjs",
           "/human-annotations-ui.mjs",
           "/annotation-identifiers.mjs",
           "/observations.mjs",
@@ -1153,6 +1249,45 @@ export async function startDashboard(options) {
           await ExecutionPlans.open(project).stop(input.plan_id);
           return json(res, 200, await ExecutionPlans.open(project).inspect());
         }
+        // The shared 401 gate above authenticates all project checks. Claiming
+        // a retry/cost reservation additionally requires the execution credential.
+        if (req.method === "POST" && route === "/api/contracts/update") {
+          if (!adminAuthorized)
+            return json(res, 403, { error: "Administrator bearer token required" });
+          return json(res, 200, await mutate("contract", await readBody(req), "local_administrator"));
+        }
+        if (req.method === "POST" && route === "/api/contracts/check") {
+          if (!(adminAuthorized || mcpAuthorized || humanAuthorized))
+            return json(res, 403, { error: "Project credential required" });
+          const result = await preflight(await readBody(req));
+          return json(res, result.decision === "within_scope" ? 200 : 409, result);
+        }
+        if (req.method === "POST" && route === "/api/policy/check") {
+          const result = await policyCheck(await readBody(req));
+          return json(res, result.decision === "within_policy" ? 200 : 409, result);
+        }
+        if (req.method === "POST" && route === "/api/approvals/request")
+          return json(res, 200, await requestApproval(await readBody(req)));
+        if (req.method === "POST" && ["/api/approvals/check", "/api/approvals/claim"].includes(route)) {
+          if (route.endsWith("claim") && !mcpAuthorized)
+            return json(res, 403, { error: "Execution bearer token required" });
+          const result = await (route.endsWith("claim") ? approvalClaim : approvalCheck)(await readBody(req));
+          return json(res, result.decision === "approval_valid" ? 200 : 409, result);
+        }
+        if (req.method === "POST" && route === "/api/approvals/execute") {
+          if (!mcpAuthorized)
+            return json(res, 403, { error: "Execution bearer token required" });
+          const result = await executeApproval(await readBody(req, 512 * 1024));
+          return json(res, result.decision === "execution_finished" ? 200 : 409, result);
+        }
+        if (req.method === "POST" && route === "/api/approvals/decide") {
+          if (!humanAuthorized) return json(res, 403, { error: "Owner browser credential required" });
+          return json(res, 200, await mutate("approval_decision", await readBody(req), "browser_owner"));
+        }
+        if (req.method === "POST" && route === "/api/workers/check") {
+          const result = await workerStartCheck(await readBody(req));
+          return json(res, result.decision === "ready" ? 200 : 409, result);
+        }
         if (req.method === "POST" && route?.startsWith("/api/backup/")) {
           if (!adminAuthorized || !directLoopback(req))
             return json(res, 403, {
@@ -1275,7 +1410,7 @@ export async function startDashboard(options) {
         if (req.method === "POST" && route === "/api/decision/cancel") {
           if (!humanAuthorized)
             return json(res, 403, {
-              error: "Human browser credential required",
+              error: "Owner browser credential required",
             });
           const input = await readBody(req);
           return json(
@@ -1288,7 +1423,7 @@ export async function startDashboard(options) {
           if (!humanAnnotations)
             return json(res, 404, { error: "Project annotations are unavailable" });
           if (!humanAuthorized)
-            return json(res, 403, { error: "Human browser credential required" });
+            return json(res, 403, { error: "Owner browser credential required" });
           if (req.method === "GET")
             return json(res, 200, await humanAnnotations.inspect(store.value));
           if (req.method === "POST") {
@@ -1486,6 +1621,8 @@ export async function startDashboard(options) {
         }
         if (req.method === "POST" && route?.startsWith("/api/update/")) {
           const operation = route.slice("/api/update/".length);
+          if (["contract", "policy", "approval_request", "approval_decision", "approval_check", "approval_claim", "approval_start", "approval_finish"].includes(operation))
+            return json(res, 403, { error: "Use the administrator contract endpoint" });
           if (
             ![
               "metrics",
@@ -1561,6 +1698,13 @@ export async function startDashboard(options) {
               getAcceptance,
               presentUi: mutateUiSurface,
               recordReview,
+              checkContract: preflight,
+              checkOperation: policyCheck,
+              requestApproval,
+              checkApproval: approvalCheck,
+              claimApproval: approvalClaim,
+              executeApproval,
+              checkWorkerStart: workerStartCheck,
             });
             const transport = new StreamableHTTPServerTransport({
               sessionIdGenerator: randomUUID,

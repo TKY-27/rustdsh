@@ -1,10 +1,19 @@
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import {
+  createHash,
+  createHmac,
+  randomBytes,
+  randomUUID,
+  timingSafeEqual,
+} from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { normalizeAttention, updateTaskAttention, validateAttentionState } from "./attention.mjs";
 import { identity, stateHome } from "./project-identity.mjs";
+import { prepareContract } from "./contracts.mjs";
+import { evaluateOperation } from "./policy.mjs";
+import { prepareApprovalRequest, decideApproval, claimApproval, checkApproval, startApproval, finishApproval } from "./approvals.mjs";
 import { applyTaskOutcomes, validateTaskOutcomes } from "./task-outcomes.mjs";
 import { normalizeObservation } from "./observations.mjs";
 import {
@@ -95,15 +104,196 @@ export { identity, stateHome };
 export async function writeJson(file, value) {
   await fs.mkdir(path.dirname(file), { recursive: true });
   const temp = `${file}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
-  await fs.writeFile(temp, JSON.stringify(value, null, 2) + "\n", {
-    mode: 0o600,
-  });
-  await fs.rename(temp, file);
+  try {
+    await fs.writeFile(temp, JSON.stringify(value, null, 2) + "\n", {
+      mode: 0o600,
+    });
+    await fs.rename(temp, file);
+  } catch (error) {
+    await fs.rm(temp, { force: true }).catch(() => {});
+    throw error;
+  }
 }
+
+function stateIntegrityKeyPath(project) {
+  return path.join(project.directory, "state-integrity.key");
+}
+
+function stateIntegrityMarkerPath(project) {
+  return path.join(project.directory, "state-integrity.enabled");
+}
+
+function stateIntegrityMigrationPath(project) {
+  return path.join(project.directory, "state-integrity.pending");
+}
+
+async function fileExists(file) {
+  try {
+    await fs.access(file);
+    return true;
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+    return false;
+  }
+}
+
+function statePayloadDigest(value) {
+  const { state_auth: _stateAuth, ...payload } = value;
+  return createHash("sha256").update(JSON.stringify(payload)).digest("hex");
+}
+
+async function readIntegrityMigration(project) {
+  let value;
+  try {
+    value = JSON.parse(
+      await fs.readFile(stateIntegrityMigrationPath(project), "utf8"),
+    );
+  } catch (error) {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  }
+  const keys = Object.keys(value || {}).sort();
+  if (
+    keys.join(",") !== "project_id,schema,state_sha256" ||
+    value.schema !== 1 ||
+    value.project_id !== project.id ||
+    !/^[0-9a-f]{64}$/.test(value.state_sha256 || "")
+  )
+    throw new Error("Dashboard state integrity migration record is invalid");
+  return value;
+}
+
+async function writeIntegrityMigration(project, value) {
+  const record = {
+    schema: 1,
+    project_id: project.id,
+    state_sha256: statePayloadDigest(value),
+  };
+  await writeJson(stateIntegrityMigrationPath(project), record);
+  return record;
+}
+
+async function writeStateIntegrityMarker(project) {
+  const file = stateIntegrityMarkerPath(project);
+  try {
+    await fs.writeFile(file, `${project.id}\n`, { flag: "wx", mode: 0o600 });
+  } catch (error) {
+    if (error.code !== "EEXIST") throw error;
+  }
+}
+
+async function loadStateIntegrityKey(
+  project,
+  { hadStateSeal, stateExists, migrationPending },
+) {
+  const file = stateIntegrityKeyPath(project);
+  try {
+    const key = await fs.readFile(file);
+    if (key.byteLength !== 32)
+      throw new Error("Dashboard state integrity key is invalid");
+    return { key, existed: true };
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+    if (hadStateSeal || (stateExists && !migrationPending))
+      throw new Error("Dashboard state integrity key is missing; refusing state");
+  }
+  await fs.mkdir(project.directory, { recursive: true });
+  const generated = randomBytes(32);
+  try {
+    await fs.writeFile(file, generated, { flag: "wx", mode: 0o600 });
+    return { key: generated, existed: false };
+  } catch (error) {
+    if (error.code !== "EEXIST") throw error;
+    const key = await fs.readFile(file);
+    if (key.byteLength !== 32)
+      throw new Error("Dashboard state integrity key is invalid");
+    return { key, existed: true };
+  }
+}
+
+async function persistStateIntegrityKey(project, key) {
+  const file = stateIntegrityKeyPath(project);
+  await fs.mkdir(project.directory, { recursive: true });
+  try {
+    await fs.writeFile(file, key, { flag: "wx", mode: 0o600 });
+  } catch (error) {
+    if (error.code !== "EEXIST") throw error;
+    const existing = await fs.readFile(file);
+    if (
+      existing.byteLength !== key.byteLength ||
+      !timingSafeEqual(existing, key)
+    )
+      throw new Error("Dashboard state integrity key changed; refusing state");
+  }
+}
+
+function stateMac(value, key) {
+  const { state_auth: _stateAuth, ...payload } = value;
+  return createHmac("sha256", key).update(JSON.stringify(payload)).digest("hex");
+}
+
+function sealState(value, key) {
+  delete value.state_auth;
+  value.state_auth = { schema: 1, mac: stateMac(value, key) };
+  return value;
+}
+
+function verifyStateSeal(value, key) {
+  const actual = value.state_auth?.mac;
+  if (value.state_auth?.schema !== 1 || !/^[0-9a-f]{64}$/.test(actual || ""))
+    return false;
+  const expected = stateMac(value, key);
+  return timingSafeEqual(Buffer.from(actual, "hex"), Buffer.from(expected, "hex"));
+}
+
+// An authorized state transformation (for example an explicit migration) can
+// change the sealed payload. Re-sign it with the existing project key so the
+// seal keeps proving integrity instead of refusing the migrated state.
+export async function resealStoredState(project, value) {
+  if (!value || typeof value !== "object" || !Object.hasOwn(value, "state_auth"))
+    return value;
+  const key = await fs.readFile(stateIntegrityKeyPath(project));
+  if (key.byteLength !== 32)
+    throw new Error("Dashboard state integrity key is invalid");
+  return sealState(value, key);
+}
+
+function validateStoredState(value, project) {
+  if (
+    !value ||
+    typeof value !== "object" ||
+    Array.isArray(value) ||
+    value.project?.id !== project.id ||
+    ![1, 2].includes(value.schema) ||
+    (value.schema === 2 && !Array.isArray(value.changes))
+  )
+    throw new Error("Dashboard state belongs to a different project or version");
+  if (value.project.root !== project.root || value.project.name !== project.name)
+    value.project = {
+      ...value.project,
+      root: project.root,
+      name: project.name,
+    };
+  validateAttentionState(value);
+  validateQuestionContracts(value);
+  validateAnswerApplications(value);
+  validateInstructions(value);
+  validateCostLedger(value);
+  validateBudgetAdmission(value);
+  validateTaskOutcomes(value);
+  validateUiSurfaces(value);
+  validateDecisionLog(value);
+  if (value.profile_catalog !== undefined)
+    validateProfileCatalog(value.profile_catalog);
+  validateProviderStatuses(value);
+  validateRestoredHistory(value);
+}
+
 export class ProjectStore {
-  constructor(project, value, { instructionQueueWorker } = {}) {
+  constructor(project, value, { integrityKey, instructionQueueWorker } = {}) {
     this.project = project;
     this.value = value;
+    this.integrityKey = integrityKey;
     this.instructionQueueWorker = instructionQueueWorker || null;
     this.historyIds = validateRestoredHistory(value);
     this.protectedHistory = freezeHistory(value.history_backups);
@@ -122,12 +312,13 @@ export class ProjectStore {
       if (error.code !== "ENOENT") throw error;
     }
     let value;
+    const stateFile = path.join(project.directory, "state.json");
+    let stateExists = true;
     try {
-      value = JSON.parse(
-        await fs.readFile(path.join(project.directory, "state.json"), "utf8"),
-      );
+      value = JSON.parse(await fs.readFile(stateFile, "utf8"));
     } catch (e) {
       if (e.code !== "ENOENT") throw e;
+      stateExists = false;
       value = {
         schema: 1,
         project: { id: project.id, name: project.name, root: project.root },
@@ -135,46 +326,117 @@ export class ProjectStore {
         updated_at: null,
         metrics: {},
         tasks: [],
+        contracts: [],
         questions: [],
         events: [],
         feedback: [],
         profile_catalog: emptyProfileCatalog(),
       };
     }
-    if (
-      value.project.id !== project.id ||
-      ![1, 2].includes(value.schema) ||
-      (value.schema === 2 && !Array.isArray(value.changes))
-    )
-      throw new Error(
-        "Dashboard state belongs to a different project or version",
-      );
-    validateAttentionState(value);
-    if (
-      value.project.root !== project.root ||
-      value.project.name !== project.name
-    )
-      value.project = {
-        ...value.project,
-        root: project.root,
-        name: project.name,
-      };
-    validateQuestionContracts(value);
-    validateAnswerApplications(value);
-    validateInstructions(value);
-    validateCostLedger(value);
-    validateBudgetAdmission(value);
-    validateUiSurfaces(value);
-    validateDecisionLog(value);
-    if (value.profile_catalog !== undefined)
-      validateProfileCatalog(value.profile_catalog);
-    validateTaskOutcomes(value);
-    validateProviderStatuses(value);
-    return new ProjectStore(project, value, options);
+    const hadStateSeal = Boolean(value?.state_auth);
+    let migration = await readIntegrityMigration(project);
+    const markerExists = await fileExists(stateIntegrityMarkerPath(project));
+    const keyExists = await fileExists(stateIntegrityKeyPath(project));
+    if (!stateExists && (markerExists || migration))
+      throw new Error("Dashboard state is missing; refusing to recreate state");
+
+    if (hadStateSeal) {
+      const keyState = await loadStateIntegrityKey(project, {
+        hadStateSeal: true,
+        stateExists,
+        migrationPending: Boolean(migration),
+      });
+      if (!keyState.existed || !verifyStateSeal(value, keyState.key))
+        throw new Error("Dashboard state integrity check failed; refusing state");
+      validateStoredState(value, project);
+      await writeStateIntegrityMarker(project);
+      if (migration)
+        await fs.rm(stateIntegrityMigrationPath(project), { force: true });
+      return new ProjectStore(project, value, { ...options, integrityKey: keyState.key });
+    }
+
+    if (stateExists) {
+      if (markerExists)
+        throw new Error("Dashboard state integrity seal is missing; refusing state");
+      if (migration) {
+        if (migration.state_sha256 !== statePayloadDigest(value))
+          throw new Error("Dashboard state migration check failed; refusing state");
+      } else {
+        if (keyExists)
+          throw new Error("Dashboard state integrity seal is missing; refusing state");
+        validateStoredState(value, project);
+        migration = await writeIntegrityMigration(project, value);
+      }
+      validateStoredState(value, project);
+      const keyState = await loadStateIntegrityKey(project, {
+        hadStateSeal: false,
+        stateExists: true,
+        migrationPending: true,
+      });
+      sealState(value, keyState.key);
+      await writeJson(stateFile, value);
+      await writeStateIntegrityMarker(project);
+      await fs.rm(stateIntegrityMigrationPath(project), { force: true });
+      return new ProjectStore(project, value, { ...options, integrityKey: keyState.key });
+    }
+
+    if (migration)
+      throw new Error("Dashboard state migration record has no state to recover");
+    const keyState = await loadStateIntegrityKey(project, {
+      hadStateSeal: false,
+      stateExists: false,
+      migrationPending: false,
+    });
+    validateStoredState(value, project);
+    sealState(value, keyState.key);
+    return new ProjectStore(project, value, { ...options, integrityKey: keyState.key });
   }
-  async mutate(operation, input) {
+  async mutate(operation, input, authority = "agent") {
     const next = this.clone();
-    applyOperation(next, operation, input);
+    if (operation === "contract") {
+      if (authority !== "local_administrator")
+        throw new Error("Only the local administrator can change a task contract");
+      const version = await prepareContract(next, input);
+      next.contracts ||= [];
+      let history = next.contracts.find((item) => item.task_id === input.task_id);
+      if (!history) {
+        history = { task_id: input.task_id, versions: [] };
+        next.contracts.push(history);
+      }
+      history.versions.push(version);
+    } else if (operation === "approval_request") {
+      const version = await prepareApprovalRequest(next, input);
+      next.approval_requests ||= [];
+      let history = next.approval_requests.find((item) => item.id === input.id);
+      if (!history) {
+        history = { id: input.id, versions: [] };
+        next.approval_requests.push(history);
+      }
+      history.versions.push(version);
+    } else if (operation === "approval_decision") {
+      decideApproval(next, input, authority);
+    } else if (["approval_claim", "approval_check", "approval_start"].includes(operation)) {
+      const result = operation === "approval_claim" ? await claimApproval(next, input)
+        : operation === "approval_start" ? await startApproval(next, input)
+          : await checkApproval(next, input);
+      next.approval_checks ||= [];
+      next.approval_checks.push({ checked_at: new Date().toISOString(), ...result });
+      next.approval_checks = next.approval_checks.slice(-1000);
+    } else if (operation === "approval_finish") {
+      const result = finishApproval(next, input);
+      next.approval_checks ||= [];
+      next.approval_checks.push({ checked_at: new Date().toISOString(), ...result });
+      next.approval_checks = next.approval_checks.slice(-1000);
+    } else if (operation === "policy") {
+      const result = await evaluateOperation(next, input);
+      next.policy_checks ||= [];
+      next.policy_checks.push({
+        id: `policy_${next.revision + 1}`, checked_at: new Date().toISOString(), ...result,
+      });
+      next.policy_checks = next.policy_checks.slice(-1000);
+    } else {
+      applyOperation(next, operation, input);
+    }
     validateInstructions(next);
     validateCostLedger(next);
     validateTaskOutcomes(next);
@@ -284,14 +546,28 @@ export class ProjectStore {
       profile_save: "dashboard.profile.updated",
       profile_activate: "dashboard.profile.activated",
       provider_status: "dashboard.provider_status.updated",
+      contract: "dashboard.contract.updated",
+      policy: "dashboard.policy.checked",
+      approval_request: "dashboard.approval.requested",
+      approval_decision: "dashboard.approval.decided",
+      approval_claim: "dashboard.approval.claimed",
+      approval_check: "dashboard.approval.checked",
+      approval_start: "dashboard.approval.started",
+      approval_finish: "dashboard.approval.finished",
     };
     const summary =
       operation === "answer"
         ? input.answer
         : operation === "question"
           ? input.question || input.cancel_reason
-              : operation === "provider_status"
-                ? `${input.provider_id}/${input.scope_id} provider status`
+          : operation === "contract"
+            ? "タスク契約を更新"
+            : operation === "policy"
+              ? "操作構造を照合"
+              : operation?.startsWith("approval_")
+                ? "操作承認の台帳を更新"
+                : operation === "provider_status"
+                  ? `${input.provider_id}/${input.scope_id} provider status`
                 : input.title || "指標を更新";
     if (operation) {
       next.changes ||= [];
@@ -305,7 +581,8 @@ export class ProjectStore {
           entity_id:
             operation === "provider_status"
               ? `${input.provider_id}/${input.scope_id}`
-              : input.id ||
+              : input?.id ||
+                input?.task_id ||
                 (operation === "decision_log" ? input.subject || "" : ""),
           summary: String(summary).slice(0, 1000),
         },
@@ -316,12 +593,18 @@ export class ProjectStore {
         next.changes = next.changes.slice(-10000);
       }
     }
+    sealState(next, this.integrityKey);
+    await persistStateIntegrityKey(this.project, this.integrityKey);
     await writeJson(path.join(this.project.directory, "state.json"), next);
+    // The atomic state rename is the commit point. Keep this store aligned
+    // with durable state before writing the recoverable integrity marker, so
+    // a marker write failure cannot make a later mutation overwrite this one.
     if (historyChanged) {
       this.protectedHistory = freezeHistory(next.history_backups);
       this.historyIds = historyIds;
     }
     this.value = next;
+    await writeStateIntegrityMarker(this.project);
     return next;
   }
   async mutateBudget(operation, input) {
@@ -364,7 +647,8 @@ function freezeHistory(value) {
   return value;
 }
 export function publicState(value, observations, deliveries, budgetJobs) {
-  const { changes, ...visible } = value;
+  const { changes, state_auth: _stateAuth, ...visible } = value;
+
   visible.tasks = publicDecisionReferences(value);
   if (value.decision_log) {
     visible.decision_log = {
@@ -380,8 +664,7 @@ export function publicState(value, observations, deliveries, budgetJobs) {
       })),
     };
   }
-  visible.provider_statuses ||= [];
-  if (value.cost_ledger) visible.cost_ledger = publicCostLedger(value);
+  visible.provider_statuses ||= [];  if (value.cost_ledger) visible.cost_ledger = publicCostLedger(value);
   if (value.budget_admission)
     visible.budget_admission = publicBudgetAdmission(value, budgetJobs);
   visible.input_queue_revision = queueRevision(value);

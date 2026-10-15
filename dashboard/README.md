@@ -71,7 +71,7 @@ before stopping the live owned Harness run.
 
 | Mode      | Purpose                                                    | Data source                                      |
 | --------- | ---------------------------------------------------------- | ------------------------------------------------ |
-| `project` | Project metrics, tasks, questions, human answers, progress | 12 project-scoped MCP tools                      |
+| `project` | Project metrics, tasks, questions, human answers, progress | 19 project-scoped MCP tools                      |
 | `harness` | Launch and open the original DeepSeek Harness Web UI       | A separately managed `dsh --profile web` process |
 
 Both bind to loopback and can use **Tailscale Serve** for private HTTPS access.
@@ -305,6 +305,39 @@ configuration after a restart, because the bearer key rotates.
 | `dashboard_present_ui`             | Present structured UI a human can act on         |
 | `dashboard_record_review`          | Store a version-bound independent-review report  |
 | `dashboard_get_review_evidence`    | Read review reports and freshness status         |
+`runtime.json` は MCP 用の `mcp_token` と接続情報を保持し、管理 token と
+ブラウザー鍵は `owner-credentials.json` に分けて保存します。stdio MCP は
+`runtime.json` だけを読み、管理コマンドとブラウザー起動だけが別ファイルを開きます。
+秘密を用途間で使い回しません。ブラウザー資格情報は所有者セッションの所持を示すだけで、
+特定の人の身元を証明しません。同じOSアカウントで任意コードを実行できるプロセスからの
+分離境界でもありません。POSIXでは秘密ファイルを0600で作成し、Windowsでは
+dashboard state directoryのACLを継承します。
+
+`state.json` にはHMAC sealを付け、状態変更のたびに検証情報を更新します。
+`state-integrity.key` は状態ファイルと分けて0600で保存し、`state-integrity.enabled` を
+初期化マーカーとして残します。起動時にsealの欠落・不一致や鍵の欠落を検出するとstateを
+拒否します。既存schema-1 stateは、構造検証後に初回sealを
+付けて移行します。これはstateへのMCP/API経由の未認可編集や、鍵を伴わない保存データの
+改変を検出します。同じOSアカウントの任意コードは鍵も読めるため、その脅威モデルへの
+改ざん防止や人間の身元確認を保証しません。
+
+| Tool                                     | Effect                                                                      |
+| ---------------------------------------- | --------------------------------------------------------------------------- |
+| `dashboard_update_metrics`               | Report measured cumulative snapshots                                        |
+| `dashboard_upsert_task`                  | Create/update a task by ID                                                  |
+| `dashboard_ask_question`                 | Ask a human a question with a unique ID                                     |
+| `dashboard_publish_event`                | Report progress or an artifact reference                                    |
+| `dashboard_get_feedback`                 | Read durable answers after a sequence cursor                                |
+| `dashboard_get_state`                    | Read this project's current state                                           |
+| `dashboard_check_task_contract`          | Preflight declared repo/cwd/write paths against a versioned task contract   |
+| `dashboard_check_operation`              | Parse/audit explicit tool attributes; keep execution on hold                |
+| `dashboard_request_approval`             | Create a pending request bound to one operation and its limits              |
+| `dashboard_check_approval`               | Match a human grant to the current operation and next attempt               |
+| `dashboard_claim_approval`               | Atomically reserve one approved attempt and declared cost                   |
+| `dashboard_execute_approved_operation`   | Consume one approved attempt and execute it in the probed OS sandbox        |
+| `dashboard_create_handoff`               | Save a source-linked snapshot for one task                                  |
+| `dashboard_get_handoff`                  | Read the latest snapshot and source freshness                               |
+| `dashboard_check_worker_start`           | Resolve requested permissions and hold startup without an enforcing adapter |
 
 Example tool arguments:
 
@@ -611,6 +644,317 @@ design proposal. Producers remain the existing MCP tools and HTTP reporting API;
 this adds no automatic Harness monitoring. Dependency execution (#15), question
 contracts (#40), answer application (#41), and notification delivery (#56) remain
 separate work.
+## Versioned task contracts (P0 foundation, Issue #12)
+
+Current-main integration, fresh tests, and real browser evidence are recorded in
+[the task-contract re-review](../docs/evidence/task-contract-rereview.md).
+
+Create the task first, then save its contract with the local administrator CLI:
+
+```sh
+rdsh-dashboard set-contract --project /path/to/repo --file contract.json
+```
+
+On Windows, use absolute native paths (JSON backslashes must be escaped).
+The dashboard must already be running. This command uses its local administrator
+credential internally; do not copy the credential into the contract or arguments.
+Use test directories and `--no-tailscale` for local validation.
+
+```json
+{
+  "task_id": "M3.6",
+  "expected_version": 0,
+  "purpose": "Validate the launcher locally",
+  "repository": "/path/to/repo",
+  "allowed_scope": "Edit source and local tests only",
+  "write_roots": ["/path/to/repo/src", "/path/to/repo/tests"],
+  "forbidden_actions": ["No remote push, publication, or credential changes"],
+  "completion_conditions": ["Affected tests pass and the change is reviewed"],
+  "change_reason": "Initial task scope"
+}
+```
+
+`expected_version` is zero for creation and the current version for an update.
+The server serializes updates and rejects a stale version. All versions, change
+reasons and timestamps remain in project state; task reports, questions, answers
+and conversation summaries never replace the contract. The task row displays the
+current version and its history. MCP clients read the same history with
+`dashboard_get_state`, including after restart. Existing schema-1 state remains
+readable; tasks without contracts are shown as unset and preflight blocks them.
+
+Contract versions are retained without a count limit and each update rewrites the
+state file. Large histories increase storage and update cost. Automatic truncation
+would discard the required scope-change audit; plan an archival/migration design
+before adopting frequent contract revisions. Approval request/decision histories
+are also retained without automatic truncation; recent check logs are bounded.
+
+Only `POST /api/contracts/update` with the local administrator bearer credential
+can save a contract. Browser and MCP credentials cannot change it; there is no
+MCP contract mutation tool. This is the existing browser-owner credential boundary,
+not proof of a particular human's identity. The MCP server does not open the separate
+owner credential file, but a process running as the same OS user may read it. Each change marks previous approvals as
+requiring revalidation; no answer is converted to an execution approval. The
+approval ledger below implements declared scope/retry matching; execution adapter
+integration remains required.
+
+Before an operation, call `dashboard_check_task_contract` with:
+
+```json
+{
+  "task_id": "M3.6",
+  "contract_version": 1,
+  "repository": "/path/to/repo",
+  "cwd": "/path/to/repo",
+  "write_paths": ["src/main.rs"]
+}
+```
+
+The corresponding HTTP endpoint is `POST /api/contracts/check`. `within_scope`
+(HTTP 200) means only that these declared paths passed preflight. `block` or
+`unparsed` (HTTP 409) must stop the caller. The stdio and HTTP MCP routes return
+the same structured decision. Checks do not write state or read file contents.
+The read-only check intentionally accepts administrator, MCP and human browser
+project credentials, matching access to project state; unauthenticated requests
+are rejected. Browser access does not grant contract mutation or operation execution.
+They require the active version and project repository, check cwd containment,
+and check both lexical and resolved write destinations. Empty `write_roots` means
+no writes. Roots must exist when saved; a new write leaf may be absent. Escaping,
+retargeted and dangling symlinks/junctions fail closed. Parent traversal and
+ambiguous Windows device/ADS/drive-relative paths are unsupported. Diagnostics
+return fixed reason codes without echoing supplied paths or command text.
+
+This is an opt-in preflight boundary, not an execution grant or OS sandbox.
+`allowed_scope`, `forbidden_actions` and `completion_conditions` are descriptive;
+they are saved and displayed but are not parsed as executable policy. Commands,
+read paths, network destinations and shell syntax are not evaluated; supplying
+unknown fields returns `unparsed`. The existing launcher and original DSH tool
+execution do not call this check automatically. Adapter integration, structured
+tool/command policy (Issue #29), approval matching (Issue #30), input provenance
+(Issue #32) and actual sandbox enforcement (Issue #33) are needed before expanding
+execution permissions. Filesystem or contract changes after preflight can
+invalidate a result; recheck at use, and rely on an execution sandbox for enforcement.
+
+### Structured operation policy (Issue #29 foundation)
+
+Contracts may add `operation_policy` with `schema: 1`, `read_roots`, `executables`
+and `network_origins`. Omission grants no read/command/network rights in this
+structural layer. Write roots remain the contract's `write_roots`. Read roots must
+be existing directories inside the project. Each executable rule has an absolute
+existing `file` and an exact `args` array; the stored rule retains the argument
+count and SHA-256 digest, without raw argument values. Network rules are exact
+HTTPS origins without credentials, paths, queries or fragments.
+
+`dashboard_check_operation` (or `POST /api/policy/check`) accepts task ID, contract
+version, repository and this explicit operation envelope:
+
+```json
+{
+  "schema": "rdsh.operation.v1",
+  "tool_name": "file.write",
+  "tool_input": {"cwd": "/path/to/repo", "path": "src/new.txt", "content": "fixture"}
+}
+```
+
+Supported tool input schemas are:
+
+| Tool | Required input fields |
+| --- | --- |
+| `file.read` | `cwd`, `path` (existing regular file) |
+| `file.write` | `cwd`, `path`, `content` (at most 64 KiB) |
+| `process.exec` | `cwd`, `executable` (absolute file), `args` (exact direct argv) |
+| `network.request` | `cwd`, `url` (HTTPS), `method`, `body` (at most 64 KiB) |
+
+Unknown tools/fields, raw shell commands, recognized shell executables, ambiguous
+paths and unresolved inputs return `unparsed`. This does not infer a tool's
+effects from words in its text. Path, cwd, executable/argv and origin mismatches
+return `block`. Only supported attributes inside the current policy return
+`within_policy`; execution still returns `hold`. These are rdsh's declared input
+schemas, not claims that external CLI tools are already adapted.
+
+The latest 1,000 checks are durable and displayed separately from the contract.
+Reasons are fixed codes; bodies, URL queries and raw argument values are omitted
+from audit state. Digests bind data without duplicating it; hashes are not secret
+storage or encryption. File metadata and real paths are inspected, file contents
+are never read. The existing Rust pattern guard remains independent and is not
+called by this layer. Responses explicitly identify pattern as `not_evaluated`,
+structure as the decision, and enforcement as `not_applied`. No declared command
+or network operation is executed. Automatic CLI tool interception, shell
+semantics, dynamic subprocess effects and OS enforcement remain unconnected.
+
+### Approval ledger (Issue #30 foundation)
+
+General question answers remain feedback. They never grant operation approval.
+Project credentials may inspect approval checks; only the execution/MCP bearer
+may claim retry/cost reservations over HTTP. Administrator and browser credentials
+cannot consume execution attempts. The shared HTTP authentication gate returns
+401 for unauthenticated checks; human grant/reject/revoke remains a separate gate.
+Create a request with `dashboard_request_approval` or `POST /api/approvals/request`:
+
+```json
+{
+  "id": "request-1", "expected_version": 0,
+  "task_id": "M3.6", "contract_version": 1, "repository": "/path/to/repo",
+  "run_id": "run-1", "command_id": "command-1",
+  "operation": {
+    "schema": "rdsh.operation.v1", "tool_name": "file.write",
+    "tool_input": {"cwd": "/path/to/repo", "path": "src/new.txt", "content": "fixture"}
+  },
+  "limits": {"max_cost_usd": 1, "max_attempts": 2},
+  "expires_at": "2026-10-06T00:00:00.000Z",
+  "source_ref": "request-artifact:command-1"
+}
+```
+
+Replace the example expiry with a future UTC ISO timestamp within seven days.
+Only an operation already within the current structured policy can be requested.
+Each request version records project/task/contract, run/command, resolved target,
+operation/data digest, limits, expiry and a reference to the original request.
+The reference is untrusted display data; inspect the original request before
+granting. Raw operation bodies, URL queries and argv values are not copied to the
+ledger. Revisions require `expected_version` and always start pending; old versions
+remain readable and their grants cannot authorize the new version.
+
+Use the browser's dedicated approval buttons to grant, reject or revoke that
+request version. Only the browser-owner credential can call
+`POST /api/approvals/decide` with `id`, `request_version`, `decision`.
+MCP and administrator credentials cannot grant approval; generic update routes
+cannot bypass this API boundary. The approver is recorded as the `dashboard_owner`
+role with `browser_owner_credential`, not as a verified named person. Decision history is retained.
+The approval row shows current decisions/reservations and expandable past request
+versions, including their scopes, decisions and uses. Past versions have no action
+buttons and cannot authorize the current request.
+
+Check or claim with the same task/repository/run/command/operation plus `id`,
+`request_version`, `attempt` (starting at one) and `cost_usd`. A check reserves
+nothing. A claim serializes revalidation and reservation: only the next attempt
+within `max_attempts` and the cumulative declared cost is accepted. Costs have
+micro-dollar precision and are declarations, not measured billing. Changed
+scope/data/context, expired/revoked/rejected/pending requests and replayed attempts
+fail closed. Use a new request version and obtain a new grant for changed limits
+or operation data. Latest checks and all request versions survive restart.
+
+HTTP check/claim returns 200 for `approval_valid`, otherwise 409; MCP returns the
+same structured result. A valid claim **still returns `execution: hold`** and
+`enforcement: not_applied`; its use record is `execution: not_started`. Claims
+reserve an attempt and declared cost but do not run operations. The separate
+`dashboard_execute_approved_operation` tool rechecks and consumes the approval,
+then executes the exact operation through the sandbox below. A crash after the
+durable start consumes that attempt and cannot be replayed. Declared cost remains
+an approval limit, not measured billing.
+
+### Sandboxed approved operations (Issue #33)
+
+`dashboard_check_worker_start` (`POST /api/workers/check`) accepts `task_id`,
+`contract_version`, `repository`, `run_id`, `worker_role` (`review` or
+`implementation`). It verifies the current contract and runs a real sandbox
+probe. A ready response means the Linux x64 Bubblewrap plus seccomp profile is
+available; it does not start an LLM worker or grant an operation approval.
+Unsupported platforms and failed probes return a hold with no fallback.
+
+`dashboard_execute_approved_operation` is the only operation execution path in
+this dashboard. It requires a fresh human grant for the exact task, role,
+operation, run, command, attempt and declared cost. The attempt is durably marked
+started before side effects; if the result cannot be recorded, it remains spent.
+Review workers can only use `file.read`. Implementation workers are confined to
+the contract's read/write roots, exact executable-and-argv digest, or exact
+HTTPS origin. They cannot widen roots or provide their own sandbox settings.
+
+Filesystem and process operations run in a Bubblewrap mount, PID, user and
+network namespace with dropped capabilities, resource limits and a seccomp
+filter. Only declared roots are mounted; read roots are read-only and write roots
+are writable. Pinned directory and executable descriptors are passed with
+Bubblewrap's fd mount options, which close the source descriptors after mounting.
+Nested mount points, symlinks, hardlinks and special files already present in
+operation roots are rejected.
+Child processes inherit the same namespace, limits and seccomp filter. Network
+requests go through a separate HTTPS broker that pins a resolved public IPv4,
+rejects private/reserved or mixed DNS results, and does not follow redirects.
+Operation output is returned to the caller but not stored in the approval ledger.
+
+This executor applies only to operations explicitly routed through the dashboard
+MCP/API. It does not start a worker, intercept arbitrary DSH tools, or protect
+against another host process concurrently modifying a declared root or changing
+its mount table.
+Direct DSH tool dispatch remains denied by the guard described below. On Windows
+and other unsupported environments, execution stays on hold; there is no
+unsandboxed fallback.
+
+### DSH operation boundary (Issues #29/#30/#32/#33, partial)
+
+This is a host-invoked plugin API, not an active product integration. The DSH
+launcher, MCP entrypoint and existing tool workflows do not attach it
+automatically; a host must add the plugin in its own code and keep the protected
+context dedicated.
+
+`dsh-guard.mjs` exposes a programmatic Cordis plugin (`apply`, `inject: ["tools"]`)
+and `attachDshGuard(ctx, config)`. Attach it to a dedicated DSH context with the
+real `ToolRuntime` already registered, before starting workers or invoking tools:
+
+```js
+const guard = attachDshGuard(ctx, {
+  task: { task_id, contract_version, repository, run_id, worker_role },
+  readState: async () => currentProjectState,
+  recordCheck: async (report) => durableHostAudit(report),
+});
+const startup = await guard.ready();
+// This release always holds startup: do not start the protected worker.
+```
+
+The host owns state freshness, serialized state access, durable audit and the
+entire protected context's lifetime. Missing callbacks or `tools.guard` fail
+installation. Audit failures deny execution. Do not unload this plugin or reuse
+its context as an unprotected worker; `guard.stop()` keeps denial installed.
+This API does not edit the installed DSH configuration or the original launcher.
+
+The plugin registers DSH's synchronous, monotonic `tools.guard` before its
+asynchronous `tools/pre-execute` checks. It maps the exact `read {file_path}` and
+`write {file_path,content}` subset from `dsh-tool-fs` 0.2.0-rc.2 to task policy,
+then checks the bound approval and worker enforcement requirements. Extra fields,
+escalation flags, offsets, editors, shell tools, PTC transports and unknown tools
+are unsupported. A later policy returning `allow`, skipping asynchronous checks,
+or DSH's own one-time approval cannot force this guard to allow execution.
+
+Direct DSH dispatch is deliberately held even when a human grant exists. The
+dashboard's separate MCP operation tool is the only route that can execute an
+approved operation through the OS sandbox. The guard connects denial to actual
+DSH tool dispatch but does not itself prove filesystem/network/child-process
+containment. Mapping uses the contract repository as the declared cwd; actual
+backend resolution must also be verified before the guard could allow direct
+execution. The legacy
+`rdsh`/`dsh` passthrough, initial context loading, direct backend access, plugin
+unloading and LLM requests remain outside this protected tool boundary.
+
+Host code can bind an approval reference and attributed external data to one
+call ID with `guard.bindCall(callId, {approval, sources})`. The approval reference
+has only `id`, `request_version`, `attempt`, `cost_usd`; it cannot mint a grant.
+It is consumed as a binding once per check, without consuming the ledger's
+retry/cost allowance. External `repository`, `tool_result`, `web` and `agent`
+envelopes created by `provenance.mjs` always have `untrusted_data` authority.
+References are bounded locators: URL userinfo, queries, fragments and common
+credential-shaped assignments are rejected, so callers must supply a redacted
+reference when a source URL contains tracking or secret parameters. This is
+input hygiene, not authentication of the claimed source.
+Summary/forward transformations preserve original references and link every
+content digest to the immediately preceding digest. These are self-reported
+attribution, not identity authentication or cryptographic proof.
+`renderExternalQuote` renders content/references using
+`textContent`; audit reports retain metadata/digests, not source or operation
+bodies. Reports list uninspected session replay, compaction, context injection
+and direct-backend paths. The pinned DSH `tools/result` hook exposes a final tool
+outcome but does not assign repository/web/agent origin metadata to arbitrary
+result text. Automatic source capture through those DSH subsystems and
+integration into the dashboard source UI remain unfinished.
+
+The real-runtime fixture uses existing libraries without DSH boot/auth/LLM:
+
+```sh
+RDSH_DSH_MODULE_ROOT=/path/to/existing/node_modules/@deepseek-ai \
+  node --test test/dsh-runtime.integration.mjs
+```
+
+It is separate from `npm test` and fails if the existing libraries are missing.
+Tested with DSH ToolRuntime 0.2.0-rc.2; no runtime dependency is added.
+
 The opt-in [local integration queue](../docs/INTEGRATION-QUEUE.md) applies fixed
 worker commits in order to a dedicated worktree and requires current full-check
 evidence before the next integration. Only explicit local CLI actions execute
@@ -628,6 +972,12 @@ project bearer authentication used for tools. Available events:
 - `dashboard.progress.updated`
 - `dashboard.metrics.updated`
 - `dashboard.provider_status.updated`
+- `dashboard.contract.updated`
+- `dashboard.policy.checked`
+- `dashboard.approval.requested`
+- `dashboard.approval.decided`
+- `dashboard.approval.checked`
+- `dashboard.approval.claimed`
 
 Each requires the project's `project_id` filter. Subscribe to
 `dashboard.answer.created` when a Dot should react to human replies, then retrieve

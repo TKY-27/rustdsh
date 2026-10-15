@@ -991,6 +991,10 @@
         max-height: 65vh;
         margin: auto;
         object-fit: contain;
+      #approvals .event,
+      #policy-checks .event,
+      #tasks details {
+        overflow-wrap: anywhere;
       }
       footer {
         margin-top: 24px;
@@ -2139,6 +2143,13 @@
               </p>
               <ul id="cross-project-search-results" class="project-cross-list"></ul>
             </section>
+            <details class="fold" id="operation-detail">
+              <summary>操作の照合・承認</summary>
+              <h3>操作の照合</h3>
+              <div id="policy-checks"></div>
+              <h3>操作の承認</h3>
+              <div id="approvals"></div>
+            </details>
         <details class="fold" id="observed-cli-panel">
           <summary>別terminalのCLIを読取専用で観測</summary>
           <p class="sub">
