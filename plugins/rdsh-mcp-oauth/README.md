@@ -89,6 +89,12 @@ the patched SHA256 is
 Only this compiled public package was audited; its TypeScript source map was not
 shipped. Future package updates fail closed until a new seam is reviewed.
 `revert-seam` restores exactly that original source and refuses unrelated updates.
+`revert-seam` だけは SDK や資格情報サービスを読み込まず、指定した DSH の
+監査済みファイルを復元します。旧 SDK `2.0.0` が残っている場合や SDK を
+削除した場合も、依存の再インストールなしで復元できます。インストール、
+検証、OAuth 操作には引き続き SDK `2.2.0` と同じ DSH のサービスが必要です。
+明示するパスは JSON object を記述した `package.json` に限ります。DSH を
+所有するプロジェクトの manifest も使え、特定の package 名は要求しません。
 
 Open the returned authorization URL on a browser where you want to consent.
 After consent, copy the entire callback URL from the browser's address bar. The
