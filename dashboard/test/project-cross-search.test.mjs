@@ -181,7 +181,10 @@ test("project search returns source-linked records from only its explicit allowl
   assert.equal(all.results.find((item) => item.record_id === "10").reference_status, "external");
   assert.equal(all.results.find((item) => item.record_id === "11").reference_status, "unknown");
   assert.equal(all.results.find((item) => item.record_id === "8").source, "artifact:8");
-  assert.match(all.results.find((item) => item.record_id === "8").source_url, /#event-8$/);
+  assert.match(
+    all.results.find((item) => item.record_id === "8").source_url,
+    /#event-legacy-8$/,
+  );
   for (const item of all.results) {
     const source = new URL(item.source_url);
     assert.equal(source.search, "");

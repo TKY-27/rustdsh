@@ -16,6 +16,63 @@ updates:
     commit-message:
       prefix: chore(deps)
     open-pull-requests-limit: 5
+  - package-ecosystem: npm
+    directory: /scripts/headless-runtime/runtime
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: chore(deps)
+    open-pull-requests-limit: 5
+    # The headless candidate runtime pins the exact upstream bytes of these
+    # packages and verifies their source hashes before it builds. A version
+    # update is therefore not a routine bump: it invalidates the pin on
+    # purpose. Security alerts still arrive; re-pinning is a reviewed change.
+    ignore:
+      - dependency-name: "@earendil-works/pi-ai"
+      - dependency-name: "@deepseek-ai/dsh"
+      - dependency-name: "@deepseek-ai/dsh-llm-pi-ai"
+      - dependency-name: "ws"
+  - package-ecosystem: npm
+    directory: /plugins/rdsh-compute
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: chore(deps)
+    open-pull-requests-limit: 5
+  - package-ecosystem: npm
+    directory: /plugins/rdsh-llm-muse-code-subscription
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: chore(deps)
+    open-pull-requests-limit: 5
+  - package-ecosystem: npm
+    directory: /plugins/rdsh-mcp-exposure
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: chore(deps)
+    open-pull-requests-limit: 5
+  - package-ecosystem: npm
+    directory: /media/rdsh-intro
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: chore(deps)
+    open-pull-requests-limit: 5
+  - package-ecosystem: npm
+    directory: /tests/e2e
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: chore(deps)
+    open-pull-requests-limit: 5
   - package-ecosystem: github-actions
     directory: /
     schedule:
@@ -23,3 +80,8 @@ updates:
       day: monday
     commit-message:
       prefix: chore(ci)
+    ignore:
+      # dtolnay/rust-toolchain's ref is the Rust version under test, not an
+      # action release: dependabot tried to raise the MSRV pin from 1.85.0 to a
+      # nonexistent 1.120.0 (#442). Keep that pin under manual review.
+      - dependency-name: "dtolnay/rust-toolchain"

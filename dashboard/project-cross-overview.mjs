@@ -82,9 +82,11 @@ async function detailUrl(project, processApi) {
     const runtime = JSON.parse(
       await fs.readFile(path.join(project.directory, "runtime.json"), "utf8"),
     );
-    const lockedPid = Number(
+    // The live-instance lock is "pid:token" (older locks hold a bare pid).
+    const lockText = String(
       await fs.readFile(path.join(project.directory, "server.lock"), "utf8"),
-    );
+    ).trim();
+    const lockedPid = Number(lockText.split(":")[0]);
     if (
       runtime.kind !== "project" ||
       runtime.project_id !== project.id ||

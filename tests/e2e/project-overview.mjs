@@ -174,7 +174,7 @@ try {
     .getByText("Starlight cross-project decision", { exact: false })
     .waitFor();
   const decisionUrl = await decisionResult.getByRole("link").getAttribute("href");
-  assert.equal(new URL(decisionUrl).hash, "#question-Q1");
+  assert.equal(new URL(decisionUrl).hash, "#decision-Q1");
   assert.equal(new URL(decisionUrl).hash.includes("key="), false);
   await page.locator("#cross-project-search-kind").selectOption("all");
   await page.locator("#cross-project-search-query").fill("artifact body must not be indexed");
@@ -186,7 +186,7 @@ try {
   await sourcePage.goto(includedDashboard.browserUrl);
   await sourcePage.locator("#overview-state").waitFor();
   await sourcePage.goto(decisionUrl);
-  await sourcePage.locator("#question-Q1").waitFor();
+  await sourcePage.locator("#decision-Q1").waitFor();
   assert.equal(await sourcePage.locator("#answered").evaluate((node) => node.open), true);
   await sourcePage.close();
 

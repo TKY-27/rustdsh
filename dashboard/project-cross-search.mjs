@@ -1,5 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  decisionTargetId,
+  eventIdentifier,
+  eventTargetId,
+} from "./annotation-identifiers.mjs";
 import { projectDashboardUrl } from "./project-cross-overview.mjs";
 
 const maxProjects = 32;
@@ -150,12 +155,6 @@ async function checkedReference(raw, project) {
   }
 }
 
-function anchorFor(kind, recordId) {
-  const prefix =
-    kind === "task" ? "task-" : kind === "decision" ? "question-" : "event-";
-  return `${prefix}${encodeURIComponent(recordId)}`;
-}
-
 function recordCandidates(state) {
   const records = [];
   for (const task of state.tasks || []) {
@@ -175,6 +174,7 @@ function recordCandidates(state) {
       text,
       at: task.updated_at,
       scope: "record_text",
+      anchor: `task-${encodeURIComponent(task.id)}`,
     });
   }
   for (const question of state.questions || []) {
@@ -193,6 +193,10 @@ function recordCandidates(state) {
       text,
       at: question.answered_at || question.created_at,
       scope: "record_text",
+      anchor:
+        question.answer === null
+          ? `question-${encodeURIComponent(question.id)}`
+          : decisionTargetId(question.id),
     });
   }
   for (const event of state.events || []) {
@@ -210,6 +214,7 @@ function recordCandidates(state) {
       artifact: isArtifact ? event.artifact : null,
       at: event.created_at,
       scope: isArtifact ? "reference_only" : "record_text",
+      anchor: eventTargetId(eventIdentifier(event)),
     });
   }
   return records;
@@ -231,13 +236,13 @@ export function createProjectCrossSearch(
   const allowlisted = projects.map((project) => ({ ...project }));
   const links = new Map();
 
-  async function sourceUrl(project, kind, id) {
+  async function sourceUrl(project, anchor) {
     if (!links.has(project.id))
       links.set(project.id, projectDashboardUrl(project, processApi));
     const base = await links.get(project.id);
     if (!base) return null;
     const url = new URL(base);
-    url.hash = `#${anchorFor(kind, id)}`;
+    url.hash = `#${anchor}`;
     return url.href;
   }
 
@@ -340,7 +345,7 @@ export function createProjectCrossSearch(
           time,
           search_scope: record.scope,
           ...(referenceStatus ? { reference_status: referenceStatus } : {}),
-          source_url: await sourceUrl(project, record.kind, record.id),
+          source_url: await sourceUrl(project, record.anchor),
         });
       }
     }
