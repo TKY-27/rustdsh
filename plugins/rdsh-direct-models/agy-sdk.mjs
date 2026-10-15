@@ -1,36 +1,61 @@
 import { spawn } from 'node:child_process';
+import { mkdtempSync } from 'node:fs';
+import { rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import { fileURLToPath } from 'node:url';
-import { buildTurnPrompt, parseTurnResponse } from './json-turn.mjs';
+import { buildTurnPrompt, parseTurnResponse, assertSupportedGenerationOptions } from './json-turn.mjs';
 const SCRIPT = fileURLToPath(new URL('./agy-sdk.py', import.meta.url));
 const LIMIT = 8 * 1024 * 1024;
-export function createPythonRunner({ python = process.env.RDSH_AGY_PYTHON || fileURLToPath(new URL('./.venv/bin/python', import.meta.url)), timeoutMs = 120000, spawnImpl = spawn } = {}) {
-  return (payload, { signal, env } = {}) => new Promise((resolve, reject) => {
+const PROXY_ENV_KEYS = ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY'];
+const ENV_KEYS = ['HOME', 'USERPROFILE', 'PATH', 'PATHEXT', 'USER', 'LOGNAME', 'TMPDIR', 'TMP', 'TEMP', 'LANG', 'LC_ALL', 'SystemRoot', 'WINDIR', 'COMSPEC', 'APPDATA', 'LOCALAPPDATA',
+  'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy', 'all_proxy', 'no_proxy', 'SSL_CERT_FILE', 'SSL_CERT_DIR',
+  'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'GOOGLE_GENAI_USE_VERTEXAI', 'GOOGLE_GENAI_USE_ENTERPRISE', 'GOOGLE_CLOUD_PROJECT', 'GOOGLE_CLOUD_LOCATION', 'GOOGLE_APPLICATION_CREDENTIALS'];
+export function createPythonRunner({ python = process.env.RDSH_AGY_PYTHON || fileURLToPath(new URL('./.venv/bin/python', import.meta.url)), timeoutMs = 120000, spawnImpl = spawn, env = process.env } = {}) {
+  return (payload, { signal, env: requestEnv } = {}) => new Promise((resolve, reject) => {
     if (signal?.aborted) { reject(new Error('Antigravity SDK: aborted')); return; }
     const input = JSON.stringify(payload);
     if (Buffer.byteLength(input) > LIMIT) { reject(new Error('Antigravity SDK: input exceeds limit')); return; }
-    const child = spawnImpl(python, ['-I', SCRIPT], { stdio: ['pipe', 'pipe', 'pipe'], detached: true, env: { ...process.env, ...env } });
-    let output = '', size = 0, done = false;
+    const childEnv = {};
+    for (const source of [env, requestEnv ?? {}]) {
+      for (const key of ENV_KEYS) if (typeof source[key] === 'string') childEnv[key] = source[key];
+      // Windows spawn collapses case aliases; merge each source before the next.
+      if (process.platform === 'win32') for (const key of PROXY_ENV_KEYS) {
+        const lower = key.toLowerCase();
+        const value = typeof source[key] === 'string' ? source[key] : source[lower];
+        delete childEnv[lower];
+        if (typeof value === 'string') childEnv[key] = value;
+      }
+    }
+    let root;
+    try { root = mkdtempSync(path.join(tmpdir(), 'rdsh-agy-bridge-')); }
+    catch { reject(new Error('Antigravity SDK: temporary workspace could not be created')); return; }
+    childEnv.RDSH_SDK_TMPDIR = root;
+    let child, timer, output = '', size = 0, done = false, failure;
     const decoder = new StringDecoder('utf8');
-    const stop = () => { try { process.kill(-child.pid, 'SIGKILL'); } catch { child.kill('SIGKILL'); } };
-    const finish = (error, result) => {
+    const stop = () => { try { if (process.platform !== 'win32' && child?.pid) process.kill(-child.pid, 'SIGKILL'); else child?.kill('SIGKILL'); } catch { try { child?.kill('SIGKILL'); } catch {} } };
+    const finish = async (error, result) => {
       if (done) return;
       done = true; clearTimeout(timer); signal?.removeEventListener('abort', abort);
+      try { await rm(root, { recursive: true, force: true }); }
+      catch { reject(new Error('Antigravity SDK: temporary workspace cleanup failed')); return; }
       error ? reject(error) : resolve(result);
     };
-    const abort = () => { stop(); finish(new Error('Antigravity SDK: aborted')); };
-    const timer = setTimeout(() => { stop(); finish(new Error('Antigravity SDK: timed out')); }, timeoutMs);
-    signal?.addEventListener('abort', abort, { once: true });
+    const abort = () => { failure ??= new Error('Antigravity SDK: aborted'); stop(); };
+    try { child = spawnImpl(python, ['-I', SCRIPT], { stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32', env: childEnv }); }
+    catch { finish(new Error('Antigravity SDK: Python runtime could not start')); return; }
     child.stdout.on('data', data => {
       size += data.length;
-      if (size > LIMIT) { stop(); finish(new Error('Antigravity SDK: output exceeds limit')); }
-      else output += decoder.write(data);
+      if (size > LIMIT) { failure ??= new Error('Antigravity SDK: output exceeds limit'); stop(); }
+      else if (!failure) output += decoder.write(data);
     });
     child.stderr.resume(); // Deliberately discard SDK diagnostics: may include credentials.
-    child.on('error', () => finish(new Error('Antigravity SDK: Python runtime could not start')));
+    child.on('error', () => { failure ??= new Error('Antigravity SDK: Python runtime could not start'); });
     child.stdin.on('error', () => {});
     child.on('close', code => {
       if (done) return;
+      if (failure) { finish(failure); return; }
       if (code !== 0) { finish(new Error('Antigravity SDK: bridge process failed')); return; }
       output += decoder.end();
       let result;
@@ -42,7 +67,9 @@ export function createPythonRunner({ python = process.env.RDSH_AGY_PYTHON || fil
       }
       finish(null, result);
     });
-    child.stdin.end(input);
+    signal?.addEventListener('abort', abort, { once: true });
+    timer = setTimeout(() => { failure ??= new Error('Antigravity SDK: timed out'); stop(); }, timeoutMs);
+    if (signal?.aborted) abort(); else child.stdin.end(input);
   });
 }
 export function createAgySdkBackend({ runner = createPythonRunner(), keyResolver } = {}) {
@@ -53,6 +80,8 @@ export function createAgySdkBackend({ runner = createPythonRunner(), keyResolver
       return result.models;
     },
     async generate(options = {}) {
+      options.signal?.throwIfAborted();
+      assertSupportedGenerationOptions(options);
       const key = keyResolver ? await keyResolver({ signal: options.signal }) : undefined;
       if (key !== undefined && (typeof key !== 'string' || !key)) throw new Error('Antigravity SDK: invalid resolved API key');
       const runOptions = { signal: options.signal, ...(key ? { env: { GEMINI_API_KEY: key, GOOGLE_API_KEY: key } } : {}) };

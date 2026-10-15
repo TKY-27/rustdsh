@@ -1,10 +1,15 @@
 # Remote MCP OAuth for DSH
 
 Optional Cordis bundle for Issue [#77](https://github.com/jimoto-no-llm/rustdsh/issues/77).
-Requires Node 24, DSH MCP/credentials `0.2.0-rc.2`, MCP SDK `2.0.0` and an
+Requires Node 24, DSH MCP/credentials `0.2.0-rc.2`, MCP SDK `2.2.0` and an
 explicitly installed HTTP option seam. The Rust launcher, agent loop, profile
 boot, native MCP supervisor, tool policy and resource handling remain native.
 This bundle is an opt-in candidate; it is not enabled by an installer or profile.
+
+The SDK must resolve to `2.2.0` from the native `@deepseek-ai/dsh-mcp-client`
+dependency graph. This bundle's targeted npm override removes that package's
+otherwise nested `2.0.0` dependency. Cordis and the native credentials services
+continue to come from the same DSH installation.
 
 ## Configure your own client
 
@@ -39,6 +44,32 @@ Inline headers, bearer tokens and client secrets are rejected.
 
 Use the package file of the **same DSH installation** that will load the bundle:
 
+When using `RDSH_DSH_PACKAGE`, first apply the following override in the owning
+installation project's root `package.json`, regenerate and review its lockfile
+so the native client resolves to `2.2.0`, then run
+`npm ci --ignore-scripts --no-audit --no-fund` in that project. npm can retain an
+old nested resolution when updating an existing lockfile: verify with
+`npm ls @modelcontextprotocol/client @modelcontextprotocol/core --all` that no
+`2.0.0` or `2.1.0` SDK remains. npm only applies
+overrides from the installation root; this bundle's override cannot update a
+separate DSH installation. The loader rejects old or unaudited SDK versions
+instead of mixing the bundle's SDK with that installation's services.
+
+```json
+{
+  "overrides": {
+    "@deepseek-ai/dsh-mcp-client@0.2.0-rc.2": {
+      "@modelcontextprotocol/client": "2.2.0"
+    }
+  }
+}
+```
+
+Merge this entry into any existing `overrides`; retain the DSH MCP/credentials
+versions above. A `2.2.0` direct dependency alone does not replace the native
+client's exact `2.0.0` dependency. The source hashes below remain the audited
+DSH MCP source; the SDK update does not change that source or install the seam.
+
 ```sh
 export RDSH_DSH_PACKAGE=/absolute/path/to/@deepseek-ai/dsh/package.json
 node plugins/rdsh-mcp-oauth/cli.mjs verify-seam --dsh-package "$RDSH_DSH_PACKAGE"
@@ -58,6 +89,12 @@ the patched SHA256 is
 Only this compiled public package was audited; its TypeScript source map was not
 shipped. Future package updates fail closed until a new seam is reviewed.
 `revert-seam` restores exactly that original source and refuses unrelated updates.
+`revert-seam` だけは SDK や資格情報サービスを読み込まず、指定した DSH の
+監査済みファイルを復元します。旧 SDK `2.0.0` が残っている場合や SDK を
+削除した場合も、依存の再インストールなしで復元できます。インストール、
+検証、OAuth 操作には引き続き SDK `2.2.0` と同じ DSH のサービスが必要です。
+明示するパスは JSON object を記述した `package.json` に限ります。DSH を
+所有するプロジェクトの manifest も使え、特定の package 名は要求しません。
 
 Open the returned authorization URL on a browser where you want to consent.
 After consent, copy the entire callback URL from the browser's address bar. The
@@ -111,11 +148,14 @@ npm test
 node test/probe.mjs
 ```
 
-The twelve tests use the real SDK, Cordis, native file-backed credentials and
+The tests use the real SDK, Cordis, native file-backed credentials and
 native MCP bridge with local synthetic OAuth/MCP servers. They cover metadata,
 redirect/state/PKCE/issuer rejection, cross-provider rotating refresh, account
 isolation, explicit step-up, own client registration, secret references, stdin
 completion, safe export and guarded seam recovery. No provider, model or paid API
 is called. [Actual before/after evidence](../../docs/evidence/mcp-oauth/README.md).
+Runtime checks also verify one patched SDK/core graph, shared Cordis services,
+and rejection of old external SDKs. The probe reports the versions actually
+resolved by the loader.
 
 Protocol reference: [MCP authorization](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization).

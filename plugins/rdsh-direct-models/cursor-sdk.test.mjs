@@ -1,10 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { access,readdir } from 'node:fs/promises';
+import { access,readdir,mkdtemp,rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { executeCursorSdk } from './cursor-sdk-runner.mjs';
 import { createCursorSdkBackend,createCursorSdkRunner } from './cursor-sdk.mjs';
+import { assertSdkChildCleanup,assertSdkStartCleanup } from './sdk-cleanup-fixture.mjs';
+test('Cursor runner removes isolated workspace and store after child completion or SIGKILL', t =>
+ assertSdkChildCleanup(t,createCursorSdkRunner,{action:'generate'}));
+test('Cursor runner cleans startup failures and waits for close before cleanup', t =>
+ assertSdkStartCleanup(t,createCursorSdkRunner));
+test('Cursor SDK places workspace and store beneath the parent owned directory',async()=>{
+ const root=await mkdtemp(path.join(tmpdir(),'rdsh-cursor-parent-test-'));
+ try{const state=sdkMock();await executeCursorSdk({action:'generate',model:'model',prompt:'prompt'},{sdk:state.sdk,env:{RDSH_SDK_TMPDIR:root}});assert.equal(path.dirname(path.dirname(state.store)),root);await assert.rejects(access(state.store));}finally{await rm(root,{recursive:true,force:true});}
+});
 const json=JSON.stringify({version:1,text:'OK',toolCalls:[]});
 function sdkMock(events=[]){const state={};state.sdk={JsonlLocalAgentStore:class{constructor(root){state.store=root;}},Cursor:{models:{list:async options=>{state.auth=options;return [{model:{id:'real-model'},name:'Real'}];}}},Agent:{create:async options=>{state.options=options;return {send:async(prompt,sendOptions)=>{state.prompt=prompt;state.sendOptions=sendOptions;return {stream:async function*(){yield* events;},wait:async()=>({status:'finished',result:json}),cancel:async()=>{state.canceled=true;}};},close:()=>{state.closed=true;}};}}};return state;}
 test('official SDK creates a fresh empty workspace, explicit store and disables every action capability',async()=>{
@@ -33,7 +44,7 @@ function spawnFixture(handler){const state={};state.spawnImpl=(file,args,options
 test('isolated runner argv is literal Node module and environment cannot import CLI OAuth or secret tokens',async()=>{
  const state=spawnFixture(child=>{child.stdout.write(JSON.stringify({text:json}));child.emit('close',0);});
  const result=await createCursorSdkRunner({...state,env:{HOME:'/home',CURSOR_API_KEY:'sdk-key',CURSOR_ACCESS_TOKEN:'oauth',OTHER_TOKEN:'private',NODE_OPTIONS:'inject-code'}})({action:'generate',prompt:'literal $(danger)'});
- assert.equal(result.text,json);assert.equal(state.file,process.execPath);assert.equal(state.options.shell,false);assert.match(state.args[0],/cursor-sdk-runner.mjs$/);assert.deepEqual(state.options.env,{HOME:'/home',CURSOR_API_KEY:'sdk-key'});
+ assert.equal(result.text,json);assert.equal(state.file,process.execPath);assert.equal(state.options.shell,false);assert.match(state.args[0],/cursor-sdk-runner.mjs$/);const {RDSH_SDK_TMPDIR:root,...childEnv}=state.options.env;assert.deepEqual(childEnv,{HOME:'/home',CURSOR_API_KEY:'sdk-key'});await assert.rejects(access(root));
 });
 test('runner enforces timeout/cancel/output bound and does not expose diagnostics',async()=>{
  const timed=spawnFixture(()=>{}),keepAlive=setTimeout(()=>{},1000);
@@ -42,4 +53,12 @@ test('runner enforces timeout/cancel/output bound and does not expose diagnostic
  const controller=new AbortController(),aborted=spawnFixture(()=>controller.abort());await assert.rejects(createCursorSdkRunner(aborted)({action:'models'},{signal:controller.signal}),/aborted/);assert.equal(aborted.killed.signal,'SIGKILL');
  const noisy=spawnFixture(child=>{child.stderr.write('secret-token');child.stdout.write(JSON.stringify({error:'secret-token'}));child.emit('close',1);});await assert.rejects(createCursorSdkRunner(noisy)({action:'models'}),error=>!error.message.includes('secret-token'));
  const huge=spawnFixture(child=>child.stdout.write(Buffer.alloc(8*1024*1024+1)));await assert.rejects(createCursorSdkRunner(huge)({action:'models'}),/output exceeds/);
+});
+
+test('Cursor rejects unsupported generation controls before runner calls',async()=>{
+ let calls=0;
+ const backend=createCursorSdkBackend({runner:async()=>{calls++;return {text:json};}});
+ for(const options of [{temperature:0},{maxTokens:1},{stop:[]},{stop:['END']},{maxTokens:null}])
+  await assert.rejects(backend.generate({model:'synthetic',...options}),{code:'UNSUPPORTED_GENERATION_OPTION'});
+ assert.equal(calls,0);
 });
