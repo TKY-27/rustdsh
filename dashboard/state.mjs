@@ -1,7 +1,8 @@
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { identity, stateHome } from "./project-identity.mjs";
+import { applyTaskOutcomes, validateTaskOutcomes } from "./task-outcomes.mjs";
 import { normalizeObservation } from "./observations.mjs";
 import {
   changeQuestionContract,
@@ -74,9 +75,10 @@ export async function writeJson(file, value) {
   await fs.rename(temp, file);
 }
 export class ProjectStore {
-  constructor(project, value) {
+  constructor(project, value, { instructionQueueWorker } = {}) {
     this.project = project;
     this.value = value;
+    this.instructionQueueWorker = instructionQueueWorker || null;
     this.historyIds = validateRestoredHistory(value);
     this.protectedHistory = freezeHistory(value.history_backups);
   }
@@ -86,7 +88,7 @@ export class ProjectStore {
     if (history_backups !== undefined) next.history_backups = history_backups;
     return next;
   }
-  static async open(project) {
+  static async open(project, options = {}) {
     let value;
     try {
       value = JSON.parse(
@@ -124,17 +126,19 @@ export class ProjectStore {
     validateInstructions(value);
     validateCostLedger(value);
     validateBudgetAdmission(value);
-    return new ProjectStore(project, value);
+    validateTaskOutcomes(value);
+    return new ProjectStore(project, value, options);
   }
   async mutate(operation, input) {
     const next = this.clone();
     applyOperation(next, operation, input);
     validateInstructions(next);
     validateCostLedger(next);
+    validateTaskOutcomes(next);
     return this.commit(next, operation, input);
   }
   async mutateReply(operation, input, context) {
-    const next = this.clone();
+    let next = this.clone();
     const handlers = {
       register: registerReplyConsumer,
       ack: applyReplyAck,
@@ -142,9 +146,65 @@ export class ProjectStore {
       instruction_resolve: resolveInstruction,
       control: applyInstructionControl,
     };
-    const result = handlers[operation](next, input, context);
+    const nativeOperations = {
+      instruction_submit: "submit",
+      instruction_resolve: "resolve",
+      control: "control",
+    };
+    let result;
+    let workerValidatedState = false;
+    const nativeOperation = nativeOperations[operation];
+    if (this.instructionQueueWorker && nativeOperation) {
+      let response;
+      try {
+        response = await this.instructionQueueWorker.request({
+          operation: nativeOperation,
+          // ProjectStore.open() and every mutation path validate this state.
+          // Rust still validates the returned state before acknowledging it.
+          prevalidated: true,
+          state: {
+            project: { id: next.project.id },
+            feedback: next.feedback,
+            answer_applications: next.answer_applications,
+            ...(Object.hasOwn(next, "instructions")
+              ? { instructions: next.instructions }
+              : {}),
+          },
+          input,
+          context,
+        });
+      } catch (error) {
+        if (error.status !== 413) throw error;
+        // A valid project can outgrow the bounded native transport. Preserve
+        // the existing JS implementation for that request rather than making
+        // a previously valid queue impossible to reconcile.
+        result = handlers[operation](next, input, context);
+      }
+      if (response) {
+        if (
+          response.operation !== nativeOperation ||
+          !response.state ||
+          typeof response.state !== "object" ||
+          Array.isArray(response.state) ||
+          !response.state.instructions ||
+          typeof response.state.instructions !== "object" ||
+          Array.isArray(response.state.instructions) ||
+          !Object.hasOwn(response, "result")
+        ) {
+          throw Object.assign(
+            new Error("Rust instruction worker returned an invalid response"),
+            { status: 500 },
+          );
+        }
+        workerValidatedState = response.state_validated === true;
+        next.instructions = response.state.instructions;
+        result = response.result;
+      }
+    } else {
+      result = handlers[operation](next, input, context);
+    }
     validateAnswerApplications(next);
-    validateInstructions(next);
+    if (!workerValidatedState) validateInstructions(next);
     await this.commit(next);
     return structuredClone(result);
   }
@@ -363,8 +423,6 @@ export function applyOperation(state, operation, input) {
       // root/id holds the target repo, and status/milestone/blocker hold the
       // exit conditions. This store never grants action approval; callers
       // must check the active revision before starting work. Schema frozen.
-      // #14 outcome card: keep title/status/milestone/blocker/updated_at on
-      // one card; "done" is not "verified" until a check result is recorded.
       const task = {
         id: text(input.id, "id", 160),
         title: text(input.title, "title", 1000),
@@ -383,6 +441,7 @@ export function applyOperation(state, operation, input) {
         }),
       };
       const index = state.tasks.findIndex((item) => item.id === task.id);
+      applyTaskOutcomes(state, input);
       if (index < 0) state.tasks.push(task);
       else state.tasks[index] = task;
       break;
@@ -449,6 +508,7 @@ export function applyOperation(state, operation, input) {
     }
     case "event": {
       const event = {
+        event_id: randomUUID(),
         sequence: (state.events.at(-1)?.sequence || 0) + 1,
         type: oneOf(
           input.type || "progress",
