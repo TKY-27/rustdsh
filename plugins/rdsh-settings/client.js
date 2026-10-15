@@ -892,7 +892,7 @@ window.__ModuleLoader__.load({
               }),
             ),
             detailsText !==
-              (dc.details?.trim() ? dc.details : copy("defaultDetails"))
+              (dc.details?.trim() ? dc.details : presenceCopy("defaultDetails"))
               ? h("p", { style: warn }, copy("truncated"))
               : null,
             h(
