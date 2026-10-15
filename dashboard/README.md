@@ -24,6 +24,10 @@ explicit interruption with native proof, and honest unsupported-steer fallback.
 [Task preflight](../docs/TASK-PREFLIGHT.md) checks the required CLI, cwd, disk,
 port, dependencies, GPU/WSL and selected authentication before an ACP session.
 
+[Optional GPU leases](../docs/GPU-LEASES.md) reserve a requested UUID/VRAM amount
+before original ACP attachment, report capacity waits separately from failures,
+and retain uncertain ownership until actual process/group exit is confirmed.
+
 [Resource admission](../docs/RESOURCE-ADMISSION.md) reserves local CPU, memory,
 heavy-build slots and ports before a managed build or test command starts.
 
