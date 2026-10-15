@@ -50,7 +50,7 @@ pub fn distro_id() -> Option<String> {
 pub fn is_rpm_family(id: &str) -> bool {
     matches!(
         id,
-        "fedora" | "rhel" | "centos" | "rocky" | "almalinux" | "oracle"
+        "fedora" | "rhel" | "centos" | "rocky" | "almalinux" | "ol"
     )
 }
 
@@ -128,12 +128,28 @@ mod tests {
 
     #[test]
     fn rpm_families_are_recognized() {
-        for id in ["fedora", "rhel", "centos", "rocky", "almalinux", "oracle"] {
+        // "ol" は Oracle Linux の実際の ID（"oracle" を報告するホストは無い）。
+        for id in ["fedora", "rhel", "centos", "rocky", "almalinux", "ol"] {
             assert!(is_rpm_family(id), "{id}");
         }
+        assert!(!is_rpm_family("oracle"));
         for id in ["ubuntu", "debian", "arch", "opensuse-leap", ""] {
             assert!(!is_rpm_family(id), "{id}");
         }
+    }
+
+    /// install.sh の rpm ヒントも同じ ID を、引用符付きでも拾えること。
+    /// 以前は `^ID=(...)` で引用符を許さず、Fedora 以外では分岐が動かなかった。
+    #[test]
+    fn install_sh_rpm_hint_accepts_quoted_ids() {
+        let script = include_str!("../install.sh");
+        let line = script
+            .lines()
+            .find(|line| line.contains("grep -qE") && line.contains("almalinux"))
+            .expect("install.sh should keep the rpm-family grep");
+        assert!(line.contains("^ID=\"?(fedora"), "{line}");
+        assert!(line.contains("|ol)\"?"), "{line}");
+        assert!(!line.contains("oracle"), "{line}");
     }
 
     #[test]
