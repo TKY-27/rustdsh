@@ -24,7 +24,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.85.0
-      - run: cargo check --locked --all-targets
+      - run: cargo +1.85.0 check --locked --all-targets
 
   release-policy:
     name: "release-policy${{ github.event_name == 'push' && github.ref_type == 'branch' && github.event.repository.default_branch && github.ref_name != github.event.repository.default_branch && ' [branch push]' || '' }}"
@@ -58,10 +58,17 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 22
-      - run: node --test tests/plugin-security.test.mjs tests/settings-client.test.mjs tests/japanese-locale.test.mjs tests/update-banner.test.mjs tests/rdsh-mobile-ui.test.mjs tests/feature-switches.test.mjs tests/discord-presence.test.mjs tests/model_benchmark/fence.test.mjs
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --locked
       - name: Populate the pinned headless runtime cache
         run: npm ci --ignore-scripts --no-audit --no-fund
         working-directory: scripts/headless-runtime/runtime
+      - name: Test plugin and hook contracts
+        run: node --test tests/plugin-security.test.mjs tests/settings-client.test.mjs tests/japanese-locale.test.mjs tests/update-banner.test.mjs tests/rdsh-mobile-ui.test.mjs tests/answer-guard.test.mjs tests/feature-switches.test.mjs tests/discord-presence.test.mjs tests/model_benchmark/fence.test.mjs tests/context_inject_contract.mjs
+        env:
+          BIN: ${{ github.workspace }}/target/debug/rdsh
+          DSH_HOOK_PROTOCOL: ${{ github.workspace }}/scripts/headless-runtime/runtime/node_modules/@deepseek-ai/dsh-hook-protocol/lib/index.js
+          RDSH_HOOK_CODEC_REQUIRED: '1'
       - name: Build and test the offline headless runtime
         run: |
           node scripts/headless-runtime/build-candidate.mjs --out "$RUNNER_TEMP/rdsh-headless-candidate"
@@ -114,8 +121,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - run: cargo fmt --check
-      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --locked --all-targets --all-features -- -D warnings
 
   test:
     name: "test (${{ matrix.os }}, ${{ matrix.regress }})${{ github.event_name == 'push' && github.ref_type == 'branch' && github.event.repository.default_branch && github.ref_name != github.event.repository.default_branch && ' [branch push]' || '' }}"
@@ -133,17 +140,30 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
       - if: runner.os == 'Linux'
         run: command -v zstd || (sudo apt-get update && sudo apt-get install -y zstd)
       - if: runner.os == 'macOS'
         run: command -v zstd || brew install zstd
-      - run: cargo test
+      - name: Run Rust tests
+        run: cargo nextest run --locked --all-targets --profile ci
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: rust-tests-${{ matrix.os }}
+          path: target/nextest/ci/junit.xml
+          if-no-files-found: warn
+      - name: 並列開発ツールの回帰検査
+        if: runner.os == 'Linux'
+        run: python3 -m unittest discover -s tests -p 'test_parallel_dev.py' -v
+        env:
+          RDSH_PARALLEL_TEST_TMPDIR: ${{ github.workspace }}/.tmp-parallel-dev-tests
       - uses: actions/setup-node@v7
         with:
           node-version: 22
       - run: node --test plugins/workflow-board/tests/source-patch.test.mjs
-      - run: cargo test --example benchmark_extended
-      - run: cargo test --example benchmark_models
       - run: cargo build
       - run: node --test dashboard/test/worker-scopes-compat.test.mjs
       - run: npm ci --ignore-scripts --no-audit --no-fund
@@ -153,17 +173,29 @@ jobs:
         env:
           RDSH_BIN: ${{ runner.os == 'Windows' && format('{0}/target/debug/rdsh.exe', github.workspace) || format('{0}/target/debug/rdsh', github.workspace) }}
       - run: node --test tests/runtime-compatibility.test.mjs tests/icon-assets.test.mjs
+      - if: runner.os == 'Windows'
+        run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: scripts/headless-runtime/runtime
+      - if: runner.os == 'Windows'
+        run: node --test tests/context_inject_contract.mjs
+        env:
+          BIN: ${{ github.workspace }}/target/debug/rdsh.exe
+          DSH_HOOK_PROTOCOL: ${{ github.workspace }}/scripts/headless-runtime/runtime/node_modules/@deepseek-ai/dsh-hook-protocol/lib/index.js
+          RDSH_HOOK_CODEC_REQUIRED: '1'
       - if: matrix.regress
         shell: bash
         run: |
           printf '#!/bin/sh\necho stub-dsh $@' > /tmp/stub-dsh && chmod +x /tmp/stub-dsh
           BIN=./target/debug/rdsh DSH_ORIG_BIN=/tmp/stub-dsh sh tests/regress.sh
           BIN=./target/debug/rdsh sh tests/context_prototype.sh
+          BIN=./target/debug/rdsh sh tests/context_hook_prototype.sh
+          BIN=./target/debug/rdsh sh tests/deps_prototype.sh
           BIN=./target/debug/rdsh sh tests/settings_prototype.sh
       - if: '! matrix.regress'
         shell: pwsh
         run: |
           ./tests/installer-security.ps1
+          ./tests/installer-security.ps1 -Version v0.0.0-rc.1
           ./tests/icon-assets.ps1
           $tmp = Join-Path $env:RUNNER_TEMP 'rdsh-smoke'
           $h = Join-Path $tmp 'home'

@@ -5,6 +5,29 @@ Format follows Keep a Changelog, versioning follows Semantic Versioning.
 
 ## [Unreleased]
 
+### Added
+
+- `plugins/rdsh-answer-guard` recovers a turn whose reply was emitted only into
+  the reasoning channel: DSH closes such a turn as `completed` (its
+  `EMPTY_RESPONSE` check only sees a fully empty message) and the Web UI folds
+  the reasoning away, so the reader sees no answer and the agent looks stuck.
+  The guard watches the committed events and, at `agent/turn-stopping`, steers
+  one notice asking the model to restate the answer as text — once per turn,
+  never on an aborted turn, and never when a tool result is still owed. It is
+  installed by `./plugins/install.sh` and `rdsh features off answer_guard`
+  disables it. See [README](plugins/rdsh-answer-guard/README.md).
+
+### Fixed
+
+- 更新通知を dismiss したら、その更新については再表示しない（新しい更新のときだけ通知する）。
+
+### Changed
+
+- `AGENTS.md` and `docs/PROJECT-SETUP.md` record the working agreements that came
+  out of the v0.4.0 cycle: the nine required checks and the branch-protection
+  switches that are deliberately off, pinning the installer ledgers after every
+  release, and keeping the security page at zero open alerts.
+
 ## [0.4.0] - 2026-10-15
 
 ### Security
@@ -57,6 +80,21 @@ Format follows Keep a Changelog, versioning follows Semantic Versioning.
   warnings instead of guessed tiers. It starts no agent and writes nothing; the
   existing `workers prepare` still owns the checkout allocation
   (`docs/SUBAGENT-PLANNING.md`).
+- `rdsh-dashboard agents list|submit|status|result|cancel` runs cursor-agent and
+  devin as detached, cancellable jobs with untrusted-data results. The default
+  `--permission read-only` selects each CLI's most restrictive mode
+  (`--mode ask --sandbox enabled` for cursor-agent, `--permission-mode auto`
+  for devin); it is a flag mapping, not an OS sandbox, and the known gaps are
+  listed in `docs/AGENT-RUNNERS.md`. Every job end, and `cancel`, stops the
+  agent's process group with TERM, a grace period and KILL, and records
+  whether the stop was confirmed (`cleanup`); `cancel` also acts on jobs whose
+  supervisor was lost or that finished with leftover processes, but only after
+  proving the recorded group number still belongs to the job (a confirmed job
+  is a no-op; where no process identity can be read, a group cannot be stopped
+  after its supervisor is lost). On
+  Windows descendants cannot be observed (no Job Object support): the leader
+  tree is killed with `taskkill /T /F` while the leader is alive and cleanup is
+  always reported `unconfirmed` (`windows_tree_unobservable`).
 - `rdsh serial-proxy` replaces the standalone Node.js proxy with a native Rust
   command. It keeps the FIFO concurrency and rate limits, streams request and
   response bodies, and supports `--tool-choice-default <none|auto|required>`
@@ -75,6 +113,33 @@ Format follows Keep a Changelog, versioning follows Semantic Versioning.
 - The `rdsh-update-banner` plugin is bundled again for the `web` profile, so
   update notifications return. Install it through the installer because pnpm
   prunes links it does not manage.
+
+- `rdsh context inject` runs as a DSH `UserPromptSubmit` hook and attaches the
+  turn context (goal, constraints, decisions, working set, git state, retrieved
+  code, memory) through `hookSpecificOutput.additionalContext`. It is fail-open
+  and always exits 0: an unreadable settings document or an unparseable payload
+  inject nothing, while a damaged index or a deadline overrun drops only what
+  depends on them and still injects goal, constraints, and memory.
+- `rdsh context hook install|status|remove` merges that hook into a DSH
+  `hooks.json` idempotently, keeps unrelated hooks untouched, and keeps a backup
+  beside the first file it rewrites.
+- The context memory store (`$DSH_HOME/rdsh-context-memory.json`, 0600, atomic
+  write): `rdsh context remember|memory|distill|forget`. `distill` reads user
+  turns from session logs (including `.jsonl.zstd` through the `zstd` CLI) and
+  supersedes overlapping or retracted entries by deterministic rule, keeping the
+  superseded record instead of overwriting it.
+- `rdsh context build --sessions N` carries past sessions into one build, and
+  `--require-stable` exits 3 unless the snapshot is provably stable: a git state
+  or read file that changed during assembly counts, and so does a git state it
+  cannot read.
+- `rdsh deps build|query|impact`: a static dependency graph for Rust,
+  JavaScript/TypeScript, Python and Go with a persistent incremental index
+  (`$DSH_HOME/rdsh-index`, reused on unchanged size+mtime), symbol lookup, and
+  direct/transitive dependents plus affected tests.
+- `rdsh compact` now preserves high-value lines from the dropped middle
+  (constraints, decisions, errors, diffs, commands) under a bounded reserve and
+  reports a per-category digest, instead of keeping only the head and the newest
+  turns.
 
 ### Fixed
 
@@ -104,6 +169,19 @@ Format follows Keep a Changelog, versioning follows Semantic Versioning.
   planning module is removed so there is a single source of truth, and the
   request, plan and warning contract is unchanged
   (`docs/SUBAGENT-PLANNING.md`).
+- Context retrieval expands its search hits with dependency-graph neighbours when
+  the index exists, so an excerpt arrives with the files it depends on; without
+  an index it degrades to the previous behaviour, and `features.dep_graph=false`
+  keeps the index out of the context path entirely.
+- Plain `rdsh context build` output starts with one `[snapshot: ...]` line (JSON
+  already carried the object), so an assembled context is never mistaken for one
+  that was verified later.
+- `rdsh context status --json` also reports memory counts, the dependency-index
+  summary, and the injection budget/deadline; `rdsh context build --json` adds a
+  `snapshot` object describing whether the repository stayed stable.
+- `rdsh compact` emits an identical line once. Repeats are counted in the
+  dropped-line digest instead of being printed again, so a repeated command or
+  error no longer consumes budget twice.
 
 ## [0.3.3] - 2026-10-13
 

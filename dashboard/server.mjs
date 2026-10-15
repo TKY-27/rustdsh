@@ -7,6 +7,11 @@ import QRCode from "qrcode";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { ProjectStore, writeJson, stateHome, publicState } from "./state.mjs";
+import {
+  InstructionQueueWorker,
+  resolveRdshExecutable,
+  supportsInstructionQueueServe,
+} from "./instruction-queue-worker.mjs";
 import { createMcpServer } from "./mcp.mjs";
 import { enableShare, inspectShare } from "./tailscale.mjs";
 import { startHarness, proxyHarness, upgradeHarness } from "./harness.mjs";
@@ -24,6 +29,7 @@ import {
   inspectTunnel,
 } from "./connection-diagnostics.mjs";
 import { HumanAnnotationStore } from "./human-annotations.mjs";
+import { inspectGitHubStatus } from "./github-status.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const equal = (a, b) =>
@@ -134,6 +140,8 @@ async function readBody(req, maximum = 131072) {
 }
 export async function startDashboard(options) {
   const { kind = "project", project, tailscale = true } = options;
+  const githubStatusInspector =
+    options.githubStatusInspector || inspectGitHubStatus;
   const port =
     options.port ||
     (kind === "harness"
@@ -159,9 +167,22 @@ export async function startDashboard(options) {
   const connections = new ConnectionObservations();
   const localUrl = `http://127.0.0.1:${port}/`;
   const cookieName = `rdsh_${kind === "project" ? project.id : "harness"}`;
-  let store, eventsHub, humanAnnotations, observedCli;
+  let store, eventsHub, humanAnnotations, observedCli, instructionQueueWorker;
   try {
-    store = kind === "project" ? await ProjectStore.open(project) : null;
+    if (kind === "project") {
+      instructionQueueWorker = options.instructionQueueWorker || null;
+      // Keep the JSONL subprocess experimental until it meets the live
+      // mutation latency gate; tests and benchmarks can still opt in.
+      if (
+        !instructionQueueWorker &&
+        process.env.RDSH_DASHBOARD_RUST_INSTRUCTION_QUEUE === "1"
+      ) {
+        const executable = await resolveRdshExecutable();
+        if (executable && (await supportsInstructionQueueServe(executable)))
+          instructionQueueWorker = new InstructionQueueWorker(executable);
+      }
+      store = await ProjectStore.open(project, { instructionQueueWorker });
+    } else store = null;
     humanAnnotations = store ? await HumanAnnotationStore.open(project) : null;
     eventsHub = store
       ? await EventsHub.open(project, () => store.value, options.webhookPost)
@@ -172,6 +193,7 @@ export async function startDashboard(options) {
         })
       : null;
   } catch (error) {
+    await instructionQueueWorker?.close().catch(() => {});
     await removeDashboardLockIfOwned(lockFile, lockContent).catch(() => {});
     throw error;
   }
@@ -523,6 +545,7 @@ export async function startDashboard(options) {
           route === "/model-catalog-ui.mjs" ||
           route === "/project-overview.mjs" ||
           route === "/connection-diagnostics-ui.mjs" ||
+          route === "/github-status-ui.mjs" ||
           route === "/answer-applications-ui.mjs" ||
           route === "/instruction-queue-ui.mjs" ||
           route === "/cost-ledger-ui.mjs" ||
@@ -625,6 +648,7 @@ export async function startDashboard(options) {
           "/model-catalog-ui.mjs",
           "/project-overview.mjs",
           "/connection-diagnostics-ui.mjs",
+          "/github-status-ui.mjs",
           "/answer-applications-ui.mjs",
           "/instruction-queue-ui.mjs",
           "/cost-ledger-ui.mjs",
@@ -681,6 +705,19 @@ export async function startDashboard(options) {
         route === "/api/diagnostics"
       )
         return json(res, 200, await diagnostics());
+      if (
+        kind === "project" &&
+        req.method === "GET" &&
+        route === "/api/github/status"
+      ) {
+        if (!humanAuthorized)
+          return json(res, 403, { error: "Human browser credential required" });
+        return json(
+          res,
+          200,
+          await githubStatusInspector({ cwd: project.directory }),
+        );
+      }
       if (req.method === "GET" && route === "/api/config")
         return json(res, 200, {
           kind,
@@ -953,7 +990,7 @@ export async function startDashboard(options) {
       json(res, 404, { error: "Not found" });
     } catch (e) {
       if (!res.headersSent)
-        json(res, [401, 403, 409].includes(e.status) ? e.status : 400, {
+        json(res, [401, 403, 409, 413, 500, 504].includes(e.status) ? e.status : 400, {
           error: e.message,
         });
       else res.end();
@@ -987,6 +1024,7 @@ export async function startDashboard(options) {
       for (const response of live) response.end();
       for (const { mcp } of sessions.values()) await mcp.server.close();
       await updateQueue;
+      await instructionQueueWorker?.close();
       await eventsHub?.queue;
       for (const socket of sockets) socket.destroy();
       await new Promise((resolve) => server.close(resolve));
