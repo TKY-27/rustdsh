@@ -153,6 +153,10 @@ rdsh desktop status                 # detect the DeepSeek Harness Desktop app an
 rdsh bench --n 5                    # benchmark startup speed between rdsh and dsh
 ```
 
+On Windows, compressed session histories are not opened until rdsh can reject
+parent junctions safely; `sessions --tokens` may omit those histories and its
+totals are inexact.
+
 ### Credential sharing with rdsh auth
 
 External credentials are inventoried without showing their values. Nothing is

@@ -154,6 +154,9 @@ rdsh desktop status                 # DeepSeek Harness Desktop アプリとプ�
 rdsh bench --n 5                    # rdsh と本家 dsh の起動速度比較
 ```
 
+Windows では親junctionを安全に拒否する読込みを用意できるまで圧縮履歴を開きません。
+そのため `sessions --tokens` の合計には一部の履歴が含まれず、正確な値ではありません。
+
 ### 選択した認証情報だけを共有する（rdsh auth）
 
 Codex / OpenCode / 環境変数の認証情報を、秘密値なしで一覧にします。
