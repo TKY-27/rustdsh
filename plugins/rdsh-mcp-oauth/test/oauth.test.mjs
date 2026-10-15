@@ -160,6 +160,35 @@ test("untrusted metadata, issuer echo, and token redirects are refused without c
     false,
   );
 });
+test("a stored grant cannot refresh through an MCP-selected replacement issuer", async (t) => {
+  const f = await setup(t);
+  await f.credentials.set("MCP_BINDING_SECRET", "FAKE_BINDING_SECRET");
+  const a = f.make({
+    ...f.config(),
+    clientSecretRef: "MCP_BINDING_SECRET",
+  });
+  await f.login(a);
+  const requestCount = f.state.requests.length;
+  f.advance(61000);
+  f.state.pathlessIssuer = true;
+
+  await assert.rejects(a.token(), /untrusted_issuer/);
+
+  assert.equal(f.state.refreshes, 0);
+  assert.equal((await a.inspect()).configured, true);
+  const requests = f.state.requests.slice(requestCount);
+  assert.ok(requests.length > 0);
+  for (const request of requests) {
+    assert.notEqual(request.path, "/token");
+    assert.equal(request.headers.authorization, undefined);
+    assert.equal(request.headers.referer, undefined);
+    assert.doesNotMatch(
+      request.body + JSON.stringify(request.headers),
+      /FAKE_ACCESS|FAKE_REFRESH|FAKE_BINDING_SECRET/,
+    );
+  }
+});
+
 test("expiry refresh is serialized through native cross-process writer; rotating tokens refreshed once", async (t) => {
   const f = await setup(t),
     a = f.make();

@@ -19,7 +19,9 @@ import { EventsHub } from "./webhooks.mjs";
 import { modernMcpHandler } from "./mcp2.mjs";
 import { AnswerApplicationServer } from "./answer-application-server.mjs";
 import { BudgetAdmissionServer } from "./budget-server.mjs";
+import { HumanMetricsStore } from "./human-metrics.mjs";
 import { createHistoryBackup, backupMaximum } from "./history-backup.mjs";
+import { createArtifactPreview } from "./artifact-preview.mjs";
 import { AcceptanceStore } from "./acceptance.mjs";
 import { modelRoutingViews } from "./model-routing-view.mjs";
 import { inspectTaskOutcomes } from "./task-outcomes-view.mjs";
@@ -176,7 +178,7 @@ export async function startDashboard(options) {
   const connections = new ConnectionObservations();
   const localUrl = `http://127.0.0.1:${port}/`;
   const cookieName = `rdsh_${kind === "project" ? project.id : "harness"}`;
-  let store, eventsHub, humanAnnotations, observedCli, instructionQueueWorker;
+  let store, eventsHub, humanAnnotations, humanMetrics, observedCli, instructionQueueWorker;
   try {
     if (kind === "project") {
       instructionQueueWorker = options.instructionQueueWorker || null;
@@ -193,6 +195,7 @@ export async function startDashboard(options) {
       store = await ProjectStore.open(project, { instructionQueueWorker });
     } else store = null;
     humanAnnotations = store ? await HumanAnnotationStore.open(project) : null;
+    humanMetrics = store ? await HumanMetricsStore.open(project) : null;
     eventsHub = store
       ? await EventsHub.open(project, () => store.value, options.webhookPost)
       : null;
@@ -240,6 +243,7 @@ export async function startDashboard(options) {
     : null;
   deliveryTimer?.unref();
   let harness = null;
+  let humanMetricsWarning = null;
   let share = {
     state: "disabled",
     message: "ローカル接続のみ。Tailscale共有は起動時に有効にできます。",
@@ -481,6 +485,17 @@ export async function startDashboard(options) {
   async function mutateReply(operation, input, context) {
     const task = updateQueue.then(async () => {
       const result = await store.mutateReply(operation, input, context);
+      if (
+        operation === "instruction_submit" &&
+        result?.request?.review_reason === "queue_revision_changed"
+      ) {
+        try {
+          await humanMetrics.recordQueueRevisionConflict();
+          humanMetricsWarning = null;
+        } catch {
+          humanMetricsWarning = "競合の計測をローカルに保存できませんでした。";
+        }
+      }
       for (const response of live)
         response.write(`event: changed\ndata: ${store.value.revision}\n\n`);
       for (const { mcp } of sessions.values()) void mcp.notify();
@@ -644,6 +659,7 @@ export async function startDashboard(options) {
           route === "/model-routing-ui.mjs" ||
           route === "/task-outcomes-ui.mjs" ||
           route === "/observed-cli-ui.mjs" ||
+          route === "/human-metrics-ui.mjs" ||
           route === "/favicon.ico" ||
           route === "/icon.png" ||
           route === "/icon.svg");
@@ -750,6 +766,7 @@ export async function startDashboard(options) {
           "/model-routing-ui.mjs",
           "/task-outcomes-ui.mjs",
           "/observed-cli-ui.mjs",
+          "/human-metrics-ui.mjs",
         ].includes(route)
       ) {
         res.writeHead(200, {
@@ -998,10 +1015,60 @@ export async function startDashboard(options) {
               return json(res, 400, { error: "Unknown annotation action" });
             return json(res, input.action === "create" ? 201 : 200, result);
           }
+        }
+        if (route === "/api/human-metrics") {
+          if (!humanAuthorized || !humanMetrics)
+            return json(res, 403, {
+              error: "Human browser credential required",
+            });
+          if (req.method === "GET")
+            return json(res, 200, {
+              ...humanMetrics.snapshot(),
+              warning: humanMetricsWarning,
+            });
+          if (req.method === "POST") {
+            const input = await readBody(req);
+            const task = updateQueue.then(async () => {
+              const result = await humanMetrics.handle(input, store.value);
+              humanMetricsWarning = null;
+              return result;
+            });
+            updateQueue = task.catch(() => {});
+            return json(res, 200, await task);
+          }
           return json(res, 405, { error: "Method not allowed" });
         }
         if (req.method === "GET" && route === "/api/state")
           return json(res, 200, await visibleState());
+        if (
+          kind === "project" &&
+          req.method === "GET" &&
+          route?.startsWith("/api/artifacts/")
+        ) {
+          const match = route.match(/^\/api\/artifacts\/(\d+)$/);
+          if (!match)
+            return json(res, 404, { error: "成果物の記録が見つかりません" });
+          const preview = await createArtifactPreview(
+            project,
+            store.value.events,
+            Number(match[1]),
+          );
+          if (preview.status !== 200)
+            return json(res, preview.status, { error: preview.reason });
+          res.writeHead(200, {
+            "content-type": preview.mime,
+            "content-disposition": 'inline; filename="artifact-preview"',
+            "content-security-policy": "default-src 'none'; sandbox",
+            "x-content-type-options": "nosniff",
+            "cache-control": "private, no-store",
+            "referrer-policy": "no-referrer",
+            "x-rdsh-preview-kind": preview.kind,
+            "x-rdsh-preview-redacted": String(preview.redacted),
+            "x-rdsh-preview-truncated": String(preview.truncated),
+            "content-length": String(preview.bytes.length),
+          });
+          return res.end(preview.bytes);
+        }
         if (req.method === "GET" && route === "/api/handoff") {
           if (!mcpAuthorized)
             return json(res, 403, { error: "MCP bearer credential required" });
