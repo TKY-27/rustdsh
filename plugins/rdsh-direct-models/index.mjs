@@ -5,6 +5,7 @@ import { pathToFileURL } from 'node:url';
 import { createCursorSdkBackend } from './cursor-sdk.mjs';
 import { createAgySdkBackend } from './agy-sdk.mjs';
 import { registerDevinTool } from './devin-tool.mjs';
+import { assertSupportedGenerationOptions } from './json-turn.mjs';
 
 async function loadLlmRuntime() {
   const locations = [import.meta.url, pathToFileURL(join(homedir(), '.local/lib/node_modules/@deepseek-ai/dsh/package.json')).href];
@@ -59,6 +60,7 @@ export class DirectModelsAdapter extends LlmAdapter {
   }
   async *stream(options) {
     options.signal?.throwIfAborted();
+    assertSupportedGenerationOptions(options);
     const backend = this.backend(options.provider);
     const result = await backend.generate({ ...options, messages: options.messages ?? [] });
     options.signal?.throwIfAborted();

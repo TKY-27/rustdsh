@@ -6,7 +6,11 @@ CursorとAntigravityの公式SDKをDSHのモデルプロバイダーとして使
 
 SDKには毎回、DSHの履歴とツールの説明をテキストとして渡します。各SDKは独立した空の一時ワークスペースで、操作ツール・MCP・subagent・ambient設定を無効化し、1つのJSON回答を返します。SDK自体の内部ランタイムは存在しますが、DSHの会話ループやツール実行を委譲しません。
 
+一時ワークスペースとSDKの保存領域は、通常終了時に加え、タイムアウト・キャンセル・出力上限による強制終了時も子プロセスの終了を待って削除します。削除に失敗した場合はエラーを返します。
+
 JSON変換層は宣言したツール名・引数のJSON Schema・呼出しIDの重複・追加フィールドを検証します。不正JSONだけ最大1回修正を要求し、認証・通信失敗を別経路への切替で隠しません。回答は検証完了後にDSHへ返すため、モデルの部分出力は配信しません。現在はテキスト入力のみ対応します。
+
+`temperature`・`maxTokens`・`stop` の生成制御は未対応です。指定された場合は、認証解決やSDK生成を始める前に `UNSUPPORTED_GENERATION_OPTION` で拒否します。
 
 `devin_cli` はDSHの承認後に、現在のセッションのワークスペース内でインストール済みCLIを起動します。CLIの信頼・権限設定を保持し、shellを介さず、タイムアウト・キャンセル・出力量制限を適用します。Devin内部のエージェントループと操作はDevinが所有するため、DSHは委譲全体を承認します。既定実行ファイルは `~/.local/bin/devin` です。
 
@@ -44,8 +48,10 @@ Antigravityの確認済み組合せは `provider: agy-sdk` / `model: gemini-3.8-
 ## 認証
 
 - Cursor: `CURSOR_API_KEY` または公式SDKが管理する `~/.cursor/sdk/auth.json`。キーの発行・保存はこのプラグインでは行いません。
-- Antigravity: 呼出しごとにDSH credential serviceの `GEMINI_API_KEY`、`GOOGLE_API_KEY` を解決し、SDK子プロセスの環境へ渡します。環境変数・SDKのVertex設定も使用できます。Antigravity CLIのOAuthやサブスクリプションを引き継ぐ経路ではありません。
+- Antigravity: 呼出しごとにDSH credential serviceの `GEMINI_API_KEY`、`GOOGLE_API_KEY` を解決し、SDK子プロセスの環境へ渡します。環境の同名キー、`GOOGLE_GENAI_USE_VERTEXAI` / `GOOGLE_GENAI_USE_ENTERPRISE`、`GOOGLE_CLOUD_PROJECT`、`GOOGLE_CLOUD_LOCATION`、`GOOGLE_APPLICATION_CREDENTIALS` も使用できます。接続設定の `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY`（小文字名も可）、`SSL_CERT_FILE` / `SSL_CERT_DIR` も保持します。子プロセスへはこれらと必要なOS実行環境だけを渡し、他のプロバイダーのキーやコード注入用の環境設定、TLS秘密の記録設定を継承しません。Antigravity CLIのOAuthやサブスクリプションを引き継ぐ経路ではありません。
 - Devin: CLI自身の既存認証とワークスペース信頼設定を使用します。追加の信頼や権限を自動付与しません。
+
+Windowsではproxy名の大小文字を同一視し、呼出し側の明示設定を優先します。同じ入力に大小両名がある場合は、大文字名の文字列値（空文字を含む）を優先します。Unixでは両名を保持し、優先順位はSDK側のtransportに従います。
 
 キーをpromptや設定例に埋め込まないでください。SDK診断は秘密を含む可能性があるため破棄し、失敗分類だけを返します。Devin出力は既知の秘密とAPIキー形式をマスクしますが、任意の機密情報を完全に除去する仕組みではありません。
 
@@ -55,10 +61,11 @@ DSHを通常の `~/.local/lib/node_modules/@deepseek-ai/dsh` へ導入した環�
 
 ```sh
 npm test --prefix plugins/rdsh-direct-models
+python3 -I -B plugins/rdsh-direct-models/agy-sdk.test.py
 node plugins/rdsh-direct-models/sdk-runtime-smoke.mjs
 ```
 
-33テストでJSON境界、SDK能力の無効化、タイムアウト、キャンセル、出力上限、秘密の切断境界、ワークスペース制限を確認します。実DSH ToolRuntime/Cordisを使い、不正引数の遮断、承認拒否、承認後のファイル読取、結果の履歴反映、Devin拒否時の非起動も検証します。通常テストは外部APIやCLIを呼びません。
+Nodeの66テストとPythonの4テストでJSON境界、SDK能力の無効化、タイムアウト、キャンセル、出力上限、秘密の切断境界、ワークスペース制限、子環境の制限と接続設定の保持、Windowsでの大小文字にまたがるproxy上書き、生成制御の拒否、Enterprise認証判定、強制終了後の一時領域削除を確認します。実DSH ToolRuntime/Cordisを使い、不正引数の遮断、承認拒否、承認後のファイル読取、結果の履歴反映、Devin拒否時の非起動も検証します。通常テストは外部APIやCLIを呼びません。
 
 実Devinを検証する場合は、CLIで信頼済みの検証専用フォルダーを指定してください。通常の信頼設定を迂回しません。検証fixture内の承認サービスは、固定の無害な確認要求1件だけを許可し、本番の承認設定を変更しません。
 

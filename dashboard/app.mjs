@@ -1,3 +1,4 @@
+import { renderAttention } from "./attention-view.mjs";
 import { renderReports } from "./reports-view.mjs";
 import { renderQuestionCards } from "./question-cards-ui.mjs";
 import { renderAnswerApplications } from "./answer-applications-ui.mjs";
@@ -11,6 +12,7 @@ import { renderBudget } from "./budget-ui.mjs";
 import { renderModelRouting } from "./model-routing-ui.mjs";
 import { createTaskOutcomesPanel } from "./task-outcomes-ui.mjs";
 import { createHumanAnnotationPanel } from "./human-annotations-ui.mjs";
+import { createHumanMetricsPanel } from "./human-metrics-ui.mjs";
 import { setupObservedCli } from "./observed-cli-ui.mjs";
 
 const $ = (id) => document.getElementById(id);
@@ -47,6 +49,81 @@ function node(tag, text, className) {
   if (className) result.className = className;
   return result;
 }
+let artifactPreviewUrl = null;
+let artifactPreviewRequest = 0;
+let artifactPreviewRevision = -1;
+async function previewArtifact(sequence) {
+  const request = ++artifactPreviewRequest;
+  // The state generation at click time: a newer render while the fetch is
+  // in flight leaves older text on screen, so the dialog says so.
+  const revision = latestState?.revision ?? -1;
+  artifactPreviewRevision = revision;
+  const dialog = $("artifact-preview");
+  const status = $("artifact-preview-status");
+  const content = $("artifact-preview-content");
+  content.replaceChildren();
+  status.textContent = "成果物を読み取っています…";
+  dialog.showModal();
+  try {
+    const response = await fetch(
+      base + "api/artifacts/" + encodeURIComponent(sequence),
+      {
+        headers: browserToken
+          ? { "x-rdsh-browser-token": browserToken }
+          : {},
+      },
+    );
+    if (request !== artifactPreviewRequest) return;
+    if (!response.ok) {
+      let reason = "成果物をプレビューできません";
+      try {
+        reason = (await response.json()).error || reason;
+      } catch {}
+      throw new Error(reason);
+    }
+    const blob = await response.blob();
+    if (request !== artifactPreviewRequest) return;
+    const redacted = response.headers.get("x-rdsh-preview-redacted") === "true";
+    const truncated = response.headers.get("x-rdsh-preview-truncated") === "true";
+    const stale =
+      latestState != null &&
+      revision !== -1 &&
+      latestState.revision !== revision;
+    const staleNote = stale ? "（取得後に状態が更新されました）" : "";
+    if (response.headers.get("x-rdsh-preview-kind") === "image") {
+      artifactPreviewUrl = URL.createObjectURL(blob);
+      const image = node("img", undefined, "artifact-preview-image");
+      image.src = artifactPreviewUrl;
+      image.alt = "成果物の画像プレビュー";
+      content.append(image);
+      status.textContent =
+        "画像を読み取り専用で表示しています。" + staleNote;
+    } else {
+      content.append(node("pre", await blob.text(), "artifact-preview-text"));
+      status.textContent =
+        [
+          redacted
+            ? "認証情報らしき値を伏せて表示しています。"
+            : "読み取り専用のテキスト表示です。",
+          truncated ? "先頭128 KiBまで表示しています。" : "",
+        ]
+          .filter(Boolean)
+          .join(" ") + staleNote;
+    }
+  } catch (error) {
+    if (request !== artifactPreviewRequest) return;
+    content.replaceChildren(node("p", error.message, "warn"));
+    status.textContent = "表示できる内容はありません。元ファイルは変更していません。";
+  }
+}
+$("artifact-preview-close").addEventListener("click", () =>
+  $("artifact-preview").close(),
+);
+$("artifact-preview").addEventListener("close", () => {
+  artifactPreviewRequest++;
+  if (artifactPreviewUrl) URL.revokeObjectURL(artifactPreviewUrl);
+  artifactPreviewUrl = null;
+});
 let renderedRevision = -1;
 let latestState = null;
 let selectedTask = "";
@@ -219,18 +296,29 @@ const renderHumanAnnotations = createHumanAnnotationPanel(
   $("human-annotations-panel"),
   { api, node, navigateTo },
 );
+const renderHumanMetrics = createHumanMetricsPanel($("human-metrics"), {
+  api,
+  node,
+  confirm: (message) => window.confirm(message),
+});
+let humanMetricsRevision = -1;
 function render(state) {
   if (state.revision < renderedRevision) return;
   renderedRevision = state.revision;
   latestState = state;
   observedCli?.render(state);
+  renderHumanMetrics.render(state);
+  if (state.revision !== humanMetricsRevision) {
+    humanMetricsRevision = state.revision;
+    void renderHumanMetrics.reload();
+  }
   renderInstructions(state);
   renderCosts(state);
   renderCatalog();
   renderBudget($("budget-admission"), state, node);
   updateOverview(state);
   renderHumanAnnotations(state);
-  renderReports(state);
+  renderReports(state, Date.now(), previewArtifact);
   const unanswered = state.questions.filter((question) => question.answer === null);
   renderTaskOutcomes(state);
   renderQuestionCards($("questions"), unanswered, state.question_contracts, {
@@ -264,6 +352,7 @@ function render(state) {
         return element;
       }),
   );
+  renderAttention(state);
   $("connection").textContent = "接続済み · プロジェクト専用";
   $("updated").textContent =
     `最終受信: ${state.updated_at ? new Date(state.updated_at).toLocaleString("ja-JP") : "まだ報告がありません"} · 鮮度は各項目の観測時刻から判定します。累計欄は報告元のAPI換算値です。台帳は出所ごとの報告値です。`;
