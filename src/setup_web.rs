@@ -203,6 +203,8 @@ fn handle(
             ),
         };
     crate::local_http::respond(&mut s, status, ctype, payload.as_bytes())?;
+    // The main thread can exit as soon as it observes done. Send the complete
+    // acknowledgement first, and keep serving if writing the response fails.
     if finish_after_response {
         done.store(true, Ordering::Relaxed);
     }

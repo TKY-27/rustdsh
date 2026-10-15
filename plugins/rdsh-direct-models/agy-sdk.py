@@ -14,12 +14,13 @@ async def run(payload):
     from google.antigravity.models import DEFAULT_MODEL
     if payload.get('operation') == 'discover':
         return {'models': [{'id': DEFAULT_MODEL, 'name': DEFAULT_MODEL}]}
-    if not (os.environ.get('GEMINI_API_KEY') or os.environ.get('GOOGLE_API_KEY') or os.environ.get('GOOGLE_GENAI_USE_VERTEXAI', '').lower() in ('1', 'true')):
+    if not (os.environ.get('GEMINI_API_KEY') or os.environ.get('GOOGLE_API_KEY') or os.environ.get('GOOGLE_GENAI_USE_VERTEXAI', '').lower() in ('1', 'true') or os.environ.get('GOOGLE_GENAI_USE_ENTERPRISE', '').lower() in ('1', 'true')):
         return {'error': 'SDK_AUTH_REQUIRED'}
     prompt = payload.get('prompt')
     if not isinstance(prompt, str) or not prompt:
         return {'error': 'INVALID_REQUEST'}
-    with tempfile.TemporaryDirectory(prefix='rdsh-agy-sdk-') as workspace:
+    with tempfile.TemporaryDirectory(prefix='rdsh-agy-sdk-', dir=os.environ.get('RDSH_SDK_TMPDIR')) as workspace, contextlib.ExitStack() as cleanup:
+        cleanup.callback(os.chdir, os.getcwd())
         os.chdir(workspace)
         config = LocalAgentConfig(
             model=payload.get('model') or DEFAULT_MODEL,
