@@ -1,7 +1,9 @@
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import { existsSync } from 'node:fs';
 import { readFile, writeFile, mkdir, access, rename, unlink } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
+import { execFile } from 'node:child_process';
 
 import { discordDefaults, normalizeDiscord, installDiscordPresence } from './discord.js';
 
@@ -13,6 +15,68 @@ function dshHome() {
 }
 function cfgPath() { return join(dshHome(), 'rdsh-context.json'); }
 function settingsPath() { return join(dshHome(), 'rdsh.json'); }
+
+function defaultExists(path) {
+  try { return existsSync(path); } catch { return false; }
+}
+
+// Self-contained copy of the compute plugin's resolution order: Desktop can
+// start without the login shell PATH, so RDSH_BIN wins, then PATH, then the
+// well-known install locations. Unresolved keeps the historical bare name;
+// execFile failure still resolves to ''.
+function resolveRdshBin(env = process.env, platform = process.platform, exists = defaultExists) {
+  if (typeof env.RDSH_BIN === 'string' && env.RDSH_BIN.trim() !== '') return env.RDSH_BIN;
+  const name = platform === 'win32' ? 'rdsh.exe' : 'rdsh';
+  const pathSep = platform === 'win32' ? ';' : ':';
+  for (const dir of (env.PATH || env.Path || '').split(pathSep)) {
+    if (dir && exists(join(dir, name))) return 'rdsh'; // PATH hit: the bare name spawns as before
+  }
+  const home = platform === 'win32' ? env.USERPROFILE || env.HOME || homedir() : env.HOME || homedir();
+  const candidates = platform === 'win32'
+    ? [
+      join(env.LOCALAPPDATA || join(home, 'AppData', 'Local'), 'rdsh', 'bin', name),
+      join(home, '.local', 'bin', name),
+      join(env.CARGO_HOME || join(home, '.cargo'), 'bin', name),
+    ]
+    : [join(home, '.local', 'bin', name), join('/usr/local/bin', name), join(home, '.cargo', 'bin', name)];
+  for (const candidate of candidates) {
+    if (exists(candidate)) return candidate;
+  }
+  return 'rdsh';
+}
+
+// The settings card shows the running versions (issue #397). rdsh exports
+// RDSH_VERSION when it launches DSH; otherwise the installed CLI is asked.
+function runRdshVersion() {
+  return new Promise((resolve) => {
+    execFile(resolveRdshBin(), ['--version'], { timeout: 2000, windowsHide: true }, (error, stdout) => {
+      if (error) return resolve('');
+      const match = String(stdout).match(/^rdsh\s+(\S+)/m);
+      resolve(match ? match[1] : '');
+    });
+  });
+}
+async function readDshVersion() {
+  try {
+    const entry = process.argv[1];
+    if (!entry) return '';
+    const manifest = JSON.parse(await readFile(join(dirname(dirname(entry)), 'package.json'), 'utf8'));
+    return typeof manifest.version === 'string' ? manifest.version : '';
+  } catch {
+    return '';
+  }
+}
+let versionsPromise;
+function versions() {
+  if (!versionsPromise) {
+    versionsPromise = (async () => {
+      const fromEnv = (process.env.RDSH_VERSION || '').trim();
+      const rdsh = /^[0-9][0-9A-Za-z.+-]{0,31}$/.test(fromEnv) ? fromEnv : await runRdshVersion();
+      return { rdsh, dsh: await readDshVersion() };
+    })().catch(() => ({ rdsh: '', dsh: '' }));
+  }
+  return versionsPromise;
+}
 
 async function savePrivateJson(path, value) {
   const temporary = `${path}.tmp.${randomBytes(16).toString('hex')}`;
@@ -163,7 +227,8 @@ function sanitizeSettings(j) {
       slim: bool(g.slim, dg.slim),
       passthrough: bool(g.passthrough, dg.passthrough),
       dry_run: bool(g.dry_run, dg.dry_run),
-      default_profile: str(g.default_profile, 500, dg.default_profile),
+      // Rust 側の PROFILE_CHARS と同じ上限（src/rdsh_config.rs）。
+      default_profile: str(g.default_profile, 200, dg.default_profile),
     },
     tokens: {
       default_budget: clampInt(tk.default_budget, 500, 200000, d.tokens.default_budget),
@@ -172,7 +237,8 @@ function sanitizeSettings(j) {
       dir: str(se.dir, 300, d.search.dir),
       max: clampInt(se.max, 1, 100, d.search.max),
       web_limit: clampInt(se.web_limit, 1, 100, d.search.web_limit),
-      searxng_url: str(se.searxng_url, 500, d.search.searxng_url),
+      // Rust 側の URL_CHARS と同じ上限（src/rdsh_config.rs）。
+      searxng_url: str(se.searxng_url, 2000, d.search.searxng_url),
     },
     compact: {
       max_tokens: clampInt(co.max_tokens, 500, 200000, d.compact.max_tokens),
@@ -323,7 +389,12 @@ function registerWeb(ctx, presence) {
         }
         let legacyPresent = false;
         try { await access(cfgPath()); legacyPresent = true; } catch (e) {}
-        json(res, 200, { ok: true, config: cfg, legacy_present: legacyPresent });
+        json(res, 200, {
+          ok: true,
+          config: cfg,
+          legacy_present: legacyPresent,
+          versions: await versions(),
+        });
       },
     });
     const offPostSettings = ctx.webServer.register({
