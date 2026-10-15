@@ -111,6 +111,10 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File ./dashboard/install-windows.ps1
 # A project-specific dashboard. The default port is stable for each project path.
 rdsh-dashboard project --project C:\Projects\MyProject --open
 
+# Include only the additional projects you explicitly want to see here.
+rdsh-dashboard project --project C:\Projects\MyProject `
+  --include-project C:\Projects\AnotherProject --open
+
 # A separate Harness instance, with front-end :38081 and backend :3081.
 rdsh-dashboard harness --open
 
@@ -132,6 +136,41 @@ have verified stopped before the icon/server disappear. If verification fails,
 the icon remains with a warning so you can inspect the stop status and retry.
 Closing the browser leaves the server running. CLI `stop` removes its tray too.
 Independent Harness sessions and other project dashboards are not stopped.
+
+### Cross-project overview
+
+Project mode can show a read-only summary for the current project and up to 31
+additional projects supplied with repeated `--include-project <directory>`
+options. The dashboard never searches for other projects. Each included path is
+an explicit grant to show its project name and aggregate counts to users who can
+open the current dashboard. It exposes only active, waiting, and needs-attention
+counts; task and question details stay in the owning project dashboard.
+
+If an included project's state cannot be read or validated, its row reports
+unknown and the time it was last read successfully. Old counts are not shown.
+Only the last successful read time is cached in the current project's
+`project-cross-overview.json`; counts are read again on each refresh. A detail
+link appears only while the owning project dashboard is running. It carries no
+browser key, so the owning dashboard still requires its own human session.
+Projects not named with `--include-project` are not enumerated or exposed.
+
+The same explicit project list also enables **project cross-search** for task,
+decision, log, and artifact-reference records. Search requires the current
+dashboard's human browser credential, supports all-terms text queries, one
+project or all included projects, record kind, date range, and a bounded result
+limit. Results show a short matching excerpt, project/source, record time, and
+a link to its source record when that project's dashboard is running. The link
+contains no browser key and still needs that project's own human session.
+Unreadable project state is reported as unknown and contributes no results.
+
+Task, decision, and log records search their stored dashboard text. Artifact
+search is reference-only: it searches the report title and sanitized path/URL,
+never reads the artifact file, follows a symlink, or fetches an external URL.
+Local references are checked with metadata-only `realpath`/`stat` calls inside
+the owning project; a missing path is labeled stale, while external or unsafe
+references remain unverified. The existing DSH Session full-text search is
+unchanged and remains the place to search Session bodies; project cross-search
+does not index Sessions or add semantic search.
 
 ```powershell
 # Keep terminal output and Ctrl-C behavior for scripts or troubleshooting.

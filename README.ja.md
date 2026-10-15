@@ -407,6 +407,8 @@ rdsh serve                             # 起動（ローカルホスト限定、
 rdsh-dashboard project --project <ディレクトリ>
 ```
 
+`project --include-project <ディレクトリ>` を追加すると、その起動時に明示したprojectだけの稼働・待ち・要確認件数を横断表示します。詳細は各project専用dashboardに残り、読取不能時は前回観測時刻と不明状態を表示します。
+
 ※ Windows ネイティブではタスクトレイに常駐し、タスクバーから簡単に開閉できます（端末起動したい場合は `--no-tray` を指定）。詳細は [dashboard/README.md](dashboard/README.md) をご覧ください。外部エージェント CLI（cursor-agent、devin）を監視付きジョブとして実行できます（[docs/AGENT-RUNNERS.md](docs/AGENT-RUNNERS.md)、英語）。
 
 ## デスクトップアプリ (Electron)

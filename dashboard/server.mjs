@@ -43,6 +43,8 @@ import {
   handoffResource,
   isHandoffPacket,
 } from "./handoffs.mjs";
+import { createProjectCrossOverview } from "./project-cross-overview.mjs";
+import { createProjectCrossSearch } from "./project-cross-search.mjs";
 import {
   emptyProfileCatalog,
   previewProjectProfile,
@@ -204,8 +206,14 @@ async function readBody(req, maximum = 131072) {
   return JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
 }
 export async function startDashboard(options) {
-  const { kind = "project", tailscale = true } = options;
+  const { kind = "project", tailscale = true, overviewProjects = [] } = options;
   let project = options.project;
+  if (
+    !Array.isArray(overviewProjects) ||
+    (overviewProjects.length && kind !== "project") ||
+    overviewProjects.length > 31
+  )
+    throw new Error("Cross-project overview is available only in project mode");
   // Managed projects live in <home>/projects/<id> and can be remapped by a
   // project move; callers that pass an explicit state directory keep it.
   const managedLayout =
@@ -254,7 +262,7 @@ export async function startDashboard(options) {
   const connections = new ConnectionObservations();
   const localUrl = `http://127.0.0.1:${port}/`;
   const cookieName = `rdsh_${kind === "project" ? project.id : "harness"}`;
-  let store, eventsHub, devices, humanAnnotations, humanMetrics, observedCli, instructionQueueWorker, reviewEvidence;
+  let store, eventsHub, devices, humanAnnotations, humanMetrics, observedCli, instructionQueueWorker, reviewEvidence, projectCrossOverview, projectCrossSearch;
   try {
     if (kind === "project") {
       instructionQueueWorker = options.instructionQueueWorker || null;
@@ -280,6 +288,26 @@ export async function startDashboard(options) {
     eventsHub = store
       ? await EventsHub.open(project, () => store.value, options.webhookPost)
       : null;
+    if (overviewProjects.length) {
+      const readProjectState = async (target) =>
+        target.id === project.id
+          ? store.value
+          : JSON.parse(
+              await fs.readFile(
+                path.join(target.directory, "state.json"),
+                "utf8",
+              ),
+            );
+      projectCrossOverview = createProjectCrossOverview(
+        [project, ...overviewProjects],
+        path.join(directory, "project-cross-overview.json"),
+        { readState: readProjectState },
+      );
+      projectCrossSearch = createProjectCrossSearch(
+        [project, ...overviewProjects],
+        { readState: readProjectState },
+      );
+    }
     observedCli = store
       ? await ObservedCliStore.open(project, {
           observe: options.observeExternalCli,
@@ -1078,6 +1106,8 @@ export async function startDashboard(options) {
       if (req.method === "GET" && route === "/api/config")
         return json(res, 200, {
           kind,
+          project_overview_enabled: Boolean(projectCrossOverview),
+          project_search_enabled: Boolean(projectCrossSearch),
           instance_id: instanceId,
           device_access: browserAccess,
           project: project
@@ -1361,6 +1391,36 @@ export async function startDashboard(options) {
             200,
             previewProjectProfile(store.value, await readBody(req)),
           );
+        }
+        if (req.method === "GET" && route === "/api/projects/overview") {
+          if (!humanAuthorized)
+            return json(res, 403, {
+              error: "Human browser credential required",
+            });
+          if (!projectCrossOverview)
+            return json(res, 404, {
+              error: "Cross-project overview is not configured",
+            });
+          return json(res, 200, await projectCrossOverview.snapshot());
+        }
+        if (req.method === "POST" && route === "/api/projects/search") {
+          if (!humanAuthorized)
+            return json(res, 403, {
+              error: "Human browser credential required",
+            });
+          if (!projectCrossSearch)
+            return json(res, 404, {
+              error: "Cross-project search is not configured",
+            });
+          try {
+            return json(
+              res,
+              200,
+              await projectCrossSearch.search(await readBody(req)),
+            );
+          } catch (error) {
+            return json(res, 400, { error: error.message });
+          }
         }
         if (req.method === "GET" && route === "/api/handoff") {
           if (!mcpAuthorized)

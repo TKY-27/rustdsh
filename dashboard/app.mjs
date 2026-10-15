@@ -65,6 +65,136 @@ async function api(route, body, method) {
   if (!response.ok) throw new Error(result.error || "接続できません");
   return result;
 }
+function formatObservedAt(value) {
+  const parsed = value ? Date.parse(value) : NaN;
+  return Number.isFinite(parsed)
+    ? new Date(parsed).toLocaleString("ja-JP")
+    : "観測履歴なし";
+}
+async function refreshProjectCrossOverview() {
+  const list = $("cross-project-rows");
+  try {
+    const value = await api("projects/overview");
+    const projectFilter = $("cross-project-search-project");
+    const selectedProject = projectFilter.value;
+    projectFilter.replaceChildren(node("option", "すべてのproject"));
+    projectFilter.firstElementChild.value = "";
+    for (const project of value.projects) {
+      const option = node("option", project.name);
+      option.value = project.project_id;
+      projectFilter.append(option);
+    }
+    projectFilter.value = value.projects.some(
+      (project) => project.project_id === selectedProject,
+    )
+      ? selectedProject
+      : "";
+    list.replaceChildren(
+      ...value.projects.map((project) => {
+        const item = node("li", undefined, "event");
+        item.append(node("strong", project.name));
+        if (project.status === "observed" && project.counts) {
+          item.append(
+            node(
+              "p",
+              `稼働 ${project.counts.active} · 待ち ${project.counts.waiting} · 要確認 ${project.counts.needs_attention}`,
+            ),
+            node(
+              "p",
+              `最終観測: ${formatObservedAt(project.last_observed_at)}`,
+              "sub",
+            ),
+          );
+        } else {
+          item.append(
+            node("p", "稼働・待ち・要確認: 不明"),
+            node(
+              "p",
+              `最終観測: ${formatObservedAt(project.last_observed_at)}`,
+              "sub",
+            ),
+          );
+        }
+        if (project.detail_url) {
+          const link = node("a", "元projectの詳細を開く");
+          link.href = project.detail_url;
+          link.target = "_blank";
+          link.rel = "noopener noreferrer";
+          item.append(link);
+        } else if (project.status === "observed") {
+          item.append(
+            node(
+              "p",
+              "詳細画面は停止中です。元projectのdashboard起動後に開けます。",
+              "sub",
+            ),
+          );
+        }
+        return item;
+      }),
+    );
+    $("cross-project-observed").textContent =
+      `この一覧の最終取得: ${formatObservedAt(value.observed_at)}`;
+  } catch {
+    list.replaceChildren();
+    $("cross-project-observed").textContent =
+      "横断情報を取得できません · 状態は不明です";
+  }
+}
+const searchKindNames = {
+  task: "task",
+  decision: "判断",
+  log: "log",
+  artifact: "artifact参照",
+};
+function renderProjectCrossSearch(value) {
+  const list = $("cross-project-search-results");
+  list.replaceChildren(
+    ...(value.results || []).map((result) => {
+      const item = node("li", undefined, "event");
+      item.append(
+        node(
+          "strong",
+          `${result.project_name} · ${searchKindNames[result.kind] || result.kind} · ${result.title}`,
+        ),
+        node("p", result.snippet),
+        node(
+          "p",
+          `${result.kind}:${result.record_id} · ${formatObservedAt(result.time)} · ${result.search_scope === "reference_only" ? "参照情報のみを検索" : "記録本文を検索"}`,
+          "sub",
+        ),
+      );
+      if (result.reference_status) {
+        const labels = {
+          available: "参照ファイルの存在を確認",
+          stale: "参照先なし · 古い参照",
+          external: "外部参照 · 取得状態は未確認",
+          unknown: "参照先の状態は未確認",
+        };
+        item.append(
+          node(
+            "p",
+            labels[result.reference_status] || "参照先の状態は未確認",
+            result.reference_status === "stale" ? "warn" : "sub",
+          ),
+        );
+      }
+      if (result.source_url) {
+        const link = node("a", "元の記録を開く");
+        link.href = result.source_url;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        item.append(link);
+      } else {
+        item.append(node("p", "元projectのdashboardは停止中です", "sub"));
+      }
+      return item;
+    }),
+  );
+  const unavailable = value.unavailable_projects?.length || 0;
+  $("cross-project-search-status").textContent =
+    `一致 ${value.matched_count}件${value.truncated ? " · 表示上限に達しました" : ""}${unavailable ? ` · 状態不明 ${unavailable} project（検索結果なし）` : ""}`;
+}
 function node(tag, text, className) {
   const result = document.createElement(tag);
   if (text !== undefined) result.textContent = text;
@@ -186,6 +316,39 @@ $("artifact-preview").addEventListener("close", () => {
   if (artifactPreviewUrl) URL.revokeObjectURL(artifactPreviewUrl);
   artifactPreviewUrl = null;
 });
+$("cross-project-search-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const button = event.currentTarget.querySelector('button[type="submit"]');
+  button.disabled = true;
+  $("cross-project-search-status").textContent = "検索中…";
+  $("cross-project-search-results").replaceChildren();
+  const projectId = $("cross-project-search-project").value;
+  try {
+    const value = await api("projects/search", {
+      query: $("cross-project-search-query").value,
+      ...(projectId ? { project_ids: [projectId] } : {}),
+      kind: $("cross-project-search-kind").value,
+      since: $("cross-project-search-since").value,
+      until: $("cross-project-search-until").value,
+    });
+    renderProjectCrossSearch(value);
+  } catch (error) {
+    $("cross-project-search-status").textContent =
+      `検索できませんでした: ${error.message}`;
+  } finally {
+    button.disabled = false;
+  }
+});
+function focusCurrentSource() {
+  let target;
+  try {
+    target = decodeURIComponent(location.hash.slice(1));
+  } catch {
+    return;
+  }
+  if (/^(?:task|question|decision|event)-/.test(target)) navigateTo(target);
+}
+window.addEventListener("hashchange", focusCurrentSource);
 let renderedRevision = -1;
 let latestState = null;
 let selectedTask = "";
@@ -800,6 +963,10 @@ async function refreshModelRouting() {
   routingRefreshing = true;
   try {
     render(await api("state"));
+    if (!initialSourceFocused) {
+      focusCurrentSource();
+      initialSourceFocused = true;
+    }
   } catch (e) {
     $("connection").textContent = e.message;
     $("overview-state").textContent = "画面の更新に失敗 · 対象の現在状態は不明";
@@ -826,6 +993,7 @@ setInterval(() => {
   if (!document.hidden) void refreshModelRouting();
 }, 5000);
 let qrObjectUrl = null;
+let initialSourceFocused = false;
 async function renderShare(config) {
   if (config.device_access?.role === "device") {
     $("share-toggle").hidden = true;
@@ -1201,6 +1369,12 @@ try {
     }
     $("quick-actions").hidden = false;
     await refreshProfiles();
+    $("cross-project-overview").hidden = !config.project_overview_enabled;
+    $("cross-project-search").hidden = !config.project_search_enabled;
+    if (config.project_overview_enabled) {
+      await refreshProjectCrossOverview();
+      setInterval(refreshProjectCrossOverview, 15000);
+    }
     await refreshState();
     const source = new EventSource(
       base + "api/live?key=" + encodeURIComponent(browserToken),
