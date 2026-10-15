@@ -1,32 +1,33 @@
+import { text, formatDateTime } from "./locale.mjs";
 import { observationView } from "./observations.mjs";
 import { deepLinkButton } from "./deep-link-ui.mjs";
 
 const statusNames = {
-  pass: "成功",
-  fail: "失敗",
-  blocked: "確認できない",
-  "not-run": "未実施",
-  "not-defined": "条件未定義",
-  definition_changed: "条件が変更されています",
-  unknown: "未確認",
+  pass: text("outcome.pass"),
+  fail: text("outcome.fail"),
+  blocked: text("outcome.blocked"),
+  "not-run": text("outcome.notRun"),
+  "not-defined": text("outcome.undefined"),
+  definition_changed: text("outcome.changed"),
+  unknown: text("outcome.unknown"),
 };
 const freshnessLabels = {
   fresh: "",
-  stale: "古い情報",
-  unknown: "鮮度未確認",
-  unavailable: "未取得",
+  stale: text("outcome.stale"),
+  unknown: text("outcome.freshness"),
+  unavailable: text("outcome.unavailable"),
 };
 const date = (value) =>
-  value ? new Date(value).toLocaleString("ja-JP") : "未申告";
+  value ? formatDateTime(value) : text("outcome.undeclared");
 
 function renderTaskObservation(node, status, details, task, now) {
   const view = observationView(task.status, task.observation, now);
   const statusQualifier = view.current
     ? view.kind === "estimated"
-      ? "推定・"
+      ? text("outcome.estimated")
       : ""
-    : (freshnessLabels[view.freshness] || "鮮度未確認") + "・";
-  status.textContent = `${task.status}（${statusQualifier}作業の申告）`;
+    : text("outcome.qualifier", { freshness: freshnessLabels[view.freshness] || text("outcome.freshness") });
+  status.textContent = text("outcome.reported", { status: text("task.status." + task.status), qualifier: statusQualifier });
   const tone =
     view.current && view.kind !== "estimated"
       ? task.status
@@ -42,40 +43,40 @@ function renderTaskObservation(node, status, details, task, now) {
   panel.dataset.kind = view.kind || "unknown";
   const heading = node("div", undefined, "observation-heading");
   heading.append(
-    node("span", view.label, "provenance-badge " + (view.kind || "unknown")),
+    node("span", text("observation.kind." + (view.kind || "unknown")), "provenance-badge " + (view.kind || "unknown")),
   );
   if (view.freshness !== "fresh")
     heading.append(
       node(
         "span",
-        freshnessLabels[view.freshness] || "鮮度未確認",
+        freshnessLabels[view.freshness] || text("outcome.freshness"),
         "provenance-badge " + view.freshness,
       ),
     );
   panel.append(heading);
   if (view.value != null && !view.current)
-    panel.append(node("div", "前回の報告状態：" + view.value, "sub"));
+    panel.append(node("div", text("outcome.previous") + view.value, "sub"));
   panel.append(
-    node("div", "観測：" + date(observation?.observed_at), "sub"),
-    node("div", "報告元：" + (observation?.source || "未申告"), "sub"),
-    node("div", "参照対象：" + (observation?.reference || "未申告"), "sub"),
+    node("div", text("outcome.observed") + date(observation?.observed_at), "sub"),
+    node("div", text("outcome.source") + (observation?.source || text("outcome.undeclared")), "sub"),
+    node("div", text("outcome.reference") + (observation?.reference || text("outcome.undeclared")), "sub"),
   );
   if (observation?.observed_at && observation.max_age_seconds) {
     const expiresAt = new Date(
       Date.parse(observation.observed_at) + observation.max_age_seconds * 1000,
     );
-    panel.append(node("div", "鮮度期限：" + date(expiresAt.toISOString()), "sub"));
+    panel.append(node("div", text("outcome.expires") + date(expiresAt.toISOString()), "sub"));
   }
   details.replaceChildren(panel);
 }
 
 function checkLabel(condition) {
-  if (condition.verified) return "確認時点で検証済み";
-  if (condition.freshness === "stale") return "対象が変わったため再検証が必要";
+  if (condition.verified) return text("outcome.verified");
+  if (condition.freshness === "stale") return text("outcome.recheck");
   if (condition.source === "operator_report")
-    return "報告のみ・実行による検証は未確認";
-  if (condition.status === "pass") return "成功の報告・検証は未確認";
-  return statusNames[condition.status] || "未確認";
+    return text("outcome.reportedOnly");
+  if (condition.status === "pass") return text("outcome.reportedPass");
+  return statusNames[condition.status] || text("outcome.unknown");
 }
 export function createTaskOutcomesPanel(
   tasks,
@@ -117,10 +118,10 @@ export function createTaskOutcomesPanel(
 
   function evidencePanel(kind, id, revision, epoch, initial) {
     const panel = node("div", undefined, "outcome-checks");
-    const status = node("p", "現在の検証結果は未取得です", "sub");
+    const status = node("p", text("outcome.noCurrent"), "sub");
     status.setAttribute("aria-live", "polite");
     const list = node("ul");
-    const button = node("button", "受入条件と検証を確認");
+    const button = node("button", text("outcome.check"));
     button.type = "button";
     const key = kind + ":" + id;
     function show(view) {
@@ -132,7 +133,7 @@ export function createTaskOutcomesPanel(
             node("strong", condition.description),
             node(
               "p",
-              view ? checkLabel(condition) : "検証結果は未取得",
+              view ? checkLabel(condition) : text("outcome.noResults"),
               condition.verified ? "doing" : "sub",
             ),
           );
@@ -140,7 +141,7 @@ export function createTaskOutcomesPanel(
             row.append(
               node(
                 "p",
-                `部分検査: ${statusNames[condition.partial_status] || "未確認"}（全条件の検証とは別）`,
+                text("outcome.partial", { status: statusNames[condition.partial_status] || text("outcome.unknown") }),
                 "sub",
               ),
             );
@@ -152,16 +153,16 @@ export function createTaskOutcomesPanel(
       if (view) {
         const summary =
           kind === "milestone_id"
-            ? `固定した条件 ${view.verified_count} / ${view.condition_count} 件を確認`
+            ? text("outcome.count", { verified: view.verified_count, total: view.condition_count })
             : view.status === "verified_checks"
-              ? "宣言した全検査を確認時点で検証済み"
+              ? text("outcome.allVerified")
               : view.status === "unknown"
-                ? "検証結果を取得できません"
+                ? text("outcome.getFailed")
                 : view.conditions.length
-                  ? "未充足の受入条件があります"
-                  : "受入条件は未定義です";
-        status.textContent = `${view.acceptance_task_id ? `受入対象 ${view.acceptance_task_id} · ` : ""}${summary} · 最終確認 ${new Date(view.observed_at).toLocaleString("ja-JP")}`;
-        button.textContent = "検証結果を再確認";
+                  ? text("outcome.unmet")
+                  : text("outcome.notDefined");
+        status.textContent = text("outcome.lastCheck", { summary: (view.acceptance_task_id ? text("outcome.target", { id: view.acceptance_task_id }) : "") + summary, time: formatDateTime(view.observed_at) });
+        button.textContent = text("outcome.refresh");
       }
     }
     const previous = cached.get(key);
@@ -169,7 +170,7 @@ export function createTaskOutcomesPanel(
     else show(null);
     button.onclick = async () => {
       button.disabled = true;
-      status.textContent = "受入条件と現在の証拠を確認中…";
+      status.textContent = text("outcome.checking");
       try {
         const view = await api(
           `task-outcomes?${kind}=${encodeURIComponent(id)}`,
@@ -182,7 +183,7 @@ export function createTaskOutcomesPanel(
         cached.delete(key);
         show(null);
         status.textContent =
-          "検証結果を取得できません。状態の更新後に再確認してください。";
+          text("outcome.retryAfterUpdate");
       } finally {
         button.disabled = false;
       }
@@ -193,7 +194,7 @@ export function createTaskOutcomesPanel(
       button,
       node(
         "p",
-        "確認後の変更は再確認してください。人による受入・正式採用は別に確認します。",
+        text("outcome.reviewSeparate"),
         "sub",
       ),
     );
@@ -260,19 +261,19 @@ export function createTaskOutcomesPanel(
         card.append(observationDetails);
         const facts = node("dl", undefined, "decision-details");
         for (const [label, value] of [
-          ["目的", report.purpose],
-          ["担当", report.owner],
-          ["最新成果", report.latest_outcome],
-          ["次の一手", report.next_step],
-          ["ブロッカー", task.blocker || "申告なし"],
-          ["節目", task.milestone],
+          [text("outcome.purpose"), report.purpose],
+          [text("outcome.owner"), report.owner],
+          [text("outcome.latest"), report.latest_outcome],
+          [text("outcome.next"), report.next_step],
+          [text("outcome.blocker"), task.blocker || text("outcome.none")],
+          [text("outcome.milestone"), task.milestone],
           [
-            "更新",
+            text("outcome.updated"),
             task.updated_at &&
-              new Date(task.updated_at).toLocaleString("ja-JP"),
+              formatDateTime(task.updated_at),
           ],
         ])
-          facts.append(node("dt", label), node("dd", value || "未申告"));
+          facts.append(node("dt", label), node("dd", value || text("outcome.undeclared")));
         card.append(
           facts,
           evidencePanel("task_id", task.id, state.revision, epoch),
@@ -281,7 +282,7 @@ export function createTaskOutcomesPanel(
       }),
     );
     if (!state.tasks.length)
-      tasks.append(node("p", "タスクはまだ登録されていません", "empty"));
+      tasks.append(node("p", text("outcome.noTasks"), "empty"));
     const contracts = state.task_outcomes?.milestones || [];
     milestones.replaceChildren(
       ...contracts.map((contract) => {
@@ -290,7 +291,7 @@ export function createTaskOutcomesPanel(
           node("h3", `${contract.id} · ${contract.title}`),
           node(
             "p",
-            "終了条件はこの節目の固定リストです。作業を追加・分割しても分母は変わりません。",
+            text("outcome.fixedCriteria"),
             "sub",
           ),
           evidencePanel(
@@ -313,11 +314,11 @@ export function createTaskOutcomesPanel(
     ];
     if (legacy.length)
       milestones.append(
-        node("p", `${legacy.join(" / ")} · 終了条件は未定義です`, "sub"),
+        node("p", text("outcome.legacy", { ids: legacy.join(" / ") }), "sub"),
       );
     if (!contracts.length && !legacy.length)
       milestones.append(
-        node("p", "マイルストーンはまだ登録されていません", "empty"),
+        node("p", text("outcome.noMilestones"), "empty"),
       );
     scheduleObservationRefresh();
   };

@@ -517,29 +517,91 @@ fn invalid_input_is_refused_before_anything_is_written() {
 
 #[test]
 fn an_inline_providers_mapping_is_refused_with_the_yaml_to_add() {
-    let f = Fixture::new();
-    let inline = "- id: llm-pi-ai\n  config:\n    providers: {}\n";
-    f.set_patch(inline);
-    let out = f.run(&[
-        "provider",
-        "add",
-        "hai",
-        "--profile",
-        "tui",
-        "--model",
-        "m1",
-    ]);
-    assert!(!out.status.success());
-    let msg = text(&out);
-    assert!(
-        msg.contains("add this under llm-pi-ai config providers by hand"),
-        "{msg}"
-    );
-    assert!(
-        msg.contains("baseURL: https://hai-api.hcloud.ltd/v1"),
-        "{msg}"
-    );
-    assert_eq!(f.patch(), inline);
+    for (language, reason, manual) in [
+        (
+            "en",
+            "providers is written inline (for example `providers: {}`)",
+            "add this under llm-pi-ai config providers by hand",
+        ),
+        (
+            "ja",
+            "providersがインライン形式です（例: `providers: {}`）",
+            "llm-pi-ai config providers の下に次の内容を手動で追加してください",
+        ),
+        (
+            "zh-CN",
+            "providers 采用内联形式（例如 `providers: {}`）",
+            "请手动将以下内容添加到 llm-pi-ai config providers 下",
+        ),
+    ] {
+        let f = Fixture::new();
+        let inline = "- id: llm-pi-ai\n  config:\n    providers: {}\n";
+        f.set_patch(inline);
+        let out = f.run(&[
+            "--language",
+            language,
+            "provider",
+            "add",
+            "hai",
+            "--profile",
+            "tui",
+            "--model",
+            "m1",
+        ]);
+        assert!(!out.status.success());
+        let msg = text(&out);
+        assert!(msg.contains(reason), "{language}: {msg}");
+        assert!(msg.contains(manual), "{language}: {msg}");
+        assert!(
+            msg.contains("baseURL: https://hai-api.hcloud.ltd/v1"),
+            "{msg}"
+        );
+        assert_eq!(f.patch(), inline);
+        assert!(f.creds().is_empty());
+    }
+}
+
+#[test]
+fn deeper_provider_config_is_refused_in_three_languages_without_writes() {
+    let malformed = "- id: llm-pi-ai\n   config:\n      providers:\n         r0:\n            baseURL: http://old\n";
+    for (language, reason, manual) in [
+        (
+            "en",
+            "the patch entry identifier uses a multiline YAML scalar",
+            "add this under llm-pi-ai config providers by hand",
+        ),
+        (
+            "zh-CN",
+            "补丁条目标识符使用了多行 YAML 标量",
+            "请手动将以下内容添加到 llm-pi-ai config providers 下",
+        ),
+        (
+            "ja",
+            "パッチエントリの識別子に複数行の YAML スカラーが使われています",
+            "llm-pi-ai config providers の下に次の内容を手動で追加してください",
+        ),
+    ] {
+        let fixture = Fixture::new();
+        fixture.set_patch(malformed);
+        let output = fixture.run(&[
+            "--language",
+            language,
+            "provider",
+            "add",
+            "hai",
+            "--profile",
+            "tui",
+            "--model",
+            "model-原値",
+        ]);
+        assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+        let message = text(&output);
+        assert!(message.contains(reason), "{language}: {message}");
+        assert!(message.contains(manual), "{language}: {message}");
+        assert!(message.contains("model-原値"), "{message}");
+        assert_eq!(fixture.patch(), malformed);
+        assert!(fixture.creds().is_empty());
+    }
 }
 
 #[test]
@@ -906,6 +968,103 @@ fn an_id_that_cannot_be_read_is_refused_without_writing() {
 
 fn text_of(out: &Output) -> String {
     text(out)
+}
+
+#[test]
+fn malformed_route_layout_is_localized_and_never_rewritten() {
+    let malformed = "- id: llm-pi-ai\n  config: {}\n";
+    for (language, label, reason) in [
+        ("en", "cannot place providers.hai safely", "written inline"),
+        ("zh-CN", "无法安全地写入 providers.hai", "内联形式"),
+        (
+            "ja",
+            "providers.hai を安全に配置できません",
+            "インライン形式",
+        ),
+    ] {
+        let fixture = Fixture::new();
+        fixture.set_patch(malformed);
+        let output = fixture.run(&[
+            "--language",
+            language,
+            "provider",
+            "add",
+            "hai",
+            "--profile",
+            "tui",
+            "--model",
+            "model-原値",
+        ]);
+        assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains(label), "{language}: {stderr}");
+        assert!(stderr.contains(reason), "{language}: {stderr}");
+        assert!(stderr.contains("model-原値"), "{stderr}");
+        assert_eq!(fixture.patch(), malformed);
+        assert!(fixture.creds().is_empty());
+    }
+}
+
+#[test]
+fn provider_http_failure_localizes_owned_context_and_preserves_endpoint_and_status() {
+    for (language, label) in [
+        ("en", "answered HTTP 503"),
+        ("zh-CN", "返回 HTTP 503"),
+        ("ja", "がHTTP 503を返しました"),
+    ] {
+        let fixture = Fixture::new();
+        fixture.set_patch(PATCH);
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}/v1", listener.local_addr().unwrap());
+        listener.set_nonblocking(true).unwrap();
+        let server = thread::spawn(move || {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            let (mut stream, _) = loop {
+                match listener.accept() {
+                    Ok(connection) => break connection,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        assert!(
+                            std::time::Instant::now() < deadline,
+                            "provider did not request the local fixture"
+                        );
+                        thread::sleep(std::time::Duration::from_millis(10));
+                    }
+                    Err(error) => panic!("local fixture failed: {error}"),
+                }
+            };
+            stream
+                .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+                .unwrap();
+            let mut header = Vec::new();
+            let mut byte = [0u8; 1];
+            while !header.ends_with(b"\r\n\r\n") {
+                assert!(header.len() < 64 * 1024);
+                assert_eq!(stream.read(&mut byte).unwrap(), 1);
+                header.push(byte[0]);
+            }
+            stream.write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+        });
+        let output = fixture.run(&[
+            "--language",
+            language,
+            "provider",
+            "add",
+            "local-openai",
+            "--profile",
+            "tui",
+            "--base-url",
+            &endpoint,
+            "--discover",
+            "--no-key",
+        ]);
+        server.join().unwrap();
+        assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains(label), "{language}: {stderr}");
+        assert!(stderr.contains(&endpoint), "{stderr}");
+        assert_eq!(fixture.patch(), PATCH);
+        assert!(fixture.creds().is_empty());
+    }
 }
 
 #[test]
@@ -1680,5 +1839,36 @@ fn empty_scalar_lines_and_stripped_whitespace_still_allow_append() {
                 assert_eq!(fixture.patch(), written);
             }
         }
+    }
+}
+
+#[test]
+fn structural_mapping_refusal_is_localized_without_profile_or_credential_writes() {
+    let original = "# 原値\n- id: llm-pi-ai\n  config:\n    providers:\n      existing:\n        apiKeyEnv: ORIGINAL_KEY\n      existing:\n        apiKeyEnv: OTHER_KEY\n";
+    let credentials = "# 資格情報の原値\nORIGINAL_KEY: original-fixture-value\n";
+    for (language, reason) in [
+        ("en", "config/providers contains duplicate mapping keys"),
+        ("zh-CN", "config/providers 包含重复的映射键"),
+        ("ja", "config/providers に重複するマッピングキーがあります"),
+    ] {
+        let fixture = Fixture::new();
+        fixture.set_patch(original);
+        fs::write(fixture.0.join("dsh/.credentials.yaml"), credentials).unwrap();
+        let output = fixture.run(&[
+            "--language",
+            language,
+            "provider",
+            "add",
+            "sarashina",
+            "--profile",
+            "tui",
+        ]);
+        assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains(reason), "{language}: {stderr}");
+        assert!(stderr.contains("providers.sarashina"), "{stderr}");
+        assert!(output.stdout.is_empty(), "{}", text(&output));
+        assert_eq!(fixture.patch().as_bytes(), original.as_bytes());
+        assert_eq!(fixture.creds().as_bytes(), credentials.as_bytes());
     }
 }

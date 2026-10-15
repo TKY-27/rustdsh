@@ -572,10 +572,13 @@ fn upstream_authority(upstream: &Url) -> String {
     }
 }
 
-fn usage_error(message: impl Into<String>) -> anyhow::Error {
+fn usage_error(message: &str, locale: crate::locale::Locale) -> anyhow::Error {
     clap::Error::raw(
         clap::error::ErrorKind::ValueValidation,
-        format!("serial-proxy: {}", message.into()),
+        format!(
+            "serial-proxy: {}",
+            crate::locale::diagnostic(locale, message)
+        ),
     )
     .into()
 }
@@ -791,18 +794,21 @@ async fn proxy(State(state): State<Arc<ProxyState>>, request: Request<Body>) -> 
     response
 }
 
-pub fn cmd_serial_proxy(options: SerialProxyOptions) -> anyhow::Result<()> {
+pub fn cmd_serial_proxy(
+    options: SerialProxyOptions,
+    locale: crate::locale::Locale,
+) -> anyhow::Result<()> {
     if options.max == 0 {
-        return Err(usage_error("invalid --max"));
+        return Err(usage_error("invalid --max", locale));
     }
     if !options.queue_timeout.is_finite() || options.queue_timeout <= 0.0 {
-        return Err(usage_error("invalid --queue-timeout"));
+        return Err(usage_error("invalid --queue-timeout", locale));
     }
     if options.max_body_bytes == 0 {
-        return Err(usage_error("invalid --max-body-bytes"));
+        return Err(usage_error("invalid --max-body-bytes", locale));
     }
     if options.rpm == Some(0) {
-        return Err(usage_error("invalid --rpm"));
+        return Err(usage_error("invalid --rpm", locale));
     }
     if options
         .tool_choice_default
@@ -811,28 +817,31 @@ pub fn cmd_serial_proxy(options: SerialProxyOptions) -> anyhow::Result<()> {
     {
         return Err(usage_error(
             "invalid --tool-choice-default (none, auto or required)",
+            locale,
         ));
     }
-    let upstream = Url::parse(&options.upstream).map_err(|_| usage_error("invalid --upstream"))?;
+    let upstream =
+        Url::parse(&options.upstream).map_err(|_| usage_error("invalid --upstream", locale))?;
     if !["http", "https"].contains(&upstream.scheme()) {
-        return Err(usage_error("--upstream must be http(s)"));
+        return Err(usage_error("--upstream must be http(s)", locale));
     }
     if upstream.host_str().is_none() {
-        return Err(usage_error("invalid --upstream"));
+        return Err(usage_error("invalid --upstream", locale));
     }
     if !is_loopback_host(&options.host) && !options.allow_remote {
         return Err(usage_error(
             "refusing non-loopback --host without --allow-remote",
+            locale,
         ));
     }
     let addr = socket_addr(&options.host, options.port)
-        .map_err(|_| usage_error("invalid --host or host name did not resolve"))?;
+        .map_err(|_| usage_error("invalid --host or host name did not resolve", locale))?;
     let queue_timeout = Duration::try_from_secs_f64(options.queue_timeout)
-        .map_err(|_| usage_error("invalid --queue-timeout"))?;
+        .map_err(|_| usage_error("invalid --queue-timeout", locale))?;
     let request_deadline = queue_timeout
         .checked_mul(if options.rpm.is_some() { 2 } else { 1 })
         .and_then(|duration| duration.checked_add(DEFAULT_BODY_GRACE))
-        .ok_or_else(|| usage_error("invalid --queue-timeout"))?;
+        .ok_or_else(|| usage_error("invalid --queue-timeout", locale))?;
     let client = reqwest::Client::builder()
         .redirect(Policy::none())
         .http1_only()
@@ -862,16 +871,22 @@ pub fn cmd_serial_proxy(options: SerialProxyOptions) -> anyhow::Result<()> {
         let bound = listener.local_addr()?;
         let _ = writeln!(
             io::stderr().lock(),
-            "serial-proxy listening on http://{bound} -> {}{} (max={}{}{})",
-            upstream_status.origin().ascii_serialization(),
-            upstream_status.path(),
-            options.max,
-            options.rpm.map(|v| format!(" rpm={v}")).unwrap_or_default(),
-            options
-                .tool_choice_default
-                .as_ref()
-                .map(|v| format!(" tool-choice-default={v}"))
-                .unwrap_or_default()
+            "{}",
+            localized_format!(
+                locale,
+                "serial-proxy listening on http://{bound} -> {}{} (max={}{}{})",
+                "serial-proxy 正在监听 http://{bound} -> {}{}（最大并发={}{}{}）",
+                "serial-proxy 待ち受け中 http://{bound} -> {}{}（最大同時実行数={}{}{}）",
+                upstream_status.origin().ascii_serialization(),
+                upstream_status.path(),
+                options.max,
+                options.rpm.map(|v| format!(" rpm={v}")).unwrap_or_default(),
+                options
+                    .tool_choice_default
+                    .as_ref()
+                    .map(|v| format!(" tool-choice-default={v}"))
+                    .unwrap_or_default()
+            )
         );
         serve(listener, app).await
     })

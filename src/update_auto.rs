@@ -119,18 +119,32 @@ fn systemctl_skipped() -> bool {
     std::env::var_os("RDSH_SYSTEMD_NO_RELOAD").is_some_and(|value| value == "1")
 }
 
-fn systemctl(args: &[&str]) -> Result<String> {
+fn systemctl(args: &[&str], locale: crate::locale::Locale) -> Result<String> {
     let output = Command::new("systemctl")
         .arg("--user")
         .args(args)
         .output()
-        .with_context(|| format!("running systemctl --user {}", args.join(" ")))?;
+        .with_context(|| {
+            localized_format!(
+                locale,
+                "running systemctl --user {}",
+                "运行 systemctl --user {}",
+                "systemctl --user {} を実行",
+                args.join(" ")
+            )
+        })?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         bail!(
-            "systemctl --user {} failed: {}",
-            args.join(" "),
-            stderr.trim()
+            "{}",
+            localized_format!(
+                locale,
+                "systemctl --user {} failed: {}",
+                "systemctl --user {} 失败：{}",
+                "systemctl --user {} が失敗しました: {}",
+                args.join(" "),
+                stderr.trim()
+            )
         );
     }
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
@@ -147,7 +161,7 @@ fn systemctl_read(args: &[&str]) -> String {
         .unwrap_or_else(|| "unknown".to_string())
 }
 
-fn status(json: bool) -> Result<()> {
+fn status(json: bool, locale: crate::locale::Locale) -> Result<()> {
     let directory = unit_directory();
     let script = sync_script();
     let installed = directory.join(TIMER).is_file() && directory.join(SERVICE).is_file();
@@ -161,21 +175,74 @@ fn status(json: bool) -> Result<()> {
     if json {
         println!("{}", serde_json::to_string_pretty(&state)?);
     } else {
-        println!("units:   {}", directory.display());
         println!(
-            "script:  {}",
-            script
-                .as_ref()
-                .map(|path| path.display().to_string())
-                .unwrap_or_else(|| "(not found; set RDSH_SYNC_SCRIPT)".to_string())
+            "{}",
+            localized_format!(
+                locale,
+                "units:   {}",
+                "单元文件：{}",
+                "ユニットファイル: {}",
+                directory.display()
+            )
         );
-        println!("installed: {}", if installed { "yes" } else { "no" });
+        println!(
+            "{}",
+            localized_format!(
+                locale,
+                "script:  {}",
+                "脚本：{}",
+                "スクリプト: {}",
+                script
+                    .as_ref()
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_else(|| crate::locale::diagnostic(
+                        locale,
+                        "(not found; set RDSH_SYNC_SCRIPT)"
+                    )
+                    .to_string())
+            )
+        );
+        println!(
+            "{}",
+            localized_format!(
+                locale,
+                "installed: {}",
+                "已安装：{}",
+                "インストール済み: {}",
+                if installed {
+                    crate::locale::diagnostic(locale, "yes")
+                } else {
+                    crate::locale::diagnostic(locale, "no")
+                }
+            )
+        );
         if installed {
             println!(
-                "enabled: {}",
-                state["enabled"].as_str().unwrap_or("unknown")
+                "{}",
+                localized_format!(
+                    locale,
+                    "enabled: {}",
+                    "已启用：{}",
+                    "有効: {}",
+                    crate::locale::diagnostic(
+                        locale,
+                        state["enabled"].as_str().unwrap_or("unknown")
+                    )
+                )
             );
-            println!("active:  {}", state["active"].as_str().unwrap_or("unknown"));
+            println!(
+                "{}",
+                localized_format!(
+                    locale,
+                    "active:  {}",
+                    "运行状态：{}",
+                    "実行状態: {}",
+                    crate::locale::diagnostic(
+                        locale,
+                        state["active"].as_str().unwrap_or("unknown")
+                    )
+                )
+            );
         }
     }
     Ok(())
@@ -183,25 +250,46 @@ fn status(json: bool) -> Result<()> {
 
 /// Turn the timer on. Returns the plan that was applied so `--dry-run` and
 /// callers share one code path.
-fn enable(dry_run: bool, json: bool) -> Result<()> {
+fn enable(dry_run: bool, json: bool, locale: crate::locale::Locale) -> Result<()> {
     let directory = unit_directory();
     let Some(script) = sync_script() else {
         bail!(
-            "sync-dsh.sh was not found; set RDSH_SYNC_SCRIPT=/path/to/sync-dsh.sh \
-             (a timer that cannot run the updater would fail silently every day)"
+            match locale { crate::locale::Locale::English => "sync-dsh.sh was not found; set RDSH_SYNC_SCRIPT=/path/to/sync-dsh.sh (a timer that cannot run the updater would fail silently every day)", crate::locale::Locale::Chinese => "未找到 sync-dsh.sh；请设置 RDSH_SYNC_SCRIPT=/path/to/sync-dsh.sh（无法运行更新器的计时器会每天失败）", crate::locale::Locale::Japanese => "sync-dsh.sh が見つかりません。RDSH_SYNC_SCRIPT=/path/to/sync-dsh.sh を設定してください（更新処理を実行できないタイマーは毎日失敗します）" }
         );
     };
     let service = directory.join(SERVICE);
     let timer = directory.join(TIMER);
     if !dry_run {
-        fs::create_dir_all(&directory)
-            .with_context(|| format!("creating {}", directory.display()))?;
-        fs::write(&service, service_unit(&script))
-            .with_context(|| format!("writing {}", service.display()))?;
-        fs::write(&timer, timer_unit()).with_context(|| format!("writing {}", timer.display()))?;
+        fs::create_dir_all(&directory).with_context(|| {
+            localized_format!(
+                locale,
+                "creating {}",
+                "创建 {}",
+                "{} を作成",
+                directory.display()
+            )
+        })?;
+        fs::write(&service, service_unit(&script)).with_context(|| {
+            localized_format!(
+                locale,
+                "writing {}",
+                "写入 {}",
+                "{} を書き込み",
+                service.display()
+            )
+        })?;
+        fs::write(&timer, timer_unit()).with_context(|| {
+            localized_format!(
+                locale,
+                "writing {}",
+                "写入 {}",
+                "{} を書き込み",
+                timer.display()
+            )
+        })?;
         if !systemctl_skipped() {
-            systemctl(&["daemon-reload"])?;
-            systemctl(&["enable", "--now", TIMER])?;
+            systemctl(&["daemon-reload"], locale)?;
+            systemctl(&["enable", "--now", TIMER], locale)?;
         }
     }
     let result = json!({
@@ -215,19 +303,80 @@ fn enable(dry_run: bool, json: bool) -> Result<()> {
     if json {
         println!("{}", serde_json::to_string_pretty(&result)?);
     } else if dry_run {
-        println!("would write: {}", service.display());
-        println!("would write: {}", timer.display());
-        println!("would run:   systemctl --user enable --now {TIMER}");
-        println!("script:      {}", script.display());
+        println!(
+            "{}",
+            localized_format!(
+                locale,
+                "would write: {}",
+                "将写入：{}",
+                "書き込み予定: {}",
+                service.display()
+            )
+        );
+        println!(
+            "{}",
+            localized_format!(
+                locale,
+                "would write: {}",
+                "将写入：{}",
+                "書き込み予定: {}",
+                timer.display()
+            )
+        );
+        println!(
+            "{}",
+            localized_format!(
+                locale,
+                "would run:   systemctl --user enable --now {TIMER}",
+                "将运行：systemctl --user enable --now {TIMER}",
+                "実行予定: systemctl --user enable --now {TIMER}"
+            )
+        );
+        println!(
+            "{}",
+            localized_format!(
+                locale,
+                "script:      {}",
+                "脚本：{}",
+                "スクリプト: {}",
+                script.display()
+            )
+        );
     } else {
-        println!("auto-update enabled: {} (daily)", timer.display());
-        println!("script: {}", script.display());
-        println!("check with: rdsh update auto status");
+        println!(
+            "{}",
+            localized_format!(
+                locale,
+                "auto-update enabled: {} (daily)",
+                "已启用自动更新：{}（每天）",
+                "自動更新を有効にしました: {}（毎日）",
+                timer.display()
+            )
+        );
+        println!(
+            "{}",
+            localized_format!(
+                locale,
+                "script: {}",
+                "脚本：{}",
+                "スクリプト: {}",
+                script.display()
+            )
+        );
+        println!(
+            "{}",
+            localized_format!(
+                locale,
+                "check with: rdsh update auto status",
+                "检查状态：rdsh update auto status",
+                "状態確認: rdsh update auto status"
+            )
+        );
     }
     Ok(())
 }
 
-fn disable(dry_run: bool, json: bool) -> Result<()> {
+fn disable(dry_run: bool, json: bool, locale: crate::locale::Locale) -> Result<()> {
     let directory = unit_directory();
     let service = directory.join(SERVICE);
     let timer = directory.join(TIMER);
@@ -236,15 +385,23 @@ fn disable(dry_run: bool, json: bool) -> Result<()> {
         // A timer that is not loaded cannot be disabled; ignore that case so an
         // interrupted install can still be cleaned up.
         if !systemctl_skipped() {
-            let _ = systemctl(&["disable", "--now", TIMER]);
+            let _ = systemctl(&["disable", "--now", TIMER], locale);
         }
         for path in [&timer, &service] {
             if path.is_file() {
-                fs::remove_file(path).with_context(|| format!("removing {}", path.display()))?;
+                fs::remove_file(path).with_context(|| {
+                    localized_format!(
+                        locale,
+                        "removing {}",
+                        "移除 {}",
+                        "{} を削除",
+                        path.display()
+                    )
+                })?;
             }
         }
         if !systemctl_skipped() {
-            systemctl(&["daemon-reload"])?;
+            systemctl(&["daemon-reload"], locale)?;
         }
     }
     let result = json!({
@@ -257,24 +414,59 @@ fn disable(dry_run: bool, json: bool) -> Result<()> {
         println!("{}", serde_json::to_string_pretty(&result)?);
     } else if dry_run {
         println!(
-            "would remove: {} and {}",
-            timer.display(),
-            service.display()
+            "{}",
+            localized_format!(
+                locale,
+                "would remove: {} and {}",
+                "将移除：{} 和 {}",
+                "削除予定: {} と {}",
+                timer.display(),
+                service.display()
+            )
         );
     } else if installed {
-        println!("auto-update disabled and units removed");
+        println!(
+            "{}",
+            localized_format!(
+                locale,
+                "auto-update disabled and units removed",
+                "已禁用自动更新并移除单元文件",
+                "自動更新を無効にし、ユニットファイルを削除しました"
+            )
+        );
     } else {
-        println!("auto-update was not installed");
+        println!(
+            "{}",
+            localized_format!(
+                locale,
+                "auto-update was not installed",
+                "未安装自动更新",
+                "自動更新は未インストールです"
+            )
+        );
     }
     Ok(())
 }
 
 /// Entry point behind `rdsh update auto ...`.
-pub(crate) fn cmd_update_auto(action: &str, dry_run: bool, json: bool) -> Result<()> {
+pub(crate) fn cmd_update_auto(
+    action: &str,
+    dry_run: bool,
+    json: bool,
+    locale: crate::locale::Locale,
+) -> Result<()> {
     match action {
-        "status" => status(json),
-        "on" => enable(dry_run, json),
-        "off" => disable(dry_run, json),
-        other => bail!("unknown action {other:?}: use status, on or off"),
+        "status" => status(json, locale),
+        "on" => enable(dry_run, json, locale),
+        "off" => disable(dry_run, json, locale),
+        other => bail!(
+            "{}",
+            localized_format!(
+                locale,
+                "unknown action {other:?}: use status, on or off",
+                "未知操作 {other:?}：请使用 status、on 或 off",
+                "不明な操作 {other:?}: status、on、off を指定してください"
+            )
+        ),
     }
 }

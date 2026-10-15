@@ -19,6 +19,28 @@ impl Fixture {
     fn run(&self, args: &[&str]) -> Output {
         Command::new(env!("CARGO_BIN_EXE_rdsh"))
             .args(args)
+            .env_clear()
+            .envs(std::env::vars_os().filter(|(name, _)| {
+                [
+                    "PATH",
+                    "SystemRoot",
+                    "WINDIR",
+                    "COMSPEC",
+                    "PATHEXT",
+                    "TEMP",
+                    "TMP",
+                ]
+                .iter()
+                .any(|allowed| name.to_string_lossy().eq_ignore_ascii_case(allowed))
+            }))
+            .env("HOME", &self.0)
+            .env("USERPROFILE", &self.0)
+            .env("XDG_CONFIG_HOME", self.0.join("config"))
+            .env("XDG_DATA_HOME", self.0.join("data"))
+            .env("XDG_CACHE_HOME", self.0.join("cache"))
+            .env("APPDATA", self.0.join("appdata"))
+            .env("LOCALAPPDATA", self.0.join("localappdata"))
+            .env("LANG", "C")
             .env("DSH_HOME", &self.0)
             .output()
             .unwrap()
@@ -129,7 +151,7 @@ fn discord_settings_round_trip_through_cli_and_section_reset() {
         .success());
     let reset: serde_json::Value = serde_json::from_str(&fixture.read()).unwrap();
     assert_eq!(reset["discord"]["enabled"], true);
-    assert_eq!(reset["discord"]["details"], "dshで作業中");
+    assert_eq!(reset["discord"]["details"], "");
     assert_eq!(reset["discord"]["show_agent_status"], true);
     assert_eq!(reset["discord"]["show_image"], true);
 }
@@ -240,6 +262,76 @@ fn settings_set_preserves_valid_port_boundaries_and_random_web_port() {
         assert_eq!(settings[section][field], serde_json::json!(expected));
     }
 }
+
+#[test]
+fn language_setting_round_trips_and_invalid_persisted_value_fails_closed() {
+    let fixture = Fixture::new("{}");
+    for language in ["auto", "en", "zh-CN", "ja"] {
+        let output = fixture.run(&["settings", "set", "general.language", language]);
+        assert!(output.status.success(), "{language}: {output:?}");
+        let saved: serde_json::Value = serde_json::from_str(&fixture.read()).unwrap();
+        assert_eq!(saved["general"]["language"], language);
+    }
+    let before = fixture.read();
+    assert!(!fixture
+        .run(&["settings", "set", "general.language", "fr"])
+        .status
+        .success());
+    assert_eq!(fixture.read(), before);
+
+    let invalid = Fixture::new(r#"{"general":{"language":"fr"}}"#);
+    let output = invalid.run(&["settings", "show", "--json"]);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("general.language"));
+    assert_eq!(invalid.read(), r#"{"general":{"language":"fr"}}"#);
+}
+
+#[test]
+fn language_option_localizes_rdsh_owned_settings_diagnostics() {
+    let fixture = Fixture::new("{}");
+    let japanese = fixture.run(&["--language", "ja", "settings", "get", "missing.key"]);
+    assert_eq!(japanese.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&japanese.stderr).contains("不明な設定キー"));
+
+    let rejected = fixture.run(&[
+        "--language",
+        "ja",
+        "settings",
+        "set",
+        "general.language",
+        "fr",
+    ]);
+    assert!(!rejected.status.success());
+    assert!(String::from_utf8_lossy(&rejected.stderr).contains("エラー"));
+
+    let chinese = fixture.run(&["--language", "zh-CN", "settings", "init"]);
+    assert_eq!(chinese.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&chinese.stderr).contains("设置已存在于"));
+}
+
+#[test]
+fn language_option_localizes_auth_and_setup_guidance() {
+    let fixture = Fixture::new("{}");
+    let auth = fixture.run(&["--language", "zh-CN", "auth"]);
+    assert!(auth.status.success());
+    let auth_stdout = String::from_utf8_lossy(&auth.stdout);
+    assert!(auth_stdout.contains("凭据"), "{auth_stdout}");
+    assert!(auth_stdout.contains("未选择共享"), "{auth_stdout}");
+    assert!(
+        auth_stdout.contains("--select SOURCE:CREDENTIAL --import"),
+        "{auth_stdout}"
+    );
+    assert!(!fixture.0.join(".credentials.yaml").exists());
+
+    let setup = fixture.run(&["--language", "zh-CN", "setup"]);
+    assert!(setup.status.success());
+    let setup_stdout = String::from_utf8_lossy(&setup.stdout);
+    assert!(
+        setup_stdout.contains("尚无可用模型") || setup_stdout.contains("已连接"),
+        "{setup_stdout}"
+    );
+}
+
 fn feature_state(fixture: &Fixture, id: &str) -> (bool, bool) {
     let output = fixture.run(&["features", "--json"]);
     assert!(
@@ -370,4 +462,123 @@ fn disabled_features_refuse_their_commands_and_point_at_the_switch() {
             "{args:?} did not name {feature}: {stderr}"
         );
     }
+}
+
+#[test]
+fn auth_renders_synthetic_source_without_copying_or_exposing_its_value() {
+    let fixture = Fixture::new("{}");
+    let codex = fixture.0.join(".codex");
+    std::fs::create_dir(&codex).unwrap();
+    std::fs::write(
+        codex.join("auth.json"),
+        r#"{"OPENAI_API_KEY":"fixture-value"}"#,
+    )
+    .unwrap();
+    for (language, label) in [
+        ("en", "persistent credentials"),
+        ("zh-CN", "持久凭据"),
+        ("ja", "永続保存する認証情報"),
+    ] {
+        let output = fixture.run(&["--language", language, "auth"]);
+        assert!(output.status.success());
+        let text = String::from_utf8_lossy(&output.stdout);
+        assert!(text.contains(label), "{text}");
+        assert!(text.contains("codex:OPENAI_API_KEY"), "{text}");
+        assert!(!text.contains("fixture-value"));
+        assert!(!fixture.0.join(".credentials.yaml").exists());
+    }
+}
+
+#[test]
+fn auth_localizes_owned_details_and_preserves_json_and_external_identifiers() {
+    let fixture = Fixture::new("{}");
+    std::fs::create_dir(fixture.0.join(".codex")).unwrap();
+    std::fs::write(
+        fixture.0.join(".codex/auth.json"),
+        r#"{"tokens":{"access_token":"fixture-access","refresh_token":"fixture-refresh"}}"#,
+    )
+    .unwrap();
+    std::fs::create_dir_all(fixture.0.join("data/opencode")).unwrap();
+    std::fs::write(
+        fixture.0.join("data/opencode/auth.json"),
+        r#"{"独自の接続":{"type":"oauth","access":"fixture-access","refresh":"fixture-refresh"}}"#,
+    )
+    .unwrap();
+    // Only explicitly selected sources receive an import decision; this command
+    // previews the decision without copying a credential.
+    std::fs::write(
+        fixture.0.join("rdsh-auth-sharing.json"),
+        r#"{"version":1,"selected":["codex:openai-codex"]}"#,
+    )
+    .unwrap();
+    for (language, disposition, skipped) in [
+        ("en", "would import from codex", "skipped"),
+        ("zh-CN", "可从 codex 导入", "已跳过"),
+        ("ja", "codex からインポートできます", "スキップ"),
+    ] {
+        let output = fixture.run(&["--language", language, "auth"]);
+        assert!(output.status.success());
+        let text = String::from_utf8_lossy(&output.stdout);
+        for expected in [disposition, skipped, "llm-pi-ai/openai-codex"] {
+            assert!(text.contains(expected), "{text}");
+        }
+        assert!(
+            !text.contains("独自の接続"),
+            "untrusted provider names must not enter diagnostics: {text}"
+        );
+        assert!(!text.contains("fixture-access"));
+        assert!(!text.contains("fixture-refresh"));
+        let json = fixture.run(&["--language", language, "auth", "--json"]);
+        assert!(json.status.success());
+        let value: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
+        assert_eq!(
+            value["notes"],
+            serde_json::json!(["opencode login skipped: invalid provider id"])
+        );
+        assert_eq!(
+            value["records"][0]["detail"],
+            "no record llm-pi-ai/openai-codex: would import from codex"
+        );
+        assert!(!fixture.0.join(".credentials.yaml").exists());
+    }
+}
+
+#[test]
+fn worker_scope_help_ignores_corrupt_settings_without_bypassing_other_commands() {
+    let fixture = Fixture::new("{broken");
+    for args in [
+        vec!["worker-scope", "--help"],
+        vec!["worker-scope", "validate", "--help"],
+        vec!["worker-scope", "policy", "-h"],
+        vec!["help", "worker-scope"],
+    ] {
+        let output = fixture.run(&args);
+        assert!(output.status.success(), "{args:?}: {output:?}");
+        assert!(!output.stdout.is_empty());
+        assert_eq!(fixture.read(), "{broken");
+    }
+    for args in [
+        vec!["--help"],
+        vec!["--help", "worker-scope"],
+        vec!["-h", "worker-scope", "validate"],
+        vec!["--help", "help", "worker-scope"],
+        vec!["tokens", "--help"],
+        vec!["tokens", "worker-scope", "--help"],
+        vec!["--profile", "worker-scope", "--help"],
+        vec!["settings", "get", "worker-scope", "--help"],
+        vec!["tokens", "--", "--help"],
+        vec!["settings", "get", "--", "--help"],
+    ] {
+        let output = fixture.run(&args);
+        assert!(
+            !output.status.success(),
+            "literal flag bypassed corrupt settings: {args:?}"
+        );
+        assert!(output.stdout.is_empty());
+        assert_eq!(fixture.read(), "{broken");
+    }
+    let valid = Fixture::new(r#"{"general":{"language":"ja"}}"#);
+    let output = valid.run(&["worker-scope", "--help"]);
+    assert!(output.status.success(), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stdout).contains("ワーカー作業範囲"));
 }

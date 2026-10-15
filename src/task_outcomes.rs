@@ -545,24 +545,46 @@ pub fn milestone_schema() -> Value {
 
 /// Read one JSON file with the dashboard CLI's `localJson` rules: a regular
 /// file of at most 256 KiB with strict UTF-8 and valid JSON.
-fn read_json(input_file: &str) -> Result<Value> {
-    let file =
-        open_json_input(input_file).with_context(|| format!("cannot read JSON {input_file}"))?;
-    read_json_file(file, input_file)
+fn read_json(input_file: &str, locale: crate::locale::Locale) -> Result<Value> {
+    let file = open_json_input(input_file).with_context(|| {
+        localized_format!(
+            locale,
+            "cannot read JSON {input_file}",
+            "无法读取 JSON {input_file}",
+            "JSON {input_file} を読み取れません"
+        )
+    })?;
+    read_json_file(file, input_file, locale)
 }
 
-fn read_json_file(file: std::fs::File, input_file: &str) -> Result<Value> {
+fn read_json_file(
+    file: std::fs::File,
+    input_file: &str,
+    locale: crate::locale::Locale,
+) -> Result<Value> {
     const MAX_INPUT_BYTES: usize = 256 * 1024;
-    let metadata = file
-        .metadata()
-        .with_context(|| format!("cannot read JSON {input_file}"))?;
+    let metadata = file.metadata().with_context(|| {
+        localized_format!(
+            locale,
+            "cannot read JSON {input_file}",
+            "无法读取 JSON {input_file}",
+            "JSON {input_file} を読み取れません"
+        )
+    })?;
     if !metadata.is_file() || metadata.len() > MAX_INPUT_BYTES as u64 {
         bail!("Input JSON must be a regular file of at most 256 KiB");
     }
     let mut bytes = Vec::with_capacity(metadata.len() as usize);
     file.take((MAX_INPUT_BYTES + 1) as u64)
         .read_to_end(&mut bytes)
-        .with_context(|| format!("cannot read JSON {input_file}"))?;
+        .with_context(|| {
+            localized_format!(
+                locale,
+                "cannot read JSON {input_file}",
+                "无法读取 JSON {input_file}",
+                "JSON {input_file} を読み取れません"
+            )
+        })?;
     if bytes.len() > MAX_INPUT_BYTES {
         bail!("Input JSON exceeds 256 KiB");
     }
@@ -594,8 +616,12 @@ fn open_json_input(input_file: &str) -> std::io::Result<std::fs::File> {
 /// The file holds `{ operation, state, input }`: `state` is the project state
 /// document, `input` the task mutation request `apply` merges. `validate` and
 /// `schema` read `state` alone and accept a missing `input`.
-pub fn cmd_task_outcomes(action: &str, input_file: &str) -> Result<()> {
-    let document = read_json(input_file)?;
+pub fn cmd_task_outcomes(
+    action: &str,
+    input_file: &str,
+    locale: crate::locale::Locale,
+) -> Result<()> {
+    let document = read_json(input_file, locale)?;
     let object = document
         .as_object()
         .ok_or_else(|| anyhow!("Input JSON is invalid"))?;
@@ -645,7 +671,15 @@ pub fn cmd_task_outcomes(action: &str, input_file: &str) -> Result<()> {
             output.insert("outcome".into(), outcome_schema());
             output.insert("milestone_contract".into(), milestone_schema());
         }
-        other => bail!("unknown task-outcomes action {other}"),
+        other => bail!(
+            "{}",
+            localized_format!(
+                locale,
+                "unknown task-outcomes action {other}",
+                "未知的 task-outcomes 操作 {other}",
+                "不明なtask-outcomes操作 {other}"
+            )
+        ),
     }
     let text =
         serde_json::to_string(&Value::Object(output)).context("serialize task outcomes result")?;
@@ -719,7 +753,8 @@ mod tests {
         std::fs::rename(&path, root.join("opened.json")).unwrap();
         std::fs::write(&path, "not the validated input").unwrap();
 
-        let parsed = read_json_file(file, path.to_str().unwrap()).unwrap();
+        let parsed =
+            read_json_file(file, path.to_str().unwrap(), crate::locale::Locale::English).unwrap();
         assert_eq!(parsed["operation"], "schema");
         assert_eq!(parsed["state"]["tasks"], json!([]));
         std::fs::remove_dir_all(root).unwrap();

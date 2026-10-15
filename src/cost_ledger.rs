@@ -1655,7 +1655,7 @@ pub fn cost_report_schema() -> Value {
 
 /// Read one JSON file with the dashboard CLI's `localJson` rules: a regular
 /// file of at most 256 KiB with strict UTF-8 and valid JSON.
-fn read_json(input_file: &str) -> Result<Value> {
+fn read_json(input_file: &str, locale: crate::locale::Locale) -> Result<Value> {
     let mut options = std::fs::OpenOptions::new();
     options.read(true);
     #[cfg(unix)]
@@ -1663,40 +1663,66 @@ fn read_json(input_file: &str) -> Result<Value> {
         use std::os::unix::fs::OpenOptionsExt;
         options.custom_flags(libc::O_NONBLOCK);
     }
-    let file = options
-        .open(input_file)
-        .with_context(|| format!("cannot read JSON {input_file}"))?;
-    let metadata = file
-        .metadata()
-        .with_context(|| format!("cannot read JSON {input_file}"))?;
+    let file = options.open(input_file).with_context(|| {
+        localized_format!(
+            locale,
+            "cannot read JSON {}",
+            "无法读取 JSON {}",
+            "JSONを読み取れません {}",
+            input_file
+        )
+    })?;
+    let metadata = file.metadata().with_context(|| {
+        localized_format!(
+            locale,
+            "cannot read JSON {}",
+            "无法读取 JSON {}",
+            "JSONを読み取れません {}",
+            input_file
+        )
+    })?;
     if !metadata.is_file() || metadata.len() > 256 * 1024 {
-        bail!("Input JSON must be a regular file of at most 256 KiB");
+        bail!(crate::locale::diagnostic(
+            locale,
+            "Input JSON must be a regular file of at most 256 KiB"
+        )
+        .to_string());
     }
     let mut bytes = Vec::with_capacity(metadata.len() as usize);
     file.take(256 * 1024 + 1)
         .read_to_end(&mut bytes)
-        .with_context(|| format!("cannot read JSON {input_file}"))?;
+        .with_context(|| {
+            localized_format!(
+                locale,
+                "cannot read JSON {}",
+                "无法读取 JSON {}",
+                "JSONを読み取れません {}",
+                input_file
+            )
+        })?;
     if bytes.len() > 256 * 1024 {
-        bail!("Input JSON exceeds 256 KiB");
+        bail!(crate::locale::diagnostic(locale, "Input JSON exceeds 256 KiB").to_string());
     }
     let Ok(text) = std::str::from_utf8(&bytes) else {
-        bail!("Input JSON is invalid");
+        bail!(crate::locale::diagnostic(locale, "Input JSON is invalid").to_string());
     };
     // TextDecoder("utf-8") in the dashboard CLI removed a leading BOM.
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
-    let mut value = serde_json::from_str(text).map_err(|_| anyhow!("Input JSON is invalid"))?;
+    let mut value = serde_json::from_str(text).map_err(|_| {
+        anyhow!(crate::locale::diagnostic(locale, "Input JSON is invalid").to_string())
+    })?;
     normalize_js_value(&mut value);
     Ok(value)
 }
 
 /// The document shape both parity actions accept: `{ operation, state, input }`.
-fn read_request(document: &Value) -> Result<(String, Value, Value)> {
-    let object = document
-        .as_object()
-        .ok_or_else(|| anyhow!("Input JSON is invalid"))?;
+fn read_request(document: &Value, locale: crate::locale::Locale) -> Result<(String, Value, Value)> {
+    let object = document.as_object().ok_or_else(|| {
+        anyhow!(crate::locale::diagnostic(locale, "Input JSON is invalid").to_string())
+    })?;
     const CLI_KEYS: [&str; 3] = ["operation", "state", "input"];
     if object.keys().any(|key| !CLI_KEYS.contains(&key.as_str())) {
-        bail!("Input JSON is invalid");
+        bail!(crate::locale::diagnostic(locale, "Input JSON is invalid").to_string());
     }
     let operation = object
         .get("operation")
@@ -1707,7 +1733,9 @@ fn read_request(document: &Value) -> Result<(String, Value, Value)> {
         .get("state")
         .filter(|value| value.is_object())
         .cloned()
-        .ok_or_else(|| anyhow!("Input JSON is invalid"))?;
+        .ok_or_else(|| {
+            anyhow!(crate::locale::diagnostic(locale, "Input JSON is invalid").to_string())
+        })?;
     let input = object.get("input").cloned().unwrap_or(Value::Null);
     Ok((operation, state, input))
 }
@@ -1717,14 +1745,44 @@ fn read_request(document: &Value) -> Result<(String, Value, Value)> {
 /// The file holds `{ operation, state, input }`: `state` is the project state
 /// document, `input` the scope or report `declare`/`report` merge. `validate`,
 /// `public` and `schema` read `state` alone and accept a missing `input`.
-pub fn cmd_cost_ledger(action: &str, input_file: &str) -> Result<()> {
-    let document = read_json(input_file)?;
-    let (operation, mut state, input) = read_request(&document)?;
+/// Diagnostics use the resolved language; JSON, validation messages stored by
+/// the engine and its 400/409 status values retain their canonical spelling.
+pub fn cmd_cost_ledger(
+    action: &str,
+    input_file: &str,
+    locale: crate::locale::Locale,
+) -> Result<()> {
+    cmd_cost_ledger_inner(action, input_file, locale).map_err(|error| {
+        if let Some(reason) = error.downcast_ref::<CostLedgerError>() {
+            anyhow!(localized_format!(
+                locale,
+                "Cost ledger: {}",
+                "费用台账：{}",
+                "費用台帳: {}",
+                crate::locale::diagnostic(locale, &reason.message)
+            ))
+        } else {
+            error
+        }
+    })
+}
+
+fn cmd_cost_ledger_inner(
+    action: &str,
+    input_file: &str,
+    locale: crate::locale::Locale,
+) -> Result<()> {
+    let document = read_json(input_file, locale)?;
+    let (operation, mut state, input) = read_request(&document, locale)?;
     if operation != action {
-        bail!("Input JSON operation does not match the requested action");
+        bail!(crate::locale::diagnostic(
+            locale,
+            "Input JSON operation does not match the requested action"
+        )
+        .to_string());
     }
     if matches!(action, "declare" | "report") && !input.is_object() {
-        bail!("Input JSON is invalid");
+        bail!(crate::locale::diagnostic(locale, "Input JSON is invalid").to_string());
     }
     let mut output = Map::new();
     output.insert("operation".into(), json!(action));
@@ -1756,11 +1814,18 @@ pub fn cmd_cost_ledger(action: &str, input_file: &str) -> Result<()> {
             output.insert("cost_scope".into(), cost_scope_schema());
             output.insert("cost_report".into(), cost_report_schema());
         }
-        other => bail!("unknown cost-ledger action {other}"),
+        other => bail!(localized_format!(
+            locale,
+            "unknown cost-ledger action {}",
+            "未知的 cost-ledger 操作 {}",
+            "不明なcost-ledger操作 {}",
+            other
+        )),
     }
     let mut output = Value::Object(output);
     normalize_js_value(&mut output);
-    let text = serde_json::to_string(&output).context("serialize cost ledger")?;
+    let text = serde_json::to_string(&output)
+        .context(crate::locale::diagnostic(locale, "serialize cost ledger"))?;
     let stdout = std::io::stdout();
     let mut handle = stdout.lock();
     writeln!(handle, "{text}")?;
@@ -2246,7 +2311,7 @@ mod tests {
                 .as_nanos()
         ));
         std::fs::write(&path, r#"{"10":1.0,"2":2,"name":3e0}"#).unwrap();
-        let value = read_json(path.to_str().unwrap()).unwrap();
+        let value = read_json(path.to_str().unwrap(), crate::locale::Locale::English).unwrap();
         let _ = std::fs::remove_file(&path);
         assert_eq!(
             serde_json::to_string(&value).unwrap(),

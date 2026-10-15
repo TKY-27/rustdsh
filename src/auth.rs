@@ -444,22 +444,32 @@ fn quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "''"))
 }
 
-fn safe_scalar(s: &str) -> anyhow::Result<()> {
+fn safe_scalar(s: &str, locale: crate::locale::Locale) -> anyhow::Result<()> {
     if s.chars()
         .any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}'))
     {
-        anyhow::bail!("credential value contains a line or control character");
+        anyhow::bail!(localized(
+            locale,
+            "credential value contains a line or control character",
+            "凭据值包含换行或控制字符",
+            "認証情報の値に改行または制御文字が含まれています",
+        ));
     }
     Ok(())
 }
 
-fn ensure_writable_doc(doc: &CredsDoc) -> anyhow::Result<()> {
+fn ensure_writable_doc(doc: &CredsDoc, locale: crate::locale::Locale) -> anyhow::Result<()> {
     if doc.text.is_empty() {
         return Ok(());
     }
     anyhow::ensure!(
         doc.version_ok,
-        "unsupported credential store layout; no credentials were copied"
+        localized(
+            locale,
+            "unsupported credential store layout; no credentials were copied",
+            "凭据存储格式不受支持；未复制凭据",
+            "認証情報ストアの形式は未対応です。認証情報はコピーされていません"
+        )
     );
     // The line editor must not append a second YAML key to a flow-style,
     // duplicated, or inline record. Leave unfamiliar layouts untouched.
@@ -477,18 +487,33 @@ fn ensure_writable_doc(doc: &CredsDoc) -> anyhow::Result<()> {
                 if line.starts_with(&format!("{name}:")) {
                     anyhow::ensure!(
                         line == format!("{name}:") && sections.insert(name),
-                        "ambiguous credential store layout; no credentials were copied"
+                        localized(
+                            locale,
+                            "ambiguous credential store layout; no credentials were copied",
+                            "凭据存储格式不明确；未复制凭据",
+                            "認証情報ストアの形式が曖昧です。認証情報はコピーされていません"
+                        )
                     );
                     section = name;
                 }
             }
         } else if !section.is_empty() && indent_of(line) == 2 {
             let (key, value) = line.trim().split_once(':').ok_or_else(|| {
-                anyhow::anyhow!("unsupported credential entry; no credentials were copied")
+                anyhow::anyhow!(localized(
+                    locale,
+                    "unsupported credential entry; no credentials were copied",
+                    "凭据条目不受支持；未复制凭据",
+                    "認証情報エントリは未対応です。認証情報はコピーされていません"
+                ))
             })?;
             anyhow::ensure!(
                 entries.insert((section, key)) && (section != "records" || value.is_empty()),
-                "ambiguous credential entry; no credentials were copied"
+                localized(
+                    locale,
+                    "ambiguous credential entry; no credentials were copied",
+                    "凭据条目不明确；未复制凭据",
+                    "認証情報エントリが曖昧です。認証情報はコピーされていません"
+                )
             );
         }
     }
@@ -684,11 +709,21 @@ fn lockdown_creds_file(path: &str) -> anyhow::Result<()> {
 // --- decisions ----------------------------------------------------------------
 
 #[derive(Debug)]
+enum DecisionReason {
+    OtherKind(String),
+    Missing,
+    Matches,
+    Refresh,
+    Newer,
+}
+
+#[derive(Debug)]
 struct Decision {
     provider: String,
     from: String,
     action: &'static str,
     detail: String,
+    reason: DecisionReason,
     grant: Option<OauthGrant>,
 }
 
@@ -717,6 +752,7 @@ fn decisions_for(grants: &[OauthGrant], doc: &CredsDoc, creds_mtime: u64) -> Vec
                 from: g.from.clone(),
                 action: "ok",
                 detail: format!("record {key} is {}, left alone", stored.kind),
+                reason: DecisionReason::OtherKind(stored.kind.clone()),
                 grant: None,
             }),
             None => decisions.push(Decision {
@@ -724,6 +760,7 @@ fn decisions_for(grants: &[OauthGrant], doc: &CredsDoc, creds_mtime: u64) -> Vec
                 from: g.from.clone(),
                 action: "import",
                 detail: format!("no record {key}: would import from {}", g.from),
+                reason: DecisionReason::Missing,
                 grant: Some(g),
             }),
             Some(stored) if stored.access.as_deref() == Some(g.access.as_str()) => {
@@ -732,6 +769,7 @@ fn decisions_for(grants: &[OauthGrant], doc: &CredsDoc, creds_mtime: u64) -> Vec
                     from: g.from.clone(),
                     action: "ok",
                     detail: format!("record {key} already matches {}", g.from),
+                    reason: DecisionReason::Matches,
                     grant: None,
                 });
             }
@@ -741,6 +779,7 @@ fn decisions_for(grants: &[OauthGrant], doc: &CredsDoc, creds_mtime: u64) -> Vec
                     from: g.from.clone(),
                     action: "refresh",
                     detail: format!("record {key} is older: would refresh from {}", g.from),
+                    reason: DecisionReason::Refresh,
                     grant: Some(g),
                 });
             }
@@ -749,11 +788,47 @@ fn decisions_for(grants: &[OauthGrant], doc: &CredsDoc, creds_mtime: u64) -> Vec
                 from: g.from.clone(),
                 action: "ok",
                 detail: format!("record {key} kept: dsh-side token is newer than {}", g.from),
+                reason: DecisionReason::Newer,
                 grant: None,
             }),
         }
     }
     decisions
+}
+
+fn decision_text(decision: &Decision, locale: crate::locale::Locale) -> String {
+    use crate::locale::Locale;
+    let key = format!("{RECORD_SCOPE}/{}", decision.provider);
+    let source = &decision.from;
+    match (&decision.reason, locale) {
+        (_, Locale::English) => decision.detail.clone(),
+        (DecisionReason::OtherKind(kind), Locale::Chinese) => {
+            format!("记录 {key} 的类型是 {kind}；保持不变")
+        }
+        (DecisionReason::OtherKind(kind), Locale::Japanese) => {
+            format!("レコード {key} は {kind} です。変更しません")
+        }
+        (DecisionReason::Missing, Locale::Chinese) => format!("没有记录 {key}：可从 {source} 导入"),
+        (DecisionReason::Missing, Locale::Japanese) => {
+            format!("レコード {key} がありません：{source} からインポートできます")
+        }
+        (DecisionReason::Matches, Locale::Chinese) => format!("记录 {key} 已与 {source} 一致"),
+        (DecisionReason::Matches, Locale::Japanese) => {
+            format!("レコード {key} は {source} と一致しています")
+        }
+        (DecisionReason::Refresh, Locale::Chinese) => {
+            format!("记录 {key} 较旧：可从 {source} 更新")
+        }
+        (DecisionReason::Refresh, Locale::Japanese) => {
+            format!("レコード {key} が古いため {source} から更新できます")
+        }
+        (DecisionReason::Newer, Locale::Chinese) => {
+            format!("保留记录 {key}：dsh 的令牌比 {source} 更新")
+        }
+        (DecisionReason::Newer, Locale::Japanese) => {
+            format!("レコード {key} を維持します：dsh 側のトークンが {source} より新しいためです")
+        }
+    }
 }
 
 fn fresher_than(source: &OauthGrant, stored: &StoredGrant, creds_mtime: u64) -> bool {
@@ -853,8 +928,8 @@ fn autosync_enabled() -> bool {
 /// Fast path: banner decision needs only env + credentials doc (same result
 /// as setup_needed_in), so external codex/opencode scans are skipped here.
 /// Same stderr bytes out, 3 file reads + parses saved per boot.
-pub fn pre_boot(banner: bool) {
-    auto_sync();
+pub fn pre_boot(banner: bool, locale: crate::locale::Locale) {
+    auto_sync(locale);
     if !banner {
         return;
     }
@@ -866,12 +941,12 @@ pub fn pre_boot(banner: bool) {
     if route_key_present(&doc) && !setup_needed_in(&scan()) {
         return;
     }
-    first_boot_banner();
+    first_boot_banner(locale);
 }
 
 /// Best-effort mirror before delegating to dsh (boot/dump/plugin/raw).
 /// Never imports without a valid selection. A broken store does not block launch.
-pub fn auto_sync() {
+pub fn auto_sync(locale: crate::locale::Locale) {
     if !autosync_enabled() {
         return;
     }
@@ -884,11 +959,21 @@ pub fn auto_sync() {
         let _lock = SharingLock::acquire(&root)?;
         // Reload under the same lock used by unselect, preventing stale consent.
         let policy = SharingPolicy::load(&root)?;
-        apply_imports(&policy, true)?;
+        apply_imports(&policy, true, locale)?;
         Ok(())
     })();
     if let Err(e) = result {
-        eprintln!("[rdsh auth] sync skipped: {e}");
+        let diagnostic = e.to_string();
+        let e = crate::locale::diagnostic(locale, &diagnostic);
+        eprintln!(
+            "{}",
+            localized_format!(
+                locale,
+                "[rdsh auth] sync skipped: {e}",
+                "[rdsh auth] 同步已跳过：{e}",
+                "[rdsh auth] 同期をスキップしました: {e}"
+            )
+        );
     }
 }
 
@@ -927,9 +1012,13 @@ fn selected_api_keys<'a>(
 }
 
 /// Import only entries whose source and credential were explicitly selected.
-fn apply_imports(policy: &SharingPolicy, quiet: bool) -> anyhow::Result<Vec<String>> {
+fn apply_imports(
+    policy: &SharingPolicy,
+    quiet: bool,
+    locale: crate::locale::Locale,
+) -> anyhow::Result<Vec<String>> {
     let scan = scan();
-    apply_imports_from_scan(policy, &scan, quiet)
+    apply_imports_from_scan(policy, &scan, quiet, locale)
 }
 
 /// Caller holds SharingLock; this lock serializes credential writes with DSH.
@@ -937,10 +1026,11 @@ fn apply_imports_from_scan(
     policy: &SharingPolicy,
     scan: &Scan,
     quiet: bool,
+    locale: crate::locale::Locale,
 ) -> anyhow::Result<Vec<String>> {
     let path = &scan.path;
     let _credential_lock =
-        crate::file_lock::CredentialFileLock::exclusive_for(std::path::Path::new(path))?;
+        crate::file_lock::CredentialFileLock::exclusive_for(std::path::Path::new(path), locale)?;
     match std::fs::read_to_string(path) {
         Ok(_) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -949,11 +1039,11 @@ fn apply_imports_from_scan(
     let doc = load_doc(path);
     if !doc.text.is_empty() && !doc.version_ok {
         if !quiet {
-            eprintln!("[rdsh auth] refuse: {path} uses the pre-release flat layout; add `version: 1` first");
+            eprintln!("{}", localized_format!(locale, "[rdsh auth] refuse: {path} uses the pre-release flat layout; add `version: 1` first", "[rdsh auth] 已拒绝：{path} 使用预发布扁平布局；请先添加 `version: 1`", "[rdsh auth] 拒否: {path} はプレリリースのフラット形式です。先に `version: 1` を追加してください"));
         }
         return Ok(Vec::new());
     }
-    ensure_writable_doc(&doc)?;
+    ensure_writable_doc(&doc, locale)?;
     // Validate all selected ref values before mutating OAuth records or key refs.
     // Multiple selected sources may expose the same destination ref.
     let selected_keys = selected_api_keys(scan, policy)?;
@@ -972,20 +1062,37 @@ fn apply_imports_from_scan(
     let mut done = Vec::new();
     for decision in decisions.iter().filter(|decision| decision.action != "ok") {
         if let Some(grant) = &decision.grant {
-            safe_scalar(&grant.access)?;
-            safe_scalar(&grant.refresh)?;
+            safe_scalar(&grant.access, locale)?;
+            safe_scalar(&grant.refresh, locale)?;
             if let Some(account) = &grant.account_id {
-                safe_scalar(account)?;
+                safe_scalar(account, locale)?;
             }
             let key = format!("{RECORD_SCOPE}/{}", decision.provider);
             match splice_entry(&text, "records", &key, &grant_block(&key, grant)) {
                 Some(updated) => {
                     text = updated;
-                    done.push(format!("{} {} from {}", decision.action, key, grant.from));
+                    done.push(localized_format!(
+                        locale,
+                        "{} {} from {}",
+                        "{} {}，来源 {}",
+                        "{} {} ソース {}",
+                        crate::locale::diagnostic(locale, decision.action),
+                        key,
+                        grant.from
+                    ));
                 }
                 None => {
                     if !quiet {
-                        eprintln!("[rdsh auth] skip {}: section error", key);
+                        eprintln!(
+                            "{}",
+                            localized_format!(
+                                locale,
+                                "[rdsh auth] skip {}: section error",
+                                "[rdsh auth] 跳过 {}：区段错误",
+                                "[rdsh auth] {} をスキップ: セクションエラー",
+                                key
+                            )
+                        );
                     }
                 }
             }
@@ -996,16 +1103,32 @@ fn apply_imports_from_scan(
         if action == "ok" {
             continue;
         }
-        safe_scalar(&key.value)?;
+        safe_scalar(&key.value, locale)?;
         let block = vec![format!("  {}: {}", key.name, quote(&key.value))];
         match splice_entry(&text, "refs", &key.name, &block) {
             Some(updated) => {
                 text = updated;
-                done.push(format!("{action} ref {} from {}", key.name, key.from));
+                done.push(localized_format!(
+                    locale,
+                    "{} ref {} from {}",
+                    "{} 引用 {}，来源 {}",
+                    "{} 参照 {} ソース {}",
+                    crate::locale::diagnostic(locale, action),
+                    key.name,
+                    key.from
+                ));
             }
             None => {
                 if !quiet {
-                    eprintln!("[rdsh auth] skip credential ref: section error");
+                    eprintln!(
+                        "{}",
+                        localized_format!(
+                            locale,
+                            "[rdsh auth] skip credential ref: section error",
+                            "[rdsh auth] 跳过凭据引用：区段错误",
+                            "[rdsh auth] 認証情報参照をスキップ: セクションエラー"
+                        )
+                    );
                 }
             }
         }
@@ -1143,7 +1266,7 @@ fn one_time_selection(args: &AuthArgs) -> anyhow::Result<Option<SharingPolicy>> 
     Ok(Some(policy))
 }
 
-pub fn cmd_auth(args: AuthArgs, dry: bool) -> anyhow::Result<()> {
+pub fn cmd_auth(args: AuthArgs, dry: bool, locale: crate::locale::Locale) -> anyhow::Result<()> {
     let root = crate::inspect::dsh_home();
     let mut policy = SharingPolicy::load(&root)?;
     // Validate before creating a lock or writing any file.
@@ -1169,21 +1292,28 @@ pub fn cmd_auth(args: AuthArgs, dry: bool) -> anyhow::Result<()> {
     );
     let path = creds_path();
     if mutating {
-        eprintln!(
-            "[rdsh auth] {}selection: {}; persistent destination: {path}; scope: all DSH profiles in this DSH_HOME",
-            if dry { "preview " } else { "" },
+        eprintln!("{}", localized_format!(locale, "[rdsh auth] {}selection: {}; persistent destination: {path}; scope: all DSH profiles in this DSH_HOME", "[rdsh auth] {}选择：{}；持久保存位置：{path}；范围：此 DSH_HOME 的所有 DSH 配置文件", "[rdsh auth] {}選択: {}; 永続保存先: {path}; 対象: このDSH_HOMEの全DSHプロファイル",
+            if dry { localized(locale, "preview ", "预览 ", "プレビュー ") } else { "" },
             policy.selected.iter().cloned().collect::<Vec<_>>().join(", ")
-        );
+        ));
         if one_time_import {
-            eprintln!("[rdsh auth] one-time selection is not saved; future credential copies remain governed by the existing sharing policy");
+            eprintln!("{}", localized_format!(locale, "[rdsh auth] one-time selection is not saved; future credential copies remain governed by the existing sharing policy", "[rdsh auth] 一次性选择不会保存；今后的凭据复制仍由现有共享策略管理", "[rdsh auth] 1回限りの選択は保存されません。今後の認証情報コピーには既存の共有ポリシーが適用されます"));
         }
-        eprintln!("[rdsh auth] unselect stops future imports and retains existing copies; stop DSH and remove its record/ref to stop using a copy; provider revocation is separate");
+        eprintln!("{}", localized_format!(locale, "[rdsh auth] unselect stops future imports and retains existing copies; stop DSH and remove its record/ref to stop using a copy; provider revocation is separate", "[rdsh auth] 取消选择会停止将来导入并保留现有副本；要停止使用副本，请停止 DSH 并删除对应 record/ref；提供方撤销需单独进行", "[rdsh auth] 選択解除は今後のインポートを停止し既存コピーを保持します。利用を止めるにはDSHを停止し該当record/refを削除してください。発行元での失効は別途必要です"));
     }
     if !dry && (!args.select.is_empty() || !args.unselect.is_empty()) {
         policy.save(&root)?;
     }
     let wrote = if args.import && !dry {
-        apply_imports(&policy, args.json)?
+        apply_imports(
+            &policy,
+            args.json,
+            if args.json {
+                crate::locale::Locale::English
+            } else {
+                locale
+            },
+        )?
     } else {
         Vec::new()
     };
@@ -1230,28 +1360,71 @@ pub fn cmd_auth(args: AuthArgs, dry: bool) -> anyhow::Result<()> {
     println!("[rdsh auth] persistent credentials: {path}");
     note_env_dsh_home();
     println!(
-        "[rdsh auth] sharing policy: {}",
-        crate::auth_sharing::policy_path(&root).display()
+        "{}",
+        localized_format!(
+            locale,
+            "[rdsh auth] persistent credentials: {path}",
+            "[rdsh auth] 持久凭据：{path}",
+            "[rdsh auth] 永続保存する認証情報: {path}"
+        )
     );
-    println!("[rdsh auth] {}", sharing["scope"].as_str().unwrap());
+    println!(
+        "{}",
+        localized_format!(
+            locale,
+            "[rdsh auth] sharing policy: {}",
+            "[rdsh auth] 共享策略：{}",
+            "[rdsh auth] 共有ポリシー: {}",
+            crate::auth_sharing::policy_path(&root).display()
+        )
+    );
+    println!(
+        "[rdsh auth] {}",
+        crate::locale::diagnostic(locale, sharing["scope"].as_str().unwrap())
+    );
     for item in sharing["inventory"].as_array().unwrap() {
         println!(
-            "[rdsh auth] {}: {} from {} -> {} ({})",
-            item["selector"].as_str().unwrap(),
-            item["kind"].as_str().unwrap(),
-            item["source"].as_str().unwrap(),
-            item["entry"].as_str().unwrap(),
-            item["action"].as_str().unwrap()
+            "{}",
+            localized_format!(
+                locale,
+                "[rdsh auth] {}: {} from {} -> {} ({})",
+                "[rdsh auth] {}：{}，来源 {} -> {}（{}）",
+                "[rdsh auth] {}: {} ソース {} -> {} ({})",
+                item["selector"].as_str().unwrap(),
+                crate::locale::diagnostic(locale, item["kind"].as_str().unwrap()),
+                item["source"].as_str().unwrap(),
+                item["entry"].as_str().unwrap(),
+                crate::locale::diagnostic(locale, item["action"].as_str().unwrap())
+            )
         );
         if let Some(detail) = item["detail"].as_str() {
-            println!("[rdsh auth] {detail}");
+            let human_detail = if item["selected"] == true {
+                grants
+                    .iter()
+                    .find(|grant| {
+                        Some(grant.provider.as_str()) == item["provider"].as_str()
+                            && Some(grant.from.as_str()) == item["from"].as_str()
+                    })
+                    .map(|grant| {
+                        let decisions =
+                            decisions_for(std::slice::from_ref(grant), &doc, mtime_ms(&path));
+                        decision_text(&decisions[0], locale)
+                    })
+            } else {
+                None
+            };
+            println!(
+                "[rdsh auth] {}",
+                human_detail
+                    .as_deref()
+                    .unwrap_or_else(|| crate::locale::diagnostic(locale, detail))
+            );
         }
     }
     for reference in sharing["environment_references"].as_array().unwrap() {
-        println!(
-            "[rdsh auth] {}: inherited environment reference, no file write; stop DSH and unset it to stop sharing",
+        println!("{}", localized_format!(locale, "[rdsh auth] {}: inherited environment reference, no file write; stop DSH and unset it to stop sharing", "[rdsh auth] {}：继承的环境变量引用，未写入文件；停止 DSH 并取消此变量可停止共享", "[rdsh auth] {}: 継承した環境変数の参照（ファイル保存なし）。共有を止めるにはDSHを停止し変数を解除してください",
             reference["name"].as_str().unwrap()
-        );
+        ));
     }
     for need in provider_needs_in(&grants, &doc) {
         let mark = match need.state {
@@ -1259,18 +1432,42 @@ pub fn cmd_auth(args: AuthArgs, dry: bool) -> anyhow::Result<()> {
             "importable" => "credential importable: run `rdsh auth --import --provider <id>`",
             _ => "credential missing: run `rdsh setup`",
         };
-        println!(
-            "[rdsh auth] dsh default: {} {}/{} ({}, {}; presence only, authentication not verified)",
-            need.profile, need.provider, need.model, need.via, mark
-        );
+        println!("{}", localized_format!(locale, "[rdsh auth] dsh default: {} {}/{} ({}, {}; presence only, authentication not verified)", "[rdsh auth] dsh 默认：{} {}/{}（{}，{}；仅确认存在，未验证身份）", "[rdsh auth] dshの既定値: {} {}/{} ({}, {}; 存在のみ確認、認証の成功は未確認)",
+            need.profile, need.provider, need.model, need.via, crate::locale::diagnostic(locale, mark)
+        ));
     }
     for note in notes {
-        println!("[rdsh auth] note: {note}");
+        let note = crate::locale::diagnostic(locale, &note);
+        println!(
+            "{}",
+            localized_format!(
+                locale,
+                "[rdsh auth] note: {note}",
+                "[rdsh auth] 提示：{note}",
+                "[rdsh auth] 注記: {note}"
+            )
+        );
     }
     if policy.selected.is_empty() {
-        println!("[rdsh auth] no sharing selected; existing DSH credentials are retained");
+        println!(
+            "{}",
+            localized_format!(
+                locale,
+                "[rdsh auth] no sharing selected; existing DSH credentials are retained",
+                "[rdsh auth] 未选择共享；现有 DSH 凭据已保留",
+                "[rdsh auth] 共有は未選択です。既存のDSH認証情報は保持されます"
+            )
+        );
     } else if wrote.is_empty() && args.import {
-        println!("[rdsh auth] nothing to write");
+        println!(
+            "{}",
+            localized_format!(
+                locale,
+                "[rdsh auth] nothing to write",
+                "[rdsh auth] 没有要写入的内容",
+                "[rdsh auth] 書き込む内容はありません"
+            )
+        );
     }
     let inventory = sharing["inventory"].as_array().unwrap();
     if inventory.iter().any(|i| i["selected"] == true)
@@ -1279,7 +1476,15 @@ pub fn cmd_auth(args: AuthArgs, dry: bool) -> anyhow::Result<()> {
             .filter(|i| i["selected"] == true)
             .all(|i| i["action"] == "ok")
     {
-        println!("[rdsh auth] selected credentials already recognized");
+        println!(
+            "{}",
+            localized_format!(
+                locale,
+                "[rdsh auth] selected credentials already recognized",
+                "[rdsh auth] 所选凭据已识别",
+                "[rdsh auth] 選択した認証情報は認識済みです"
+            )
+        );
     }
     // A Codex grant only reaches the picker for models the profile lists: the
     // harness serves a catalog generated when it was published, so a model the
@@ -1288,21 +1493,42 @@ pub fn cmd_auth(args: AuthArgs, dry: bool) -> anyhow::Result<()> {
         .iter()
         .any(|g| g.provider == crate::models::CODEX_PROVIDER)
     {
-        println!("[rdsh auth] hint: `rdsh models` lists Codex models a profile has not listed yet; `rdsh models sync` adds them");
+        println!("{}", localized_format!(locale, "[rdsh auth] hint: `rdsh models` lists Codex models a profile has not listed yet; `rdsh models sync` adds them", "[rdsh auth] 提示：`rdsh models` 会列出配置文件尚未列出的 Codex 模型；`rdsh models sync` 可以添加它们", "[rdsh auth] ヒント: `rdsh models` はプロファイルが未登録のCodexモデルを一覧します。`rdsh models sync` で追加できます"));
     }
-    println!("[rdsh auth] preview: rdsh --dry-run auth --select SOURCE:CREDENTIAL --import");
-    println!("[rdsh auth] share: rdsh auth --select SOURCE:CREDENTIAL --import; selected entries then auto-sync unless RDSH_AUTH_AUTOSYNC=0");
-    println!("[rdsh auth] {}", sharing["stop"].as_str().unwrap());
-    println!("[rdsh auth] {}", sharing["remove_copy"].as_str().unwrap());
-    println!("[rdsh auth] {}", sharing["revoke"].as_str().unwrap());
+    println!(
+        "{}",
+        localized_format!(
+            locale,
+            "[rdsh auth] preview: rdsh --dry-run auth --select SOURCE:CREDENTIAL --import",
+            "[rdsh auth] 预览：rdsh --dry-run auth --select SOURCE:CREDENTIAL --import",
+            "[rdsh auth] プレビュー: rdsh --dry-run auth --select SOURCE:CREDENTIAL --import"
+        )
+    );
+    println!("{}", localized_format!(locale, "[rdsh auth] share: rdsh auth --select SOURCE:CREDENTIAL --import; selected entries then auto-sync unless RDSH_AUTH_AUTOSYNC=0", "[rdsh auth] 共享：rdsh auth --select SOURCE:CREDENTIAL --import；选定条目会自动同步，除非设置 RDSH_AUTH_AUTOSYNC=0", "[rdsh auth] 共有: rdsh auth --select SOURCE:CREDENTIAL --import; 選択したエントリは RDSH_AUTH_AUTOSYNC=0 以外で自動同期されます"));
+    println!(
+        "[rdsh auth] {}",
+        crate::locale::diagnostic(locale, sharing["stop"].as_str().unwrap())
+    );
+    println!(
+        "[rdsh auth] {}",
+        crate::locale::diagnostic(locale, sharing["remove_copy"].as_str().unwrap())
+    );
+    println!(
+        "[rdsh auth] {}",
+        crate::locale::diagnostic(locale, sharing["revoke"].as_str().unwrap())
+    );
     Ok(())
 }
 /// One line for `rdsh doctor` (never fails).
-pub fn summary_line() -> String {
+pub fn summary_line(locale: crate::locale::Locale) -> String {
     let policy = match SharingPolicy::load(&crate::inspect::dsh_home()) {
         Ok(p) => p,
         Err(_) => {
-            return "invalid sharing policy; imports disabled; authentication not verified".into()
+            return crate::locale::diagnostic(
+                locale,
+                "invalid sharing policy; imports disabled; authentication not verified",
+            )
+            .into()
         }
     };
     let Scan {
@@ -1314,32 +1540,46 @@ pub fn summary_line() -> String {
         path: _path,
     } = scan();
     if decisions.is_empty() && keys.is_empty() {
-        return "no external logins found (codex/opencode)".to_string();
+        return crate::locale::diagnostic(locale, "no external logins found (codex/opencode)")
+            .to_string();
     }
     let mut parts: Vec<String> = decisions
         .iter()
-        .map(|d| format!("{}={} [{}]", d.provider, d.action, d.from))
+        .map(|d| {
+            format!(
+                "{}={} [{}]",
+                d.provider,
+                crate::locale::diagnostic(locale, d.action),
+                d.from
+            )
+        })
         .collect();
     for k in &keys {
         parts.push(format!(
             "{}={}",
             k.name,
-            if policy.allows(&k.from, &k.name) {
-                match api_key_action(k, &doc) {
-                    "ok" => "stored",
-                    "refresh" => "source-changed",
-                    _ => "pending-import",
+            crate::locale::diagnostic(
+                locale,
+                if policy.allows(&k.from, &k.name) {
+                    match api_key_action(k, &doc) {
+                        "ok" => "stored",
+                        "refresh" => "source-changed",
+                        _ => "pending-import",
+                    }
+                } else if doc.refs.contains_key(&k.name) {
+                    "stored"
+                } else {
+                    "not-selected"
                 }
-            } else if doc.refs.contains_key(&k.name) {
-                "stored"
-            } else {
-                "not-selected"
-            }
+            )
         ));
     }
     parts.sort();
-    format!(
+    localized_format!(
+        locale,
         "{}; selected={}; authentication not verified",
+        "{}；已选择={}；身份验证尚未确认",
+        "{}; 選択済み={}; 認証の成功は未確認",
         parts.join(", "),
         policy.selected.len()
     )
@@ -1362,24 +1602,17 @@ const KNOWN_ENV_KEYS: &[&str] = &["DEEPSEEK_API_KEY", "OPENAI_API_KEY", "ANTHROP
 /// ([`provider_needs_in`] state `ok`).
 const PROVIDER_ROUTE_KEYS: &[&str] = &["HAI_API_KEY", "LOCAL_OPENAI_API_KEY", "SARASHINA_API_KEY"];
 
-fn user_lang() -> String {
-    for k in ["LANGUAGE", "LC_ALL", "LANG"] {
-        if let Ok(v) = std::env::var(k) {
-            if !v.trim().is_empty() {
-                return v;
-            }
-        }
+fn localized(
+    locale: crate::locale::Locale,
+    english: &'static str,
+    chinese: &'static str,
+    japanese: &'static str,
+) -> &'static str {
+    match locale {
+        crate::locale::Locale::English => english,
+        crate::locale::Locale::Chinese => chinese,
+        crate::locale::Locale::Japanese => japanese,
     }
-    String::new()
-}
-
-fn lang_is_japanese(lang: &str) -> bool {
-    let base = lang.split(['.', '@', ':']).next().unwrap_or("");
-    base.replace('-', "_").starts_with("ja")
-}
-
-pub(crate) fn is_japanese() -> bool {
-    lang_is_japanese(&user_lang())
 }
 
 fn env_key_set(name: &str) -> bool {
@@ -1456,19 +1689,27 @@ fn setup_needed_in(s: &Scan) -> bool {
 /// never blocks: the boot continues into dsh either way). The decision to show
 /// it is made by `pre_boot` from the same scan, so the stores are not crawled
 /// twice and `first_boot_banner` itself never re-checks the connection state.
-pub fn first_boot_banner() {
-    if is_japanese() {
-        eprintln!("[rdsh] モデル接続がまだありません（初回セットアップが必要です）");
-        eprintln!(
-            "[rdsh]   rdsh setup   … 対話ガイド：GPTサブスク(OAuth)かDeepSeekキーを接続します"
-        );
-        eprintln!("[rdsh]   サブスク利用ならAPIキーは不要です。詳しくは rdsh auth / rdsh doctor");
-    } else {
-        eprintln!("[rdsh] no model connection yet (first-run setup needed)");
-        eprintln!(
-            "[rdsh]   rdsh setup   … guided connect: GPT subscription (OAuth) or a DeepSeek key"
-        );
-        eprintln!("[rdsh]   subscriptions need no API key. See also rdsh auth / rdsh doctor");
+pub fn first_boot_banner(locale: crate::locale::Locale) {
+    match locale {
+        crate::locale::Locale::Japanese => {
+            eprintln!("[rdsh] モデル接続がまだありません（初回セットアップが必要です）");
+            eprintln!(
+                "[rdsh]   rdsh setup   … 対話ガイド：GPTサブスク(OAuth)かDeepSeekキーを接続します"
+            );
+            eprintln!(
+                "[rdsh]   サブスク利用ならAPIキーは不要です。詳しくは rdsh auth / rdsh doctor"
+            );
+        }
+        crate::locale::Locale::Chinese => {
+            eprintln!("[rdsh] 尚未连接模型（需要首次设置）");
+            eprintln!("[rdsh]   rdsh setup   … 引导连接 GPT 订阅（OAuth）或 DeepSeek 密钥");
+            eprintln!("[rdsh]   使用订阅无需 API 密钥。另请参阅 rdsh auth / rdsh doctor");
+        }
+        crate::locale::Locale::English => {
+            eprintln!("[rdsh] no model connection yet (first-run setup needed)");
+            eprintln!("[rdsh]   rdsh setup   … guided connect: GPT subscription (OAuth) or a DeepSeek key");
+            eprintln!("[rdsh]   subscriptions need no API key. See also rdsh auth / rdsh doctor");
+        }
     }
 }
 
@@ -1496,7 +1737,7 @@ fn prompt_line(prompt: &str) -> Option<String> {
 /// be controlled; non-Unix explicitly labels its echoed input.
 /// Always restores the terminal mode before returning.
 #[cfg(unix)]
-fn prompt_secret() -> Option<String> {
+fn prompt_secret(locale: crate::locale::Locale) -> Option<String> {
     use std::io::IsTerminal as _;
     use std::os::fd::AsRawFd;
     if !std::io::stdin().is_terminal() {
@@ -1515,7 +1756,15 @@ fn prompt_secret() -> Option<String> {
         eprintln!("[rdsh setup] cannot hide input; skipping key paste");
         return None;
     }
-    eprint!("[rdsh setup] paste DEEPSEEK_API_KEY here (Enter to skip, input hidden): ");
+    eprint!(
+        "{}",
+        localized(
+            locale,
+            "[rdsh setup] paste DEEPSEEK_API_KEY here (Enter to skip, input hidden): ",
+            "[rdsh setup] 在此粘贴 DEEPSEEK_API_KEY（Enter 跳过，输入不会显示）：",
+            "[rdsh setup] DEEPSEEK_API_KEY を貼り付けてください（Enter でスキップ、入力は表示されません）：",
+        )
+    );
     use std::io::Write as _;
     let _ = std::io::stderr().flush();
     let mut s = String::new();
@@ -1534,8 +1783,13 @@ fn prompt_secret() -> Option<String> {
 }
 
 #[cfg(not(unix))]
-fn prompt_secret() -> Option<String> {
-    prompt_line("[rdsh setup] paste DEEPSEEK_API_KEY here (Enter to skip, input echoed): ")
+fn prompt_secret(locale: crate::locale::Locale) -> Option<String> {
+    prompt_line(&localized(
+        locale,
+        "[rdsh setup] paste DEEPSEEK_API_KEY here (Enter to skip, input echoed): ",
+        "[rdsh setup] 在此粘贴 DEEPSEEK_API_KEY（Enter 跳过，输入会显示）：",
+        "[rdsh setup] DEEPSEEK_API_KEY を貼り付けてください（Enter でスキップ、入力内容は表示されます）：",
+    ))
 }
 
 fn prompt_yes(prompt: &str) -> bool {
@@ -1563,12 +1817,21 @@ pub(crate) fn env_key_present(name: &str) -> bool {
 
 /// Store one `refs:` entry (0600, other entries untouched). Returns true
 /// when the file changed.
-pub(crate) fn store_ref(name: &str, value: &str) -> anyhow::Result<bool> {
-    store_ref_at(&creds_path(), name, value)
+pub(crate) fn store_ref(
+    name: &str,
+    value: &str,
+    locale: crate::locale::Locale,
+) -> anyhow::Result<bool> {
+    store_ref_at(&creds_path(), name, value, locale)
 }
 
-fn store_ref_at(path: &str, name: &str, value: &str) -> anyhow::Result<bool> {
-    safe_scalar(value)?;
+fn store_ref_at(
+    path: &str,
+    name: &str,
+    value: &str,
+    locale: crate::locale::Locale,
+) -> anyhow::Result<bool> {
+    safe_scalar(value, locale)?;
     // Same bound as the web path (setup_store_key): keep pasted blobs from
     // bloating the credentials file on every entry route.
     if value.trim().len() > 512 {
@@ -1576,16 +1839,24 @@ fn store_ref_at(path: &str, name: &str, value: &str) -> anyhow::Result<bool> {
     }
     let _sharing_lock = SharingLock::acquire(&crate::inspect::dsh_home())?;
     let _credential_lock =
-        crate::file_lock::CredentialFileLock::exclusive_for(std::path::Path::new(path))?;
+        crate::file_lock::CredentialFileLock::exclusive_for(std::path::Path::new(path), locale)?;
     match std::fs::read_to_string(path) {
         Ok(_) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(_) => anyhow::bail!("credential store is unreadable; no credentials were copied"),
     }
     let doc = load_doc(path);
-    ensure_writable_doc(&doc)?;
+    ensure_writable_doc(&doc, locale)?;
     if !doc.text.is_empty() && !doc.version_ok {
-        anyhow::bail!("refuse: {path} uses the pre-release flat layout");
+        anyhow::bail!(
+            "{}",
+            localized_format!(
+                locale,
+                "refuse: {path} uses the pre-release flat layout",
+                "已拒绝：{path} 使用预发布扁平布局",
+                "拒否: {path} はプレリリースのフラット形式です"
+            )
+        );
     }
     if doc.refs.get(name).map(|v| v == value).unwrap_or(false) {
         return Ok(false);
@@ -1598,10 +1869,26 @@ fn store_ref_at(path: &str, name: &str, value: &str) -> anyhow::Result<bool> {
     let block = vec![format!("  {}: {}", name, quote(value))];
     match splice_entry(&text, "refs", name, &block) {
         Some(t) => text = t,
-        None => anyhow::bail!("section error writing ref {name}"),
+        None => anyhow::bail!(
+            "{}",
+            localized_format!(
+                locale,
+                "section error writing ref {name}",
+                "写入引用 {name} 时发生区段错误",
+                "参照 {name} の書き込みでセクションエラー"
+            )
+        ),
     }
     write_creds(path, &text)?;
-    eprintln!("[rdsh setup] stored ref {name} -> {path}");
+    eprintln!(
+        "{}",
+        localized_format!(
+            locale,
+            "[rdsh setup] stored ref {name} -> {path}",
+            "[rdsh setup] 已保存引用 {name} -> {path}",
+            "[rdsh setup] 参照を保存しました {name} -> {path}"
+        )
+    );
     Ok(true)
 }
 
@@ -1668,7 +1955,7 @@ fn is_executable_file(path: &str) -> bool {
 /// Launch the provider's own login flow (`opencode auth login` prefers the
 /// subscription OAuth the complaint is about; `codex login` is the fallback).
 /// Returns true when a flow was started (it may still have been aborted).
-fn launch_login() -> bool {
+fn launch_login(locale: crate::locale::Locale) -> bool {
     let tool: Option<(&str, &[&str])> = [
         ("opencode", &["auth", "login"] as &[&str]),
         ("codex", &["login"] as &[&str]),
@@ -1678,32 +1965,47 @@ fn launch_login() -> bool {
     let (bin, args) = match tool {
         Some(t) => t,
         None => {
-            if is_japanese() {
-                eprintln!(
-                    "[rdsh setup] codexもopencodeも見つかりません。先にどちらかを導入してください"
-                );
-            } else {
-                eprintln!(
-                    "[rdsh setup] neither codex nor opencode found on PATH; install one first"
-                );
-            }
+            eprintln!(
+                "[rdsh setup] {}",
+                localized(
+                    locale,
+                    "neither codex nor opencode found on PATH; install one first",
+                    "在 PATH 中找不到 codex 或 opencode；请先安装其中一个",
+                    "PATH にcodexもopencodeも見つかりません。先にどちらかを導入してください"
+                )
+            );
             return false;
         }
     };
     eprintln!(
-        "[rdsh setup] launching `{bin} {}` … finish the login there",
-        args.join(" ")
+        "[rdsh setup] {} `{bin} {}` … {}",
+        localized(locale, "launching", "正在启动", "起動します"),
+        args.join(" "),
+        localized(
+            locale,
+            "finish the login there",
+            "请在该处完成登录",
+            "そこでログインを完了してください"
+        )
     );
     match std::process::Command::new(bin).args(args).status() {
         Ok(_) => true,
         Err(e) => {
-            eprintln!("[rdsh setup] could not launch {bin}: {e:#}");
+            eprintln!(
+                "[rdsh setup] {} {bin}: {e:#}",
+                localized(
+                    locale,
+                    "could not launch",
+                    "无法启动",
+                    "起動できませんでした"
+                )
+            );
             false
         }
     }
 }
 
-fn open_path(path: &str) -> anyhow::Result<()> {
+fn open_path(path: &str, locale: crate::locale::Locale) -> anyhow::Result<()> {
     #[cfg(target_os = "windows")]
     let mut cmd = {
         let mut c = std::process::Command::new("explorer");
@@ -1722,28 +2024,50 @@ fn open_path(path: &str) -> anyhow::Result<()> {
         c.arg(path);
         c
     };
-    let st = cmd
-        .status()
-        .map_err(|e| anyhow::anyhow!("spawning opener: {e}"))?;
+    let st = cmd.status().map_err(|e| {
+        anyhow::anyhow!(
+            "{}: {e}",
+            localized(
+                locale,
+                "spawning opener",
+                "启动打开程序",
+                "オープナーの起動"
+            )
+        )
+    })?;
     if st.success() {
         Ok(())
     } else {
-        anyhow::bail!("opener exited {st}")
+        anyhow::bail!(
+            "{} {st}",
+            localized(
+                locale,
+                "opener exited",
+                "打开程序已退出",
+                "オープナーが終了しました"
+            )
+        )
     }
 }
 
 /// `--open`: reveal the settings locations in the OS file manager (the
 /// "show me the settings screen" step for GUI-first users).
-fn open_settings_dirs(json: bool) {
+fn open_settings_dirs(json: bool, locale: crate::locale::Locale) {
     let mut targets = vec![crate::inspect::dsh_home()];
     if let Some(c) = config_dir() {
         targets.push(format!("{c}/opencode"));
     }
     for t in targets {
-        match open_path(&t) {
-            Ok(_) if !json => println!("[rdsh setup] opened {t}"),
+        match open_path(&t, locale) {
+            Ok(_) if !json => println!(
+                "[rdsh setup] {} {t}",
+                localized(locale, "opened", "已打开", "開きました")
+            ),
             Ok(_) => {}
-            Err(e) => eprintln!("[rdsh setup] could not open {t}: {e:#}"),
+            Err(e) => eprintln!(
+                "[rdsh setup] {} {t}: {e:#}",
+                localized(locale, "could not open", "无法打开", "開けませんでした")
+            ),
         }
     }
 }
@@ -1899,11 +2223,11 @@ fn parse_api_key_env(text: &str, provider: &str) -> Option<String> {
     None
 }
 
-fn print_guide() {
+fn print_guide(locale: crate::locale::Locale) {
     let creds = creds_path();
     let cfg =
         opencode_config_path().unwrap_or_else(|| "<config dir>/opencode/opencode.json".to_string());
-    if is_japanese() {
+    if locale == crate::locale::Locale::Japanese {
         println!("[rdsh setup] まだ使えるモデルがありません。楽な順に3択です:");
         println!("[rdsh setup]   1) サブスクで使う（APIキー不要・おすすめ）");
         println!("[rdsh setup]      opencode auth login  … OpenAI(GPT)等を選んでOAuth接続");
@@ -1915,6 +2239,18 @@ fn print_guide() {
         println!("[rdsh setup]   3) あとで：このまま起動するとdshがDeepSeek接続を求めます");
         println!("[rdsh setup] 認証ファイル: {creds}");
         println!("[rdsh setup] opencode設定: {cfg}");
+    } else if locale == crate::locale::Locale::Chinese {
+        println!("[rdsh setup] 尚无可用模型。按最方便的顺序：");
+        println!("[rdsh setup]   1) 使用订阅（无需 API 密钥，推荐）");
+        println!("[rdsh setup]      opencode auth login  … 选择 OpenAI (GPT) 并通过 OAuth 连接");
+        println!("[rdsh setup]      codex login          … 使用 ChatGPT 套餐访问 GPT");
+        println!("[rdsh setup]      登录后先用 rdsh auth 预览，再通过 --select SOURCE:CREDENTIAL --import 选择共享来源");
+        println!("[rdsh setup]   2) 使用 DeepSeek 密钥（dsh 的默认连接）");
+        println!("[rdsh setup]      在 platform.deepseek.com 签发后粘贴到上方");
+        println!("[rdsh setup]      环境变量引用无需写入文件；要保存请运行 rdsh auth --select env:DEEPSEEK_API_KEY --import");
+        println!("[rdsh setup]   3) 稍后：直接启动会显示 DeepSeek 连接提示");
+        println!("[rdsh setup] 凭据文件：{creds}");
+        println!("[rdsh setup] opencode 设置：{cfg}");
     } else {
         println!("[rdsh setup] no usable model yet. Easiest first:");
         println!("[rdsh setup]   1) Use a subscription (no API key needed, recommended)");
@@ -1937,9 +2273,16 @@ fn print_guide() {
 /// First-run wizard: sync selected credentials, offer individual key saves, optionally run
 /// the provider login flow or reveal settings dirs, otherwise print the
 /// exact next step. Safe non-interactive: prompts only fire on a TTY.
-pub fn cmd_setup(open: bool, login: bool, json: bool, yes: bool, dry: bool) -> anyhow::Result<()> {
+pub fn cmd_setup(
+    open: bool,
+    login: bool,
+    json: bool,
+    yes: bool,
+    dry: bool,
+    locale: crate::locale::Locale,
+) -> anyhow::Result<()> {
     if !dry {
-        auto_sync();
+        auto_sync(locale);
     }
     note_env_dsh_home();
     let mut persisted: Vec<String> = Vec::new();
@@ -1955,11 +2298,10 @@ pub fn cmd_setup(open: bool, login: bool, json: bool, yes: bool, dry: bool) -> a
         }
         // --yes no longer implies consent to persist every environment key.
         let take = !dry && !yes && !json
-            && prompt_yes(&format!(
-                "[rdsh setup] persist {k} from environment to {} (all DSH profiles; stop DSH/remove ref to undo)? [y/N] ",
+            && prompt_yes(&localized_format!(locale, "[rdsh setup] persist {k} from environment to {} (all DSH profiles; stop DSH/remove ref to undo)? [y/N] ", "[rdsh setup] 将环境变量 {k} 保存到 {}（所有 DSH 配置文件；停止 DSH 并删除 ref 可撤销）？[y/N] ", "[rdsh setup] 環境変数 {k} を {} に保存しますか（全DSHプロファイルで利用。取消にはDSH停止とref削除が必要）？ [y/N] ",
                 creds_path()
             ));
-        if take && store_ref(k, v.trim())? {
+        if take && store_ref(k, v.trim(), locale)? {
             known_refs.insert(k.to_string());
             persisted.push(k.to_string());
         }
@@ -1967,22 +2309,30 @@ pub fn cmd_setup(open: bool, login: bool, json: bool, yes: bool, dry: bool) -> a
     {
         use std::io::IsTerminal as _;
         if !dry && !json && !yes && std::io::stdin().is_terminal() && setup_needed() {
-            if let Some(pasted) = prompt_secret() {
-                match store_ref("DEEPSEEK_API_KEY", &pasted) {
+            if let Some(pasted) = prompt_secret(locale) {
+                match store_ref("DEEPSEEK_API_KEY", &pasted, locale) {
                     Ok(true) => persisted.push("DEEPSEEK_API_KEY".to_string()),
                     Ok(false) => {}
-                    Err(e) => eprintln!("[rdsh setup] could not store key: {e:#}"),
+                    Err(e) => eprintln!(
+                        "{}",
+                        localized_format!(
+                            locale,
+                            "[rdsh setup] could not store key: {e:#}",
+                            "[rdsh setup] 无法保存密钥：{e:#}",
+                            "[rdsh setup] キーを保存できませんでした: {e:#}"
+                        )
+                    ),
                 }
             }
         }
     }
     let mut login_run = false;
     if login && !dry {
-        login_run = launch_login();
-        auto_sync();
+        login_run = launch_login(locale);
+        auto_sync(locale);
     }
     if open && !dry {
-        open_settings_dirs(json);
+        open_settings_dirs(json, locale);
     }
     let needed = setup_needed();
     if json {
@@ -1994,10 +2344,10 @@ pub fn cmd_setup(open: bool, login: bool, json: bool, yes: bool, dry: bool) -> a
         return Ok(());
     }
     if !needed {
-        println!("[rdsh setup] credentials present; authentication not verified (see rdsh auth / rdsh doctor)");
+        println!("{}", localized_format!(locale, "[rdsh setup] credentials present; authentication not verified (see rdsh auth / rdsh doctor)", "[rdsh setup] 凭据已存在；身份验证尚未确认（参见 rdsh auth / rdsh doctor）", "[rdsh setup] 認証情報は存在します。認証の成功は未確認です（rdsh auth / rdsh doctorを参照）"));
         return Ok(());
     }
-    print_guide();
+    print_guide(locale);
     Ok(())
 }
 
@@ -2071,17 +2421,17 @@ pub(crate) fn setup_store_key(name: &str, value: &str) -> anyhow::Result<bool> {
     if !SETUP_KEY_ALLOWLIST.contains(&name) {
         anyhow::bail!("refusing to store unknown credential; use a supported API-key name");
     }
-    safe_scalar(value)?;
+    safe_scalar(value, crate::locale::Locale::English)?;
     let v = value.trim();
     if v.is_empty() || v.len() > 512 {
         anyhow::bail!("empty or oversized value");
     }
-    store_ref(name, v)
+    store_ref(name, v, crate::locale::Locale::English)
 }
 
 /// Open a URL in the OS browser (best effort, used by `setup --web`).
-pub(crate) fn open_browser(url: &str) -> anyhow::Result<()> {
-    open_path(url)
+pub(crate) fn open_browser(url: &str, locale: crate::locale::Locale) -> anyhow::Result<()> {
+    open_path(url, locale)
 }
 
 #[cfg(test)]
@@ -2276,10 +2626,14 @@ mod tests {
 
     #[test]
     fn credential_scalars_cannot_create_new_yaml_lines() {
-        assert!(safe_scalar("valid-key-123").is_ok());
-        assert!(safe_scalar("key\nrefs:\n  OTHER: injected").is_err());
-        assert!(safe_scalar("key\rrecords:").is_err());
-        assert!(safe_scalar("key\u{2028}records:").is_err());
+        assert!(safe_scalar("valid-key-123", crate::locale::Locale::English).is_ok());
+        assert!(safe_scalar(
+            "key\nrefs:\n  OTHER: injected",
+            crate::locale::Locale::English
+        )
+        .is_err());
+        assert!(safe_scalar("key\rrecords:", crate::locale::Locale::English).is_err());
+        assert!(safe_scalar("key\u{2028}records:", crate::locale::Locale::English).is_err());
     }
 
     #[test]
@@ -2455,7 +2809,8 @@ mod tests {
                 let policy = SharingPolicy {
                     selected: [format!("test:{name}")].into_iter().collect(),
                 };
-                apply_imports_from_scan(&policy, &scan, true).unwrap();
+                apply_imports_from_scan(&policy, &scan, true, crate::locale::Locale::English)
+                    .unwrap();
             }));
         }
         barrier.wait();
@@ -2526,10 +2881,10 @@ mod tests {
 
     #[test]
     fn lang_detect() {
-        assert!(lang_is_japanese("ja_JP.UTF-8"));
-        assert!(lang_is_japanese("ja"));
-        assert!(!lang_is_japanese("en_US.UTF-8"));
-        assert!(!lang_is_japanese(""));
-        assert!(!lang_is_japanese("zh_CN.UTF-8"));
+        assert!((crate::locale::parse("ja_JP.UTF-8") == Some(crate::locale::Locale::Japanese)));
+        assert!((crate::locale::parse("ja") == Some(crate::locale::Locale::Japanese)));
+        assert!(!(crate::locale::parse("en_US.UTF-8") == Some(crate::locale::Locale::Japanese)));
+        assert!(!(crate::locale::parse("") == Some(crate::locale::Locale::Japanese)));
+        assert!(!(crate::locale::parse("zh_CN.UTF-8") == Some(crate::locale::Locale::Japanese)));
     }
 }

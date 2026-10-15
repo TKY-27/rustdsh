@@ -1610,28 +1610,55 @@ fn instruction_context(state: &Value, consumer_id: &str) -> Result<Value> {
     Ok(Value::Object(context))
 }
 
-fn read_json(input_file: &str) -> Result<Value> {
-    let file =
-        open_json_input(input_file).with_context(|| format!("cannot read JSON {input_file}"))?;
-    let metadata = file
-        .metadata()
-        .with_context(|| format!("cannot read JSON {input_file}"))?;
+fn read_json(input_file: &str, locale: crate::locale::Locale) -> Result<Value> {
+    let file = open_json_input(input_file).with_context(|| {
+        localized_format!(
+            locale,
+            "cannot read JSON {}",
+            "无法读取 JSON {}",
+            "JSONを読み取れません {}",
+            input_file
+        )
+    })?;
+    let metadata = file.metadata().with_context(|| {
+        localized_format!(
+            locale,
+            "cannot read JSON {}",
+            "无法读取 JSON {}",
+            "JSONを読み取れません {}",
+            input_file
+        )
+    })?;
     if !metadata.is_file() {
-        bail!("Input JSON must be a regular file");
+        bail!(crate::locale::diagnostic(locale, "Input JSON must be a regular file").to_string());
     }
     let mut reader = BufReader::new(file);
     let starts_with_bom = reader
         .fill_buf()
-        .with_context(|| format!("cannot read JSON {input_file}"))?
+        .with_context(|| {
+            localized_format!(
+                locale,
+                "cannot read JSON {}",
+                "无法读取 JSON {}",
+                "JSONを読み取れません {}",
+                input_file
+            )
+        })?
         .starts_with(b"\xef\xbb\xbf");
     if starts_with_bom {
         reader.consume(3);
     }
     serde_json::from_reader(reader).map_err(|error| {
         if error.is_io() {
-            anyhow!("cannot read JSON {input_file}")
+            anyhow!(localized_format!(
+                locale,
+                "cannot read JSON {}",
+                "无法读取 JSON {}",
+                "JSONを読み取れません {}",
+                input_file
+            ))
         } else {
-            anyhow!("Input JSON is invalid")
+            anyhow!(crate::locale::diagnostic(locale, "Input JSON is invalid").to_string())
         }
     })
 }
@@ -1737,12 +1764,33 @@ fn serialize_bounded_response(response: &Value, maximum_bytes: usize) -> Result<
     Ok(Some(serialized))
 }
 
+/// Preserve engine error text while labelling its CLI context in the selected language.
+fn instruction_cli_failure(error: anyhow::Error, locale: crate::locale::Locale) -> anyhow::Error {
+    if locale == crate::locale::Locale::English {
+        error
+    } else {
+        error.context(crate::locale::diagnostic(locale, "Instruction queue").to_string())
+    }
+}
+
 /// Run `rdsh instruction-queue validate|context|submit|resolve|control --input-file <request>`.
-pub fn cmd_instruction_queue(action: &str, input_file: &str) -> Result<()> {
-    let document = read_json(input_file)?;
-    let output = run_instruction_queue(action, &document)?;
-    let output = serialize_bounded_response(&output, MAX_RESPONSE_BYTES)?
-        .ok_or_else(|| anyhow!("Instruction queue response exceeds 63 MiB"))?;
+pub fn cmd_instruction_queue(
+    action: &str,
+    input_file: &str,
+    locale: crate::locale::Locale,
+) -> Result<()> {
+    let document = read_json(input_file, locale)?;
+    let output = run_instruction_queue(action, &document)
+        .map_err(|error| instruction_cli_failure(error, locale))?;
+    let output = serialize_bounded_response(&output, MAX_RESPONSE_BYTES)?.ok_or_else(|| {
+        instruction_cli_failure(
+            anyhow!(
+                crate::locale::diagnostic(locale, "Instruction queue response exceeds 63 MiB")
+                    .to_string()
+            ),
+            locale,
+        )
+    })?;
     println!("{output}");
     Ok(())
 }

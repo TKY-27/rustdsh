@@ -10,7 +10,7 @@
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org/)
 
-[Japanese version](README.ja.md)
+[日本語](README.ja.md) · [简体中文](README.zh-CN.md)
 
 An independent community project; not an official DeepSeek or DeepSeek Harness project.
 
@@ -447,6 +447,41 @@ rdsh settings set extras.enable serve  # enable the server feature
 rdsh serve                             # launch (bound to localhost, protected with a one-time token)
 ```
 
+### Product language
+
+rdsh-owned CLI diagnostics and the native local page support English, Simplified
+Chinese, and Japanese. Choose one run with `--language`, or persist it in
+`rdsh.json`; the default `auto` reads the first nonblank locale environment variable,
+falling back to English when it is absent or unsupported.
+
+```sh
+rdsh --language ja settings show
+rdsh settings set general.language zh-CN
+```
+
+Precedence is `--language`, `RDSH_LANG`, `general.language`, then `LC_ALL`,
+`LC_MESSAGES`, and `LANG`. An explicitly invalid `general.language` stops the
+command without rewriting the settings file. Delegated `dsh` arguments, model
+output, JSON fields, files, and protocol identifiers are not translated. Interactive setup prompts and settings/policy validation use the selected
+language too. Authentication decisions and skipped-provider notes localize only
+the CLI presentation; their existing JSON strings remain unchanged, including
+malformed or oversized guard-input reasons. Native search continues to refuse
+unsupported non-Unix platforms before accessing the requested directory.
+
+`worker-scope validate` and `worker-scope policy` also localize their help and CLI diagnostics. These pure commands and their help ignore unrelated corrupt settings; ordinary commands and root help still report the settings error. Canonical JSON, policy codes and supplied paths stay unchanged.
+
+### Protected delegated tools
+
+The opt-in agent tool sandbox supports Linux x86_64 with bubblewrap, prlimit,
+and unprivileged user namespaces. Its audited DSH/tool-runtime pairs are
+`0.2.0-rc.2`, `0.2.1-alpha.1`, and `0.2.1-alpha.3`, with matching versions in
+each pair. It verifies package metadata, runtime bytes and the loaded module,
+then limits inspection to explicitly shared files. Unknown, mixed, modified or
+unexpectedly resolved runtimes stop before delegation. macOS and Windows
+refuse protected delegation; ordinary delegation keeps the original tools.
+This matrix applies to the Rust launcher. Project-pinned dashboard releases
+retain their separate [supported tuple](docs/STAGED-UPDATES.md#capture-trusted-runtime-code).
+
 ### Extended Dashboard (`rdsh-dashboard`)
 
 Optional Node.js dashboard for project metrics, human-in-the-loop Q&A, and mobile access (requires Node.js 22+):
@@ -660,3 +695,11 @@ authors):
 ## License
 
 MIT — see [LICENSE](LICENSE). Upstream DeepSeek Harness and its dependencies retain their respective licenses.
+
+### External agent jobs
+
+`node dashboard/cli.mjs --language ja agents list` selects the same display language as the dashboard. External-agent help and CLI diagnostics support `en`, `zh-CN`, and `ja`; job states, error codes, JSON keys and agent output remain canonical. Use `agents submit --prompt-file` for UTF-8 instructions, including Japanese filenames and text. See [agent runners](docs/AGENT-RUNNERS.md) for commands and permission limits. Submitting a real job can incur the external provider’s charges; the locale tests use local fake executables only.
+
+`budget-admission apply|validate|public --input-file <request-json>` is also a settings-independent pure JSON command. Native and dashboard entrypoints localize owned help/errors in all three languages, preserve canonical budget codes and output, and never call a provider or write the budget book. See [budget control](docs/BUDGET-CONTROL.md).
+
+`question-contracts apply|validate|public`, `answer-applications apply|validate|public|schema` and `instruction-queue validate|context|submit|resolve|control` accept `--input-file <request-json>` without reading unrelated settings. Native and dashboard help and owned diagnostics support all three languages; engine messages, status codes and canonical JSON retain upstream values. The optional [answer guard](plugins/rdsh-answer-guard/README.md) also localizes its notice summary and configuration error without changing the model-facing reminder.

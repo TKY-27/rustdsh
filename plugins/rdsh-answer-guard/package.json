@@ -5,7 +5,9 @@
   "license": "MIT",
   "description": "Recover a turn whose reply was emitted only as reasoning, so the reader sees an answer",
   "exports": {
-    ".": "./index.js"
+    ".": "./index.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json"
   },
   "dsh": {
     "bundle": {
@@ -14,6 +16,6 @@
   },
   "meta": {
     "title": "rdsh answer guard",
-    "description": "応答が reasoning だけで本文が空のままターンが閉じたとき、再出力を1回だけ促します。"
+    "description": "Request one visible answer when a turn ends with reasoning and no reply text."
   }
 }

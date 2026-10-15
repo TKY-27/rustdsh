@@ -1,3 +1,4 @@
+import { requiresOwnershipBackend } from "./ownership-support.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -565,7 +566,7 @@ test(
     );
   },
 );
-test("owned children and detached grandchildren stop in order after a bounded graceful deadline, with duplicate requests sharing one result", async (t) => {
+test("owned children and detached grandchildren stop in order after a bounded graceful deadline, with duplicate requests sharing one result", requiresOwnershipBackend, async (t) => {
   const { tree, rows } = await setup(t),
     { p, trace, stages } = await tree("detached");
   const live = await p.inspect();
@@ -615,7 +616,7 @@ test("cooperative EOF/TERM exits require no forced kill on Linux and retain trut
       ),
     );
 });
-test("root exit cannot confirm descendant exit and changing the exposed PID to an independent canary never redirects a kernel-handle stop", async (t) => {
+test("root exit cannot confirm descendant exit and changing the exposed PID to an independent canary never redirects a kernel-handle stop", requiresOwnershipBackend, async (t) => {
   const { root, tree, rows, own } = await setup(t),
     { p, trace } = await tree("root_exit"),
     { p: other, trace: otherTrace } = await tree();
@@ -660,7 +661,7 @@ test("root exit cannot confirm descendant exit and changing the exposed PID to a
   assert((await rows(canaryTrace)).length > n);
   assert((await rows(trace)).some((r) => r.type === "eof"));
 });
-test("monitor disconnect is unverifiable, sends no guessed PID kill, and never produces a confirmed stop", async (t) => {
+test("monitor disconnect is unverifiable, sends no guessed PID kill, and never produces a confirmed stop", requiresOwnershipBackend, async (t) => {
   const { tree, rows } = await setup(t),
     { p, trace, stages } = await tree();
   p.disconnectMonitor();
@@ -677,7 +678,7 @@ test("monitor disconnect is unverifiable, sends no guessed PID kill, and never p
   await pause(180);
   assert.equal((await rows(trace)).length, n);
 });
-test("managed Harness stores ownership before release and every stop stage including final empty-group proof; reloaded history cannot recreate signal authority", async (t) => {
+test("managed Harness stores ownership before release and every stop stage including final empty-group proof; reloaded history cannot recreate signal authority", requiresOwnershipBackend, async (t) => {
   const { root, own } = await setup(t),
     trace = path.join(root, "harness.jsonl"),
     project = { id: "scope-history", directory: path.join(root, "state") };
@@ -712,7 +713,7 @@ test("managed Harness stores ownership before release and every stop stage inclu
   assert.equal(result.commands.filter((c) => c.operation === "stop").length, 1);
 });
 
-test("authenticated Harness API separates stopping from verified empty descendants, duplicate human requests stop once, and MCP credentials cannot stop the owned run", async (t) => {
+test("authenticated Harness API separates stopping from verified empty descendants, duplicate human requests stop once, and MCP credentials cannot stop the owned run", requiresOwnershipBackend, async (t) => {
   const { root, own } = await setup(t),
     previous = process.env.RDSH_DASHBOARD_HOME;
   process.env.RDSH_DASHBOARD_HOME = path.join(root, "dashboard-home");

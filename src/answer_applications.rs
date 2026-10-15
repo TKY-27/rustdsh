@@ -1891,33 +1891,64 @@ fn card_history(card: &Value) -> Vec<Value> {
 
 const APPLY_OPERATIONS: [&str; 2] = ["record", "ack"];
 
-fn read_json(input_file: &str) -> Result<Value> {
-    let file =
-        open_json_input(input_file).with_context(|| format!("cannot read JSON {input_file}"))?;
-    read_json_file(file, input_file)
+fn read_json(input_file: &str, locale: crate::locale::Locale) -> Result<Value> {
+    let file = open_json_input(input_file).with_context(|| {
+        localized_format!(
+            locale,
+            "cannot read JSON {}",
+            "无法读取 JSON {}",
+            "JSONを読み取れません {}",
+            input_file
+        )
+    })?;
+    read_json_file(file, input_file, locale)
 }
 
-fn read_json_file(file: std::fs::File, input_file: &str) -> Result<Value> {
+fn read_json_file(
+    file: std::fs::File,
+    input_file: &str,
+    locale: crate::locale::Locale,
+) -> Result<Value> {
     const MAX_INPUT_BYTES: usize = 256 * 1024;
-    let metadata = file
-        .metadata()
-        .with_context(|| format!("cannot read JSON {input_file}"))?;
+    let metadata = file.metadata().with_context(|| {
+        localized_format!(
+            locale,
+            "cannot read JSON {}",
+            "无法读取 JSON {}",
+            "JSONを読み取れません {}",
+            input_file
+        )
+    })?;
     if !metadata.is_file() || metadata.len() > MAX_INPUT_BYTES as u64 {
-        bail!("Input JSON must be a regular file of at most 256 KiB");
+        bail!(crate::locale::diagnostic(
+            locale,
+            "Input JSON must be a regular file of at most 256 KiB"
+        )
+        .to_string());
     }
     let mut bytes = Vec::with_capacity(metadata.len() as usize);
     file.take((MAX_INPUT_BYTES + 1) as u64)
         .read_to_end(&mut bytes)
-        .with_context(|| format!("cannot read JSON {input_file}"))?;
+        .with_context(|| {
+            localized_format!(
+                locale,
+                "cannot read JSON {}",
+                "无法读取 JSON {}",
+                "JSONを読み取れません {}",
+                input_file
+            )
+        })?;
     if bytes.len() > MAX_INPUT_BYTES {
-        bail!("Input JSON exceeds 256 KiB");
+        bail!(crate::locale::diagnostic(locale, "Input JSON exceeds 256 KiB").to_string());
     }
     let Ok(text) = std::str::from_utf8(&bytes) else {
-        bail!("Input JSON is invalid");
+        bail!(crate::locale::diagnostic(locale, "Input JSON is invalid").to_string());
     };
     // `TextDecoder("utf-8")` in the dashboard CLI removed a leading BOM.
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
-    serde_json::from_str(text).map_err(|_| anyhow!("Input JSON is invalid"))
+    serde_json::from_str(text).map_err(|_| {
+        anyhow!(crate::locale::diagnostic(locale, "Input JSON is invalid").to_string())
+    })
 }
 
 #[cfg(unix)]
@@ -1937,13 +1968,16 @@ fn open_json_input(input_file: &str) -> std::io::Result<std::fs::File> {
 
 /// The document shape every action accepts:
 /// `{ operation, state, input, now, live_jobs }`.
-fn read_request(document: &Value) -> Result<(String, Value, Value, String, Value)> {
-    let object = document
-        .as_object()
-        .ok_or_else(|| anyhow!("Input JSON is invalid"))?;
+fn read_request(
+    document: &Value,
+    locale: crate::locale::Locale,
+) -> Result<(String, Value, Value, String, Value)> {
+    let object = document.as_object().ok_or_else(|| {
+        anyhow!(crate::locale::diagnostic(locale, "Input JSON is invalid").to_string())
+    })?;
     const CLI_KEYS: [&str; 5] = ["operation", "state", "input", "now", "live_jobs"];
     if object.keys().any(|key| !CLI_KEYS.contains(&key.as_str())) {
-        bail!("Input JSON is invalid");
+        bail!(crate::locale::diagnostic(locale, "Input JSON is invalid").to_string());
     }
     let operation = object
         .get("operation")
@@ -1951,13 +1985,15 @@ fn read_request(document: &Value) -> Result<(String, Value, Value, String, Value
         .unwrap_or("")
         .to_string();
     if operation.is_empty() {
-        bail!("Input JSON is invalid");
+        bail!(crate::locale::diagnostic(locale, "Input JSON is invalid").to_string());
     }
     let state = object
         .get("state")
         .filter(|value| value.is_object())
         .cloned()
-        .ok_or_else(|| anyhow!("Input JSON is invalid"))?;
+        .ok_or_else(|| {
+            anyhow!(crate::locale::diagnostic(locale, "Input JSON is invalid").to_string())
+        })?;
     let input = object.get("input").cloned().unwrap_or(Value::Null);
     let now = object
         .get("now")
@@ -1970,41 +2006,88 @@ fn read_request(document: &Value) -> Result<(String, Value, Value, String, Value
 
 /// The `now` field must be a canonical instant; the answer application path
 /// stamps it into `read_at`/`started_at`, so an unusable clock fails closed.
-fn request_now(now: &str) -> Result<String> {
+fn request_now(now: &str, locale: crate::locale::Locale) -> Result<String> {
     if now.is_empty() {
-        bail!("Invalid answer application timestamp");
+        bail!(
+            crate::locale::diagnostic(locale, "Invalid answer application timestamp").to_string()
+        );
     }
     match parse_js_date(now) {
         Some(canonical) if canonical == now => Ok(canonical),
-        _ => bail!("Invalid answer application timestamp"),
+        _ => bail!(
+            crate::locale::diagnostic(locale, "Invalid answer application timestamp").to_string()
+        ),
     }
 }
 
 /// `rdsh answer-applications apply|validate|public|schema --input-file <json>`.
-pub fn cmd_answer_applications(action: &str, input_file: &str) -> Result<()> {
-    let document = read_json(input_file)?;
-    let (operation, mut state, input, now, live_jobs) = read_request(&document)?;
+pub fn cmd_answer_applications(
+    action: &str,
+    input_file: &str,
+    locale: crate::locale::Locale,
+) -> Result<()> {
+    cmd_answer_applications_inner(action, input_file, locale).map_err(|error| {
+        if let Some(reason) = error.downcast_ref::<ReplyError>() {
+            anyhow!(
+                "{}: {}",
+                crate::locale::diagnostic(locale, "Answer applications"),
+                reason.message
+            )
+        } else {
+            error
+        }
+    })
+}
+
+fn cmd_answer_applications_inner(
+    action: &str,
+    input_file: &str,
+    locale: crate::locale::Locale,
+) -> Result<()> {
+    let document = read_json(input_file, locale)?;
+    let (operation, mut state, input, now, live_jobs) = read_request(&document, locale)?;
     let mut output = Map::new();
     match action {
         "apply" => {
             if !APPLY_OPERATIONS.contains(&operation.as_str()) {
-                bail!("Input JSON operation does not match the requested action");
+                bail!(crate::locale::diagnostic(
+                    locale,
+                    "Input JSON operation does not match the requested action"
+                )
+                .to_string());
             }
             if !input.is_object() {
-                bail!("Input JSON is invalid");
+                bail!(crate::locale::diagnostic(locale, "Input JSON is invalid").to_string());
             }
-            let now = request_now(&now)?;
-            let instant =
-                now_millis(&now).ok_or_else(|| anyhow!("Invalid answer application timestamp"))?;
+            let now = request_now(&now, locale)?;
+            let instant = now_millis(&now).ok_or_else(|| {
+                anyhow!(
+                    crate::locale::diagnostic(locale, "Invalid answer application timestamp")
+                        .to_string()
+                )
+            })?;
             output.insert("operation".to_string(), Value::String(operation.clone()));
             match operation.as_str() {
                 "record" => {
-                    let command_id = input
-                        .get("command_id")
-                        .and_then(Value::as_str)
-                        .ok_or_else(|| anyhow!("Input JSON is invalid"))?;
+                    let command_id =
+                        input
+                            .get("command_id")
+                            .and_then(Value::as_str)
+                            .ok_or_else(|| {
+                                anyhow!(crate::locale::diagnostic(locale, "Input JSON is invalid")
+                                    .to_string())
+                            })?;
                     let mut message = input.get("message").cloned().unwrap_or(Value::Null);
-                    validate_record_request(&state, &message, command_id).map_err(reply_failure)?;
+                    validate_record_request(&state, &message, command_id).map_err(|error| {
+                        if locale == crate::locale::Locale::English {
+                            reply_failure(error)
+                        } else {
+                            reply_failure(error).context(
+                                crate::locale::diagnostic(locale, "Answer applications")
+                                    .to_string(),
+                            )
+                        }
+                    })?;
                     let reply = if input.get("consumer").is_some() {
                         let record = input.get("consumer").cloned().unwrap_or(Value::Null);
                         Some(register_reply_consumer(&mut state, &record, &now)?)
@@ -2041,20 +2124,40 @@ pub fn cmd_answer_applications(action: &str, input_file: &str) -> Result<()> {
         }
         "validate" => {
             if operation != action {
-                bail!("Input JSON operation does not match the requested action");
+                bail!(crate::locale::diagnostic(
+                    locale,
+                    "Input JSON operation does not match the requested action"
+                )
+                .to_string());
             }
             output.insert("operation".to_string(), Value::String(operation.clone()));
-            validate_answer_applications(&state).map_err(reply_failure)?;
+            validate_answer_applications(&state).map_err(|error| {
+                if locale == crate::locale::Locale::English {
+                    reply_failure(error)
+                } else {
+                    reply_failure(error).context(
+                        crate::locale::diagnostic(locale, "Answer applications").to_string(),
+                    )
+                }
+            })?;
             output.insert("valid".to_string(), Value::Bool(true));
         }
         "public" | "schema" => {
             let wanted = if action == "schema" { "public" } else { action };
             if operation != wanted {
-                bail!("Input JSON operation does not match the requested action");
+                bail!(crate::locale::diagnostic(
+                    locale,
+                    "Input JSON operation does not match the requested action"
+                )
+                .to_string());
             }
             let instant = match now_millis(&now) {
                 Some(instant) => instant,
-                None => bail!("Invalid answer application timestamp"),
+                None => bail!(crate::locale::diagnostic(
+                    locale,
+                    "Invalid answer application timestamp"
+                )
+                .to_string()),
             };
             output.insert("operation".to_string(), Value::String(operation.clone()));
             let observations = input.get("observations").cloned().unwrap_or(Value::Null);
@@ -2069,13 +2172,19 @@ pub fn cmd_answer_applications(action: &str, input_file: &str) -> Result<()> {
                 }
             }
         }
-        other => bail!("unknown answer-applications action {other}"),
+        other => bail!(
+            "{} {other}",
+            crate::locale::diagnostic(locale, "unknown answer-applications action")
+        ),
     }
-    let text =
-        serde_json::to_string(&Value::Object(output)).context("serialize answer applications")?;
+    let text = serde_json::to_string(&Value::Object(output))
+        .context(crate::locale::diagnostic(locale, "serialize answer applications").to_string())?;
     let mut handle = std::io::stdout();
-    writeln!(handle, "{text}").context("write answer applications")?;
-    handle.flush().context("flush answer applications")?;
+    writeln!(handle, "{text}")
+        .context(crate::locale::diagnostic(locale, "write answer applications").to_string())?;
+    handle
+        .flush()
+        .context(crate::locale::diagnostic(locale, "flush answer applications").to_string())?;
     Ok(())
 }
 
@@ -2480,9 +2589,12 @@ mod tests {
 
     #[test]
     fn the_clock_rejects_an_empty_or_non_canonical_instant() {
-        assert!(request_now("").is_err());
-        assert!(request_now("2026-10-15T00:00:00Z").is_err());
-        assert_eq!(request_now(now()).expect("canonical"), now());
+        assert!(request_now("", crate::locale::Locale::English).is_err());
+        assert!(request_now("2026-10-15T00:00:00Z", crate::locale::Locale::English).is_err());
+        assert_eq!(
+            request_now(now(), crate::locale::Locale::English).expect("canonical"),
+            now()
+        );
     }
 
     #[test]
@@ -2503,7 +2615,8 @@ mod tests {
         std::fs::rename(&path, root.join("opened.json")).unwrap();
         std::fs::write(&path, "not the validated input").unwrap();
 
-        let parsed = read_json_file(file, path.to_str().unwrap()).unwrap();
+        let parsed =
+            read_json_file(file, path.to_str().unwrap(), crate::locale::Locale::English).unwrap();
         assert_eq!(parsed["operation"], "validate");
         assert_eq!(parsed["state"], json!({}));
         std::fs::remove_dir_all(root).unwrap();

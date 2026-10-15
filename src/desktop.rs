@@ -52,9 +52,18 @@ pub const GITVIEW_SPEC: &str = "github:yugapor/dsh-gitview";
 pub const DEFAULT_THIRD_PARTY: &[&str] = &[SOUND_SPEC, GITVIEW_SPEC];
 /// Product name used by the macOS bundle and the Windows install directory.
 const APP_NAME: &str = "DeepSeek Harness";
-/// Upstream's own refusal text; keeping the intent verbatim keeps the fix obvious.
-const PROFILE_NOT_INITIALIZED: &str =
-    "Open DeepSeek Harness Desktop once to initialize its profile, then fully quit it before attaching rdsh plugins";
+fn text(
+    locale: crate::locale::Locale,
+    english: &'static str,
+    chinese: &'static str,
+    japanese: &'static str,
+) -> &'static str {
+    match locale {
+        crate::locale::Locale::English => english,
+        crate::locale::Locale::Chinese => chinese,
+        crate::locale::Locale::Japanese => japanese,
+    }
+}
 
 /// Process environment reduced to the values detection needs.
 #[derive(Debug, Clone, Default)]
@@ -399,7 +408,11 @@ fn is_plugins_dir(dir: &Path) -> bool {
 
 /// Resolve the rustdsh checkout (or its `plugins/` directory) that carries the
 /// bundled plugins. Both `<checkout>` and `<checkout>/plugins` are accepted.
-pub fn resolve_plugins_dir(explicit: Option<&str>, env: &OsEnv) -> Result<PathBuf> {
+pub fn resolve_plugins_dir(
+    explicit: Option<&str>,
+    env: &OsEnv,
+    locale: crate::locale::Locale,
+) -> Result<PathBuf> {
     let mut candidates: Vec<PathBuf> = Vec::new();
     let mut push = |dir: PathBuf| {
         if !candidates.contains(&dir) {
@@ -432,13 +445,30 @@ pub fn resolve_plugins_dir(explicit: Option<&str>, env: &OsEnv) -> Result<PathBu
         }
         tried.push(candidate);
     }
+    let tried = tried
+        .iter()
+        .map(|p| p.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    if locale == crate::locale::Locale::English {
+        bail!(
+            "no rustdsh checkout with plugins/ found (tried: {tried}); pass --plugins-dir <checkout> or set RDSH_PLUGINS_DIR"
+        );
+    }
     bail!(
-        "no rustdsh checkout with plugins/ found (tried: {}); pass --plugins-dir <checkout> or set RDSH_PLUGINS_DIR",
-        tried
-            .iter()
-            .map(|p| p.display().to_string())
-            .collect::<Vec<_>>()
-            .join(", ")
+        "{}: {tried} ({})",
+        text(
+            locale,
+            "",
+            "未找到包含 plugins/ 的 rustdsh 检出目录",
+            "plugins/ を含む rustdsh チェックアウトが見つかりません"
+        ),
+        text(
+            locale,
+            "",
+            "请传入 --plugins-dir <checkout> 或设置 RDSH_PLUGINS_DIR",
+            "--plugins-dir <checkout> を指定するか RDSH_PLUGINS_DIR を設定してください"
+        )
     )
 }
 
@@ -577,8 +607,25 @@ fn plugin_state(state: &ProfileState, name: &str) -> &'static str {
     }
 }
 
+fn plugin_state_text(
+    state: &ProfileState,
+    name: &str,
+    locale: crate::locale::Locale,
+) -> &'static str {
+    match plugin_state(state, name) {
+        "enabled" => text(locale, "enabled", "已启用", "有効"),
+        "installed (not enabled)" => text(
+            locale,
+            "installed (not enabled)",
+            "已安装（未启用）",
+            "インストール済み（無効）",
+        ),
+        _ => text(locale, "absent", "未安装", "未導入"),
+    }
+}
+
 /// `rdsh desktop` / `rdsh desktop status` - read-only detection.
-pub fn cmd_status(json_out: bool) -> Result<()> {
+pub fn cmd_status(json_out: bool, locale: crate::locale::Locale) -> Result<()> {
     let env = OsEnv::from_process();
     let app = find_app(&env);
     let command = find_command(&env);
@@ -621,11 +668,21 @@ pub fn cmd_status(json_out: bool) -> Result<()> {
     }
 
     match &app {
-        Some(path) => out!("[rdsh] desktop app: {}", path.display()),
+        Some(path) => out!(
+            "[rdsh] {}: {}",
+            crate::locale::ui_message(locale, crate::locale::UiMessage::DesktopApp),
+            path.display()
+        ),
         None => {
-            out!("[rdsh] desktop app: <not found>");
             out!(
-                "[rdsh] desktop app candidates: {}",
+                "[rdsh] {}: <{}>",
+                crate::locale::ui_message(locale, crate::locale::UiMessage::DesktopApp),
+                crate::locale::ui_message(locale, crate::locale::UiMessage::NotFound)
+            );
+            out!(
+                "[rdsh] {} {}: {}",
+                crate::locale::ui_message(locale, crate::locale::UiMessage::DesktopApp),
+                text(locale, "candidates", "候选位置", "候補"),
                 app_candidates(&env)
                     .iter()
                     .map(|p| p.display().to_string())
@@ -633,7 +690,9 @@ pub fn cmd_status(json_out: bool) -> Result<()> {
                     .join(", ")
             );
             out!(
-                "[rdsh] desktop app: set DSH_DESKTOP_APP_DIR or DSH_DESKTOP_CLI if it lives elsewhere"
+                "[rdsh] {}: {}",
+                crate::locale::ui_message(locale, crate::locale::UiMessage::DesktopApp),
+                text(locale, "set DSH_DESKTOP_APP_DIR or DSH_DESKTOP_CLI if it lives elsewhere", "若安装在其他位置，请设置 DSH_DESKTOP_APP_DIR 或 DSH_DESKTOP_CLI", "別の場所にある場合は DSH_DESKTOP_APP_DIR または DSH_DESKTOP_CLI を設定してください")
             );
             if env.platform != "macos" && env.platform != "windows" {
                 // Linux has no published Desktop build, so name the two ways a
@@ -652,43 +711,96 @@ pub fn cmd_status(json_out: bool) -> Result<()> {
     }
     match &command {
         Some(runtime) => out!(
-            "[rdsh] desktop command: {} (source: {})",
+            "[rdsh] {}: {} ({}: {})",
+            crate::locale::ui_message(locale, crate::locale::UiMessage::DesktopCommand),
             runtime.path.display(),
+            text(locale, "source", "来源", "取得元"),
             runtime.source
         ),
         None => out!(
-            "[rdsh] desktop command: <not found> (install it from the app menu: Manage dsh Command...)"
+            "[rdsh] {}: <{}> ({})",
+            crate::locale::ui_message(locale, crate::locale::UiMessage::DesktopCommand),
+            crate::locale::ui_message(locale, crate::locale::UiMessage::NotFound),
+            text(
+                locale,
+                "install it from the app menu: Manage dsh Command...",
+                "请从应用菜单安装：Manage dsh Command...",
+                "アプリメニューからインストールしてください: Manage dsh Command..."
+            )
         ),
     }
     if let Some(problem) = &cli_env_problem {
-        out!("[rdsh] desktop command: DSH_DESKTOP_CLI points at a missing file: {problem}");
+        out!(
+            "[rdsh] {}: DSH_DESKTOP_CLI {}: {problem}",
+            crate::locale::ui_message(locale, crate::locale::UiMessage::DesktopCommand),
+            text(
+                locale,
+                "points at a missing file",
+                "指向不存在的文件",
+                "が存在しないファイルを指しています"
+            )
+        );
     }
     out!(
-        "[rdsh] desktop profile: {} ({})",
+        "[rdsh] {}: {} ({})",
+        crate::locale::ui_message(locale, crate::locale::UiMessage::DesktopProfile),
         profile_dir_label(&profile),
         if profile.initialized {
-            "initialized"
+            crate::locale::ui_message(locale, crate::locale::UiMessage::Initialized)
         } else {
-            "not initialized"
+            crate::locale::ui_message(locale, crate::locale::UiMessage::NotInitialized)
         }
     );
     if let Some(error) = &profile.error {
-        out!("[rdsh] desktop profile: unreadable: {error}");
+        out!(
+            "[rdsh] {}: {}: {error}",
+            crate::locale::ui_message(locale, crate::locale::UiMessage::DesktopProfile),
+            text(locale, "unreadable", "无法读取", "読み取れません")
+        );
     }
     for name in BUNDLED_PLUGINS {
         out!(
-            "[rdsh] desktop plugin {name}: {}",
-            plugin_state(&profile, name)
+            "[rdsh] {} {name}: {}",
+            crate::locale::ui_message(locale, crate::locale::UiMessage::DesktopPlugin),
+            plugin_state_text(&profile, name, locale)
         );
     }
     if let Some(lock) = &running {
-        out!(
-            "[rdsh] desktop: Electron looks like it is running ({}); quit it before plugin changes",
-            lock.display()
-        );
+        if locale == crate::locale::Locale::English {
+            out!("[rdsh] desktop: Electron looks like it is running ({}); quit it before plugin changes", lock.display());
+        } else {
+            out!(
+                "[rdsh] {}: {} ({})",
+                crate::locale::ui_message(locale, crate::locale::UiMessage::DesktopApp),
+                text(
+                    locale,
+                    "",
+                    "Electron 似乎正在运行；更改插件前请退出",
+                    "Electron が実行中のようです。プラグイン変更前に終了してください"
+                ),
+                lock.display()
+            );
+        }
     }
-    out!("[rdsh] desktop: attach plugins with `rdsh desktop install --plugins-dir <rustdsh checkout>`");
-    out!("[rdsh] desktop: the app's own Plugins page can install the same packages");
+    let desktop = text(locale, "desktop", "桌面", "デスクトップ");
+    out!(
+        "[rdsh] {desktop}: {}",
+        text(
+            locale,
+            "attach plugins with `rdsh desktop install --plugins-dir <rustdsh checkout>`",
+            "使用 `rdsh desktop install --plugins-dir <rustdsh checkout>` 添加插件",
+            "`rdsh desktop install --plugins-dir <rustdsh checkout>` でプラグインを追加します"
+        )
+    );
+    out!(
+        "[rdsh] {desktop}: {}",
+        text(
+            locale,
+            "the app's own Plugins page can install the same packages",
+            "应用的 Plugins 页面也可安装相同软件包",
+            "アプリの Plugins ページでも同じパッケージをインストールできます"
+        )
+    );
     Ok(())
 }
 
@@ -699,6 +811,9 @@ struct Target {
     spec: String,
 }
 
+// The Desktop install flags plus the selected locale; main's option set already
+// sat at the clippy limit before the multilingual parameter was added.
+#[allow(clippy::too_many_arguments)]
 fn desktop_targets(
     plugins_dir: Option<&str>,
     packages: &[String],
@@ -707,11 +822,12 @@ fn desktop_targets(
     no_sound: bool,
     no_gitview: bool,
     env: &OsEnv,
+    locale: crate::locale::Locale,
 ) -> Result<(Vec<Target>, Option<PathBuf>)> {
     let mut targets = Vec::new();
     let mut root = None;
     if !no_bundled {
-        let plugins_root = resolve_plugins_dir(plugins_dir, env)?;
+        let plugins_root = resolve_plugins_dir(plugins_dir, env, locale)?;
         for name in plugin_selection(compute) {
             let spec = plugins_root.join(name).display().to_string();
             // Windows separators become CLI spec separators. On Unix a
@@ -753,7 +869,10 @@ fn desktop_targets(
         });
     }
     if targets.is_empty() {
-        bail!("nothing to install: pass --package <spec> or drop --no-bundled");
+        bail!(
+            "{}",
+            crate::locale::ui_message(locale, crate::locale::UiMessage::DesktopNothingToInstall)
+        );
     }
     Ok((targets, root))
 }
@@ -774,7 +893,7 @@ pub struct InstallOptions {
 
 /// `rdsh desktop install` - forward `plugin --profile desktop add` to the
 /// Desktop-installed command runtime.
-pub fn cmd_install(options: InstallOptions) -> Result<()> {
+pub fn cmd_install(options: InstallOptions, locale: crate::locale::Locale) -> Result<()> {
     let InstallOptions {
         plugins_dir,
         packages,
@@ -789,17 +908,31 @@ pub fn cmd_install(options: InstallOptions) -> Result<()> {
     let profile_dir = env.profile_dir();
     let profile = read_profile(&profile_dir);
     if !profile.initialized {
-        bail!("{PROFILE_NOT_INITIALIZED}: {}", profile_dir.display());
+        bail!(
+            "{}: {}",
+            crate::locale::ui_message(
+                locale,
+                crate::locale::UiMessage::DesktopProfileNotInitialized
+            ),
+            profile_dir.display()
+        );
     }
     if let Some(problem) = env.desktop_cli.as_ref().filter(|path| !path.is_file()) {
         bail!(
-            "DSH_DESKTOP_CLI points at a missing file: {}",
+            "DSH_DESKTOP_CLI {}: {}",
+            text(
+                locale,
+                "points at a missing file",
+                "指向不存在的文件",
+                "が存在しないファイルを指しています"
+            ),
             problem.display()
         );
     }
     let Some(runtime) = find_command(&env) else {
         bail!(
-            "Desktop command runtime not found; open DeepSeek Harness once and use Manage dsh Command... -> Install, or set DSH_DESKTOP_CLI to resources/runtime/cli/bin/dsh (dsh.cmd on Windows). The app's own Plugins page can install the same packages without the command"
+            "{}",
+            text(locale, "Desktop command runtime not found; open DeepSeek Harness once and use Manage dsh Command... -> Install, or set DSH_DESKTOP_CLI to resources/runtime/cli/bin/dsh (dsh.cmd on Windows). The app's own Plugins page can install the same packages without the command", "未找到桌面命令运行时；请打开一次 DeepSeek Harness 并使用 Manage dsh Command... -> Install，或将 DSH_DESKTOP_CLI 设为 resources/runtime/cli/bin/dsh（Windows 为 dsh.cmd）。应用的 Plugins 页面也可安装相同软件包", "デスクトップコマンドランタイムが見つかりません。DeepSeek Harness を一度起動して Manage dsh Command... -> Install を実行するか、DSH_DESKTOP_CLI に resources/runtime/cli/bin/dsh（Windows は dsh.cmd）を設定してください。アプリの Plugins ページでも同じパッケージをインストールできます")
         );
     };
     let (targets, plugins_root) = desktop_targets(
@@ -810,20 +943,47 @@ pub fn cmd_install(options: InstallOptions) -> Result<()> {
         no_sound,
         no_gitview,
         &env,
+        locale,
     )?;
     let running = running_hint(&env);
 
     if !json_out {
-        out!("[rdsh] desktop command: {}", runtime.path.display());
-        out!("[rdsh] desktop profile: {}", profile_dir.display());
+        out!(
+            "[rdsh] {}: {}",
+            crate::locale::ui_message(locale, crate::locale::UiMessage::DesktopCommand),
+            runtime.path.display()
+        );
+        out!(
+            "[rdsh] {}: {}",
+            crate::locale::ui_message(locale, crate::locale::UiMessage::DesktopProfile),
+            profile_dir.display()
+        );
         if let Some(root) = &plugins_root {
-            out!("[rdsh] plugin sources: {}", root.display());
+            out!(
+                "[rdsh] {}: {}",
+                text(locale, "plugin sources", "插件来源", "プラグインソース"),
+                root.display()
+            );
         }
         if let Some(lock) = &running {
-            err!(
-                "[rdsh] warning: DeepSeek Harness looks like it is running ({}); quit it first",
-                lock.display()
-            );
+            if locale == crate::locale::Locale::English {
+                err!(
+                    "[rdsh] warning: DeepSeek Harness looks like it is running ({}); quit it first",
+                    lock.display()
+                );
+            } else {
+                err!(
+                    "[rdsh] {}: {} ({})",
+                    text(locale, "", "警告", "警告"),
+                    text(
+                        locale,
+                        "",
+                        "DeepSeek Harness 似乎正在运行；请先退出",
+                        "DeepSeek Harness が実行中のようです。先に終了してください"
+                    ),
+                    lock.display()
+                );
+            }
         }
     }
 
@@ -848,7 +1008,8 @@ pub fn cmd_install(options: InstallOptions) -> Result<()> {
                 }));
             } else {
                 out!(
-                    "[rdsh] dry-run: {} {}",
+                    "[rdsh] {}: {} {}",
+                    crate::locale::ui_message(locale, crate::locale::UiMessage::DryRun),
                     runtime.path.display(),
                     args.join(" ")
                 );
@@ -856,15 +1017,28 @@ pub fn cmd_install(options: InstallOptions) -> Result<()> {
             continue;
         }
         if !json_out {
-            out!("[rdsh] installing {name} into the desktop profile...");
+            out!(
+                "[rdsh] {} {name} {}",
+                text(locale, "installing", "正在安装", "インストール中"),
+                text(
+                    locale,
+                    "into the desktop profile...",
+                    "到桌面配置文件...",
+                    "をデスクトッププロファイルへ..."
+                )
+            );
         }
         let mut command = command_for(&runtime.path, &args);
         if let Some(root) = &plugins_root {
             command.current_dir(root);
         }
-        let output = command
-            .output()
-            .with_context(|| format!("failed to run {}", runtime.path.display()))?;
+        let output = command.output().with_context(|| {
+            format!(
+                "{} {}",
+                text(locale, "failed to run", "无法运行", "実行できませんでした"),
+                runtime.path.display()
+            )
+        })?;
         let ok = output.status.success();
         if !ok {
             failures.push(format!(
@@ -880,7 +1054,14 @@ pub fn cmd_install(options: InstallOptions) -> Result<()> {
                 "stderr_tail": tail(&String::from_utf8_lossy(&output.stderr), 8),
             }));
         } else {
-            out!("[rdsh] {} {name}", if ok { "installed" } else { "failed" });
+            out!(
+                "[rdsh] {} {name}",
+                if ok {
+                    crate::locale::ui_message(locale, crate::locale::UiMessage::Installed)
+                } else {
+                    crate::locale::ui_message(locale, crate::locale::UiMessage::Failed)
+                }
+            );
             let combined = format!(
                 "{}{}",
                 String::from_utf8_lossy(&output.stdout),
@@ -909,13 +1090,35 @@ pub fn cmd_install(options: InstallOptions) -> Result<()> {
             }))?
         );
     } else if !dry_run {
-        out!("[rdsh] next: quit and reopen DeepSeek Harness, then run `rdsh desktop verify`");
+        out!(
+            "[rdsh] {}: {}",
+            text(locale, "next", "下一步", "次の手順"),
+            text(
+                locale,
+                "quit and reopen DeepSeek Harness, then run `rdsh desktop verify`",
+                "退出并重新打开 DeepSeek Harness，然后运行 `rdsh desktop verify`",
+                "DeepSeek Harness を終了して再起動し、`rdsh desktop verify` を実行してください"
+            )
+        );
         if compute {
-            out!("[rdsh] note: the compute bridge stays off until `rdsh features on compute`");
+            out!(
+                "[rdsh] {}: {}",
+                text(locale, "note", "提示", "注"),
+                text(
+                    locale,
+                    "the compute bridge stays off until `rdsh features on compute`",
+                    "在运行 `rdsh features on compute` 前计算桥接保持关闭",
+                    "`rdsh features on compute` を実行するまで計算ブリッジはオフです"
+                )
+            );
         }
     }
     if !failures.is_empty() {
-        bail!("desktop plugin install failed: {}", failures.join(", "));
+        bail!(
+            "{}: {}",
+            crate::locale::ui_message(locale, crate::locale::UiMessage::DesktopInstallFailed),
+            failures.join(", ")
+        );
     }
     Ok(())
 }
@@ -926,7 +1129,7 @@ fn tail(text: &str, lines: usize) -> String {
 }
 
 /// `rdsh desktop verify` - exit nonzero when a required plugin is not enabled.
-pub fn cmd_verify(require: &[String], json_out: bool) -> Result<()> {
+pub fn cmd_verify(require: &[String], json_out: bool, locale: crate::locale::Locale) -> Result<()> {
     let env = OsEnv::from_process();
     let profile = read_profile(&env.profile_dir());
     let required: Vec<String> = if require.is_empty() {
@@ -954,21 +1157,31 @@ pub fn cmd_verify(require: &[String], json_out: bool) -> Result<()> {
     } else {
         if !profile.initialized {
             out!(
-                "[rdsh] desktop profile: {} (not initialized)",
-                profile_dir_label(&profile)
+                "[rdsh] {}: {} ({})",
+                crate::locale::ui_message(locale, crate::locale::UiMessage::DesktopProfile),
+                profile_dir_label(&profile),
+                crate::locale::ui_message(locale, crate::locale::UiMessage::NotInitialized)
             );
         }
         for name in BUNDLED_PLUGINS {
             out!(
-                "[rdsh] desktop plugin {name}: {}",
-                plugin_state(&profile, name)
+                "[rdsh] {} {name}: {}",
+                crate::locale::ui_message(locale, crate::locale::UiMessage::DesktopPlugin),
+                plugin_state_text(&profile, name, locale)
             );
         }
     }
     if !missing.is_empty() {
         bail!(
-            "desktop profile has no enabled rdsh plugin: {} (run `rdsh desktop install`)",
-            missing.join(", ")
+            "{}: {} ({})",
+            crate::locale::ui_message(locale, crate::locale::UiMessage::DesktopPluginMissing),
+            missing.join(", "),
+            text(
+                locale,
+                "run `rdsh desktop install`",
+                "运行 `rdsh desktop install`",
+                "`rdsh desktop install` を実行してください"
+            )
         );
     }
     Ok(())
@@ -1300,7 +1513,11 @@ mod tests {
         // rejected path is asserted here.
         let empty = root.join("empty");
         std::fs::create_dir_all(&empty).unwrap();
-        if let Ok(found) = resolve_plugins_dir(Some(empty.to_str().unwrap()), &env) {
+        if let Ok(found) = resolve_plugins_dir(
+            Some(empty.to_str().unwrap()),
+            &env,
+            crate::locale::Locale::English,
+        ) {
             assert_ne!(found, empty);
         }
         std::fs::write(
@@ -1309,11 +1526,21 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            resolve_plugins_dir(Some(checkout.to_str().unwrap()), &env).unwrap(),
+            resolve_plugins_dir(
+                Some(checkout.to_str().unwrap()),
+                &env,
+                crate::locale::Locale::English,
+            )
+            .unwrap(),
             plugins
         );
         assert_eq!(
-            resolve_plugins_dir(Some(plugins.to_str().unwrap()), &env).unwrap(),
+            resolve_plugins_dir(
+                Some(plugins.to_str().unwrap()),
+                &env,
+                crate::locale::Locale::English,
+            )
+            .unwrap(),
             plugins
         );
 
@@ -1321,7 +1548,10 @@ mod tests {
         // working directory.
         let mut with_env = base_env(&root);
         with_env.plugins_dir = Some(plugins.clone());
-        assert_eq!(resolve_plugins_dir(None, &with_env).unwrap(), plugins);
+        assert_eq!(
+            resolve_plugins_dir(None, &with_env, crate::locale::Locale::English).unwrap(),
+            plugins
+        );
         std::fs::remove_dir_all(&root).unwrap();
     }
 
@@ -1345,6 +1575,7 @@ mod tests {
             false,
             false,
             &env,
+            crate::locale::Locale::English,
         )
         .unwrap();
         assert_eq!(targets.len(), 3);
@@ -1365,6 +1596,7 @@ mod tests {
             true,
             true,
             &env,
+            crate::locale::Locale::English,
         )
         .unwrap();
         assert_eq!(targets.len(), 1);
@@ -1374,13 +1606,32 @@ mod tests {
             "@deepseek-ai/dsh-tool-present".to_string(),
             "github:owner/repo".to_string(),
         ];
-        let (targets, dir) =
-            desktop_targets(None, &packages, true, false, false, false, &env).unwrap();
+        let (targets, dir) = desktop_targets(
+            None,
+            &packages,
+            true,
+            false,
+            false,
+            false,
+            &env,
+            crate::locale::Locale::English,
+        )
+        .unwrap();
         assert_eq!(targets.len(), 2);
         assert_eq!(targets[0].label, "dsh-tool-present");
         assert_eq!(targets[1].label, "repo");
         assert!(dir.is_none());
-        assert!(desktop_targets(None, &[], true, false, false, false, &env).is_err());
+        assert!(desktop_targets(
+            None,
+            &[],
+            true,
+            false,
+            false,
+            false,
+            &env,
+            crate::locale::Locale::English,
+        )
+        .is_err());
         std::fs::remove_dir_all(&root).unwrap();
     }
 
