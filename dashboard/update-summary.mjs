@@ -1,3 +1,9 @@
+import {
+  decisionTargetId,
+  eventIdentifier,
+  eventTargetId,
+} from "./annotation-identifiers.mjs";
+
 const statusLabels = {
   todo: "未着手",
   doing: "進行中",
@@ -149,7 +155,7 @@ export function updateSummary(state, baseline) {
           .join(" · "),
         target: recordTarget(createdSource) || (question.answer === null
           ? `question-${question.id}`
-          : `answer-${question.id}`),
+          : decisionTargetId(question.id)),
         targetLabel: recordTarget(createdSource) ? "元記録を開く" : "質問を開く",
         sourceEventId: createdSource?.event_id,
       });
@@ -163,7 +169,7 @@ export function updateSummary(state, baseline) {
         detail: [question.id, shortText(question.question), recordDetail(answerSource)]
           .filter(Boolean)
           .join(" · "),
-        target: recordTarget(answerSource) || `answer-${question.id}`,
+        target: recordTarget(answerSource) || decisionTargetId(question.id),
         targetLabel: recordTarget(answerSource) ? "元記録を開く" : "回答を開く",
         sourceEventId: answerSource?.event_id,
       });
@@ -200,7 +206,7 @@ export function updateSummary(state, baseline) {
       at: event.created_at,
       title: `報告: ${shortText(event.title) || "無題"}`,
       detail,
-      target: `event-${event.sequence}`,
+      target: eventTargetId(eventIdentifier(event)),
       targetLabel: "報告を開く",
     });
   }
