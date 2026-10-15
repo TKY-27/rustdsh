@@ -21,6 +21,7 @@ import { AnswerApplicationServer } from "./answer-application-server.mjs";
 import { BudgetAdmissionServer } from "./budget-server.mjs";
 import { createHistoryBackup, backupMaximum } from "./history-backup.mjs";
 import { AcceptanceStore } from "./acceptance.mjs";
+import { modelRoutingViews } from "./model-routing-view.mjs";
 import { inspectTaskOutcomes } from "./task-outcomes-view.mjs";
 import { ObservedCliStore } from "./observed-cli.mjs";
 import {
@@ -632,6 +633,7 @@ export async function startDashboard(options) {
           route === "/instruction-queue-ui.mjs" ||
           route === "/cost-ledger-ui.mjs" ||
           route === "/budget-ui.mjs" ||
+          route === "/model-routing-ui.mjs" ||
           route === "/task-outcomes-ui.mjs" ||
           route === "/observed-cli-ui.mjs" ||
           route === "/favicon.ico" ||
@@ -735,6 +737,7 @@ export async function startDashboard(options) {
           "/instruction-queue-ui.mjs",
           "/cost-ledger-ui.mjs",
           "/budget-ui.mjs",
+          "/model-routing-ui.mjs",
           "/task-outcomes-ui.mjs",
           "/observed-cli-ui.mjs",
         ].includes(route)
@@ -781,6 +784,12 @@ export async function startDashboard(options) {
           await observedCli.unregister({ id: match[1] }),
         );
       }
+      if (
+        kind === "project" &&
+        req.method === "GET" &&
+        route === "/api/model-routing"
+      )
+        return json(res, 200, { runs: await modelRoutingViews(project) });
       if (
         kind === "project" &&
         req.method === "GET" &&
