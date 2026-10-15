@@ -66,3 +66,24 @@ test('only the deliberate offline and dropped-response network errors are expect
     text: 'Failed to load resource: net::ERR_INTERNET_DISCONNECTED',
   }), 'error');
 });
+
+test('model routing offline errors require the exact deliberate case, path and message', () => {
+  const offline = {
+    case_id: 'desktop.offline-retry',
+    path: '/api/model-routing',
+    text: 'Failed to load resource: net::ERR_INTERNET_DISCONNECTED',
+  };
+  assert.equal(classifyBrowserConsoleError(offline), 'expected');
+  assert.equal(
+    classifyBrowserConsoleError({ ...offline, path: '/api/plans' }),
+    'expected',
+    'the dashboard also refreshes the execution plan while the browser is offline',
+  );
+  for (const other of [
+    { ...offline, case_id: 'desktop.sse-draft' },
+    { ...offline, case_id: null },
+    { ...offline, path: '/api/cost-ledger' },
+    { ...offline, text: 'Failed to load resource: net::ERR_FAILED' },
+    { ...offline, text: 'TypeError: unexpected response' },
+  ]) assert.equal(classifyBrowserConsoleError(other), 'error');
+});

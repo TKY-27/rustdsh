@@ -111,7 +111,10 @@ export async function startHarness(port, frontPort, options = {}) {
   const ready = provider.waitUntilReady(child, {
     port,
     timeout: options.startupTimeout ?? 45_000,
-  });
+  }).then(
+    (url) => ({ url }),
+    (error) => ({ error }),
+  );
   // #49 run-stall diagnostics: timestamp the last Harness output without
   // altering provider readiness handling or consuming its stream.
   child.stdout.on("data", () => {
@@ -122,7 +125,11 @@ export async function startHarness(port, frontPort, options = {}) {
   });
   try {
     await owned.release();
-    const url = await ready;
+    // Readiness may fail before release settles. Preserve the release error
+    // precedence and cleanup order while handling the readiness rejection now.
+    const readyResult = await ready;
+    if ("error" in readyResult) throw readyResult.error;
+    const url = readyResult.url;
     await history.transition(run_id, "waiting-human", "cli_session_attached");
     return {
       child,

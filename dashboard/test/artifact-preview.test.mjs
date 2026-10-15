@@ -1,4 +1,4 @@
-import test from "node:test";
+import test, { mock } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -247,4 +247,47 @@ test("post-open verification rejects swapped and outside files", async (t) => {
     await openedFileMatches(handle, stat, rootReal, swap),
     false,
   );
+});
+
+test("a parent link swapped after resolution cannot preview an outside file", async (t) => {
+  const { temporary, project } = await fixture(t);
+  const outside = path.join(temporary, "outside");
+  await fs.mkdir(outside);
+  await fs.writeFile(path.join(outside, "report.log"), "outside preview fixture");
+  const parent = path.join(project.root, "reports");
+  await fs.mkdir(parent);
+  await fs.writeFile(path.join(parent, "report.log"), "inside preview fixture");
+  const approvedPath = await fs.realpath(path.join(parent, "report.log"));
+  const linkType = process.platform === "win32" ? "junction" : "dir";
+  const probeLink = path.join(project.root, "link-probe");
+  try {
+    await fs.symlink(outside, probeLink, linkType);
+  } catch (error) {
+    if (["EPERM", "EACCES", "ENOTSUP", "ENOSYS"].includes(error.code)) {
+      t.skip(`directory link creation unavailable: ${error.code}`);
+      return;
+    }
+    throw error;
+  }
+  await fs.unlink(probeLink);
+  const originalOpen = fs.open;
+  let swapped = false;
+  const openMock = mock.method(fs, "open", async (file, ...args) => {
+    if (file === approvedPath && !swapped) {
+      swapped = true;
+      await fs.rename(parent, path.join(project.root, "original-reports"));
+      await fs.symlink(outside, parent, linkType);
+    }
+    return originalOpen(file, ...args);
+  });
+  t.after(() => openMock.mock.restore());
+
+  const preview = await createArtifactPreview(
+    project,
+    [event("reports/report.log")],
+    1,
+  );
+  assert.equal(swapped, true);
+  assert.equal(preview.status, 404);
+  assert.doesNotMatch(JSON.stringify(preview), /outside preview fixture/);
 });
