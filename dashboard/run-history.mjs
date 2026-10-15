@@ -194,8 +194,10 @@ function validateData(type, data) {
         "root_identity",
         "root_pid",
       ]) &&
-        uuid(data.owner_id, "owner") &&
-        ["linux_cgroup_v2", "windows_job"].includes(data.kind) &&
+          uuid(data.owner_id, "owner") &&
+        ["linux_cgroup_v2", "linux_systemd_scope", "windows_job"].includes(
+          data.kind,
+        ) &&
         typeof data.kernel_id === "string" &&
         /^[a-z0-9_-]{1,80}$/.test(data.kernel_id) &&
         Number.isSafeInteger(data.root_pid) &&
@@ -559,6 +561,7 @@ export class RunHistory {
             "history_full",
           );
           const journal = await fs.open(this.file, "a", 0o600);
+          let closeFailure = null;
           try {
             let written = 0;
             while (written < bytes.length) {
@@ -569,8 +572,21 @@ export class RunHistory {
             await journal.sync();
             committed = true;
           } finally {
-            await journal.close();
+            try {
+              await journal.close();
+            } catch (error) {
+              // A close failure never replaces a write failure with itself.
+              closeFailure = error;
+            }
           }
+          // The bytes are durable once sync returns; a failing handle close
+          // must not report that committed append as a bare write failure.
+          if (closeFailure !== null)
+            throw new HistoryError("history_journal_close_unconfirmed", null, {
+              committed,
+              event_ids: committed ? [...committedEventIds] : [],
+              lock_cleanup_unconfirmed: false,
+            });
         }
         if (output?.rejected)
           throw new HistoryError("invalid_transition", output.rejected);

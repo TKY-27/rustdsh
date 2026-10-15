@@ -3,6 +3,9 @@
 [Worker scopes and worktrees](../docs/WORKER-WORKSPACES.md): local CLI allocation,
 source/worker conflict scans and retained checkouts after lease expiry or release.
 
+[External agent runners](../docs/AGENT-RUNNERS.md): detached cursor-agent and devin
+jobs with status, cancel, permission mapping and untrusted result handling.
+
 [Budget admission control](../docs/BUDGET-CONTROL.md): soft warnings, hard guarded
 DSH job/model-call limits, durable parallel reservations and delayed usage holds.
 Native guard registration is required; ordinary/unsupported CLIs are display-only.
@@ -48,7 +51,7 @@ before stopping the live owned Harness run.
 
 | Mode      | Purpose                                                    | Data source                                      |
 | --------- | ---------------------------------------------------------- | ------------------------------------------------ |
-| `project` | Project metrics, tasks, questions, human answers, progress | Six project-scoped MCP tools                     |
+| `project` | Project metrics, tasks, questions, human answers, progress | Eight project-scoped MCP tools                   |
 | `harness` | Launch and open the original DeepSeek Harness Web UI       | A separately managed `dsh --profile web` process |
 
 Both bind to loopback and can use **Tailscale Serve** for private HTTPS access.
@@ -62,6 +65,14 @@ Project 画面の QR 鍵はブラウザー専用です。画面は鍵を URL fra
 画面との互換性のため Cookie を使いますが、その鍵で MCP やダッシュボード終了 API は使えず、
 中継時には Harness 側へ渡しません。同じホスト上の別ポートにも Harness Cookie
 が届くため、そのホスト上で信頼できない Web サービスを開かないでください。
+
+プロジェクト画面では、Dashboard と同じ host・OS view から見える別terminalの
+CLI process をPIDで読取専用登録できます。表示するのはprocessの生存状態と、登録時の
+開始識別子・所有者が続いているかだけです。コマンドライン、環境変数、会話、ログは
+読みません。観測解除やDashboard再起動で外部processへsignalを送りません。登録情報は
+Dashboardのproject別状態ディレクトリにある `observed-cli.json` に保持し、所有者はOSの
+UID/SIDそのものではなくscope付きSHA-256 fingerprintで保存します。Dashboardを別hostやPID namespaceから起動した
+場合、同じPIDを同じprocessとは扱わず、識別できない状態にします。
 
 This optional Node.js component is separate from the Rust launcher's `rdsh serve`
 status page. It does not replace the original Harness agent loop.
@@ -116,6 +127,8 @@ policy; machine/user policy is not changed and enforced Group Policy still appli
 Opening a browser passes its authenticated URL to the Windows URL handler, as the
 existing `open` command does. Other processes with the same OS-user access can
 observe that short-lived command line; the tray helper itself receives no URL/key.
+PowerShell 7 is resolved from PATH and the URL handler from the Windows system
+directory; an executable placed in the project or working directory is never used.
 Re-run the installer after upgrading to refresh an older launcher.
 Installation uses the lockfile's native prebuilts without package lifecycle
 scripts and verifies that Koffi loads before writing the launchers. An unavailable
@@ -125,10 +138,15 @@ wrapper also preserves the Node executable selected at installation time.
 The checkout must stay in place: the installed launcher points to its `windows-launcher.mjs`.
 To run without installing a launcher, use `node dashboard/cli.mjs ...`.
 On Linux/macOS, install with `npm ci --prefix dashboard` and use the Node CLI.
-Project mode is portable. The current Harness launcher targets Windows + WSL;
-its distribution defaults to `FlashNext`, with `/root/.local/bin/rdsh-env` as the
-existing environment wrapper. Override those with `RDSH_WSL_DISTRO` and
-`RDSH_WSL_HARNESS_BIN` when your WSL installation uses different names/paths.
+Project mode is portable. Managed Harness startup is selected through
+`RDSH_HARNESS_PROVIDER`; `windows-wsl` is the default and the only verified
+provider. It preserves the `web` profile, loopback readiness, process-scope
+health observation, and verified owned-descendant stop. Its distribution defaults
+to `FlashNext`, with `/root/.local/bin/rdsh-env` as the environment wrapper;
+override those with `RDSH_WSL_DISTRO` and `RDSH_WSL_HARNESS_BIN` when needed.
+`linux-native`, `macos-native`, `remote`, unknown providers, and `windows-wsl` on
+other platforms fail with a specific reason and no silent fallback. Add a provider
+only after its launch, readiness, health, and scoped-stop contract is verified.
 It never stops an independently running Harness instance.
 
 Managed profile launches now use a per-run kernel ownership group. The Harness
@@ -136,6 +154,9 @@ entry page can stop that owned run and distinguishes requesting stop, verified
 empty descendants and unverifiable results. The administrator-only dashboard
 shutdown stays separate. Windows-to-WSL mode also needs the matching Linux native
 prebuilt in this checkout; see [scoped-stop setup and limits](../docs/SCOPED-STOP.md).
+When WSL runs the supervisor in systemd's un-delegated `init.scope`, it uses a
+unique transient systemd scope and confirms that exact unit and cgroup are empty
+before reporting stop success.
 
 Use `--port 38100` to choose a project port, `--harness-port 3081` for its Harness
 backend, or `--no-tailscale` for local access only. Conflicting ports fail startup.
@@ -172,16 +193,24 @@ configuration after a restart, because the bearer key rotates.
 `runtime.json` の `token` は管理用、`mcp_token` は MCP 用です。ブラウザー用の
 鍵は `browser_url` に含まれます。これらを別用途で使い回さないでください。
 
-| Tool                       | Effect                                       |
-| -------------------------- | -------------------------------------------- |
-| `dashboard_update_metrics` | Report measured cumulative snapshots         |
-| `dashboard_upsert_task`    | Create/update a task by ID                   |
-| `dashboard_ask_question`   | Ask a human a question with a unique ID      |
-| `dashboard_publish_event`  | Report progress or an artifact reference     |
-| `dashboard_get_feedback`   | Read durable answers after a sequence cursor |
-| `dashboard_get_state`      | Read this project's current state            |
+| Tool                       | Effect                                        |
+| -------------------------- | --------------------------------------------- |
+| `dashboard_update_metrics` | Report measured cumulative snapshots          |
+| `dashboard_upsert_task`    | Create/update a task by ID                    |
+| `dashboard_ask_question`   | Ask a human a question with a unique ID       |
+| `dashboard_publish_event`  | Report progress or an artifact reference      |
+| `dashboard_get_feedback`   | Read durable answers after a sequence cursor  |
+| `dashboard_get_state`      | Read this project's current state             |
+| `dashboard_create_handoff` | Save a source-linked snapshot for one task    |
+| `dashboard_get_handoff`    | Read the latest snapshot and source freshness |
 
 Example tool arguments:
+
+Optional [outcome cards and fixed milestone criteria](../docs/TASK-OUTCOMES.md)
+add purpose, ownership, latest outcome and next step to these tasks. Inspect
+existing acceptance evidence from each card; reported `done`, partial checks and
+operator reports never substitute for current full-check evidence. Task splits
+do not change a milestone's declared criterion list.
 
 ```json
 {
@@ -325,6 +354,11 @@ Reference strings and sources are displayed as text, never opened or executed.
 Artifact references are displayed as text. Local file contents are never opened
 or served. Treat all user-authored questions, answers, progress, and paths as data.
 
+The opt-in [local integration queue](../docs/INTEGRATION-QUEUE.md) applies fixed
+worker commits in order to a dedicated worktree and requires current full-check
+evidence before the next integration. Only explicit local CLI actions execute
+Git/checks; queue registration and dashboard/MCP reads grant no push authority.
+
 ## OpenAI ChatGPT Dots and MCP Events
 
 The project HTTP `/mcp` endpoint implements MCP 2.0 (`2026-07-28`) discovery and
@@ -396,9 +430,16 @@ On Windows, extract the client into `%LOCALAPPDATA%\rdsh\tunnel-client`, or set
 5. Verify a real question → human answer → signed webhook → Dot response, then
    stop monitoring and check that unsubscribe removes the subscription.
 
-Legacy MCP clients also have stdio/Streamable HTTP tools and
-`dashboard://state` / `dashboard://feedback` resource subscriptions. Those
-resource notifications are distinct from the native webhook Events integration.
+Project MCP clients expose `dashboard://state`, `dashboard://feedback`,
+`dashboard://handoff`, and `dashboard://acceptance` resources. Legacy and stdio
+clients also support resource subscriptions. The handoff is a human-readable
+snapshot, not a session resume; missing details stay unknown, arbitrary event
+artifact references are not opened, and test commands are not rerun. Registered
+acceptance evidence is inspected read-only for integrity metadata without
+copying file contents or private paths. Reads compare saved source fingerprints
+with current task, decision, artifact, and acceptance records. Resource
+notifications are distinct from the native webhook Events integration. See the
+[handoff packet contract](HANDOFF-PACKETS.md).
 See the [official Events contract](https://developers.openai.com/plugins/build/mcp-events).
 
 Use **接続診断** in the project dashboard or
@@ -407,6 +448,15 @@ Tunnel/MCP/callback stages separately. The
 [connection diagnostics contract](../docs/CONNECTION-DIAGNOSTICS.md) explains
 restart detection and stage-specific recovery. Local readiness and callback
 receipt leave actual Dot response and end-to-end status unconfirmed.
+
+The project dashboard's **最新push・CI・レビュー状態** panel is a separate,
+manual, read-only check. It compares the local HEAD and working tree with the
+configured upstream branch's current SHA, then compares that SHA with the PR
+head before showing required checks, review decision and each check's GitHub
+event (`push` or `pull_request`). It uses the installed GitHub CLI's existing
+authentication. A missing upstream/PR, changed SHA, dirty tree, pending check
+or unavailable response remains unconfirmed; it never pushes, edits protection
+rules or merges. The snapshot is timestamped and is not continuously refreshed.
 
 ## Selective history backup
 
@@ -418,6 +468,15 @@ subscriptions are never transported. See the
 [history backup contract](../docs/HISTORY-BACKUP.md) for selection, review and
 collision handling. `backup history` exposes imported records through the local
 control CLI; the existing state resource also includes `history_backups`.
+
+## Safe project-state migration
+
+`state-migrate inspect|dry-run|apply|rollback` handles the explicit schema 1 to
+2 transition. Stop the project dashboard before applying it. Dry-run preserves
+the source; apply creates a checksum-linked exact snapshot and atomically cuts
+over the state file. Rollback refuses to discard state written after migration.
+See the [state migration contract](../docs/STATE-MIGRATIONS.md) for recovery
+after interruption and stale-lock handling.
 
 ## Project-scoped pinned updates
 
