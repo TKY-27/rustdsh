@@ -124,7 +124,7 @@ async function capture(page, name) {
 }
 async function inspect(page, selector, expected) {
   const element = page.locator(selector);
-  await element.locator("button").click();
+  await element.locator(".outcome-checks button").click();
   await element
     .locator(".outcome-checks > p")
     .first()
@@ -344,7 +344,7 @@ try {
     await held;
     await route.fulfill({ response });
   });
-  await task.locator("button").click();
+  await task.locator(".outcome-checks button").click();
   await intercepted;
   await upsert({
     id: "goal",
@@ -357,7 +357,7 @@ try {
   release();
   await page.unrouteAll({ behavior: "wait" });
   assert.ok((await task.innerText()).includes("現在の検証結果は未取得です"));
-  assert.equal(await task.locator("button").isDisabled(), false);
+  assert.equal(await task.locator(".outcome-checks button").isDisabled(), false);
   manifest.flows.push(
     "late response from a previous state revision is ignored and recheck remains usable",
   );

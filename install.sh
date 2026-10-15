@@ -11,9 +11,21 @@ DOWNLOAD_TMPD=""
 # Downloads also run inside command substitutions, whose variable changes never
 # reach this shell, so the dirs are listed in a file the EXIT trap can read.
 DOWNLOAD_LIST=""
+SHADOW_TEMP=""
+SHADOW_RECEIPT_TEMP=""
+SHADOW_BACKUP_PENDING=0
+SHADOW_RECEIPT_PENDING=0
 # Update this version and the per-target hashes together from rustup's official archive.
 RUSTUP_INIT_VERSION="1.29.0"
 cleanup_downloads() {
+  if [ "$SHADOW_BACKUP_PENDING" = 1 ]; then
+    if [ ! -e "$PREFIX/dsh" ] && [ ! -L "$PREFIX/dsh" ]; then
+      mv -f "$PREFIX/dsh-orig" "$PREFIX/dsh" || echo "original dsh remains at $PREFIX/dsh-orig" >&2
+    fi
+  fi
+  if [ "$SHADOW_RECEIPT_PENDING" = 1 ]; then rm -f "$SHADOW_RECEIPT"; fi
+  if [ -n "$SHADOW_TEMP" ]; then rm -f "$SHADOW_TEMP"; fi
+  if [ -n "$SHADOW_RECEIPT_TEMP" ]; then rm -f "$SHADOW_RECEIPT_TEMP"; fi
   if [ -n "$DOWNLOAD_LIST" ] && [ -f "$DOWNLOAD_LIST" ]; then
     while IFS= read -r d; do
       [ -n "$d" ] && rm -rf "$d"
@@ -62,6 +74,7 @@ for a in "$@"; do
     *) echo "unknown arg: $a" >&2; exit 2 ;;
   esac
 done
+SHADOW_RECEIPT="$PREFIX/.rdsh-dsh-shadow"
 OS="$(uname -s 2>/dev/null || echo unknown)"
 ARCH="$(uname -m 2>/dev/null || echo unknown)"
 echo "rdsh installer: $OS/$ARCH"
@@ -70,15 +83,72 @@ if grep -qi microsoft /proc/version 2>/dev/null || [ -n "${WSL_DISTRO_NAME:-}${W
   echo "From Windows, this install is reachable via File Explorer; for a native"
   echo "Windows install (no WSL), run install.ps1 from PowerShell instead."
 fi
+sha256_file() {
+  local file="$1" out
+  if command -v sha256sum >/dev/null 2>&1; then
+    out="$(sha256sum "$file")" || return 1
+  elif command -v shasum >/dev/null 2>&1; then
+    out="$(shasum -a 256 "$file")" || return 1
+  else
+    echo "no sha256sum or shasum available" >&2
+    return 1
+  fi
+  printf '%s' "${out%% *}" | tr 'A-F' 'a-f'
+}
+shadow_matches_anchor() {
+  local installed_sha shadow_sha installed_version
+  [ -f "$PREFIX/rdsh" ] && [ -x "$PREFIX/rdsh" ] && [ ! -L "$PREFIX/rdsh" ] \
+    && [ -f "$PREFIX/dsh" ] && [ -x "$PREFIX/dsh" ] && [ ! -L "$PREFIX/dsh" ] || return 1
+  installed_sha="$(sha256_file "$PREFIX/rdsh")" || return 1
+  shadow_sha="$(sha256_file "$PREFIX/dsh")" || return 1
+  [ -n "$installed_sha" ] && [ "$installed_sha" = "$shadow_sha" ] || return 1
+  installed_version="$("$PREFIX/rdsh" --version 2>/dev/null)" || return 1
+  case "$installed_version" in rdsh*) return 0 ;; *) return 1 ;; esac
+}
+write_shadow_receipt() {
+  local shadow_sha backup_sha
+  shadow_sha="$(sha256_file "$1")" || return 1
+  backup_sha="$(sha256_file "$2")" || return 1
+  [[ "$shadow_sha" =~ ^[0-9a-f]{64}$ && "$backup_sha" =~ ^[0-9a-f]{64}$ ]] || return 1
+  SHADOW_RECEIPT_TEMP="$(mktemp "$PREFIX/.rdsh-shadow.new.XXXXXX")" || return 1
+  printf 'rdsh-shadow-v1 %s %s\n' "$shadow_sha" "$backup_sha" > "$SHADOW_RECEIPT_TEMP" || return 1
+  mv -f "$SHADOW_RECEIPT_TEMP" "$SHADOW_RECEIPT" || return 1
+  SHADOW_RECEIPT_TEMP=""
+}
+shadow_matches_receipt() {
+  local line extra receipt_size recorded_shadow recorded_backup shadow_sha backup_sha
+  [ -f "$SHADOW_RECEIPT" ] && [ ! -L "$SHADOW_RECEIPT" ] \
+    && [ -f "$PREFIX/dsh" ] && [ -x "$PREFIX/dsh" ] && [ ! -L "$PREFIX/dsh" ] \
+    && [ -f "$PREFIX/dsh-orig" ] || return 1
+  # Count a bounded raw snapshot before Bash read can discard any NUL bytes.
+  # The canonical ASCII record, including its final LF, is exactly 145 bytes.
+  SHADOW_RECEIPT_TEMP="$(mktemp "${TMPDIR:-/tmp}/rdsh-shadow-read.XXXXXX")" || return 1
+  head -c 161 "$SHADOW_RECEIPT" > "$SHADOW_RECEIPT_TEMP" || return 1
+  receipt_size="$(wc -c < "$SHADOW_RECEIPT_TEMP")" || return 1
+  [ "$receipt_size" -eq 145 ] || return 1
+  {
+    LC_ALL=C IFS= read -r -n 160 line || return 1
+    if LC_ALL=C IFS= read -r -n 1 extra; then return 1; fi
+  } < "$SHADOW_RECEIPT_TEMP"
+  [[ "$line" =~ ^rdsh-shadow-v1\ ([0-9a-f]{64})\ ([0-9a-f]{64})$ ]] || return 1
+  recorded_shadow="${BASH_REMATCH[1]}"
+  recorded_backup="${BASH_REMATCH[2]}"
+  shadow_sha="$(sha256_file "$PREFIX/dsh")" || return 1
+  backup_sha="$(sha256_file "$PREFIX/dsh-orig")" || return 1
+  [ "$shadow_sha" = "$recorded_shadow" ] && [ "$backup_sha" = "$recorded_backup" ]
+}
 if [ "$MODE" = restore ]; then
-  if [ ! -e "$PREFIX/dsh-orig" ]; then echo "no backup at $PREFIX/dsh-orig" >&2; exit 1; fi
-  # Identify rdsh by its version banner, not by a grep over help text that a
-  # foreign binary could mimic.
-  case "$("$PREFIX/dsh" --version 2>/dev/null)" in
-    rdsh*) mv -f "$PREFIX/dsh-orig" "$PREFIX/dsh"
-      echo "restored original dsh (rdsh still at $PREFIX/rdsh)" ;;
-    *) echo "refusing: $PREFIX/dsh does not look like rdsh" >&2; exit 1 ;;
-  esac
+  if [ ! -f "$PREFIX/dsh-orig" ]; then echo "no backup at $PREFIX/dsh-orig" >&2; exit 1; fi
+  # A receipt binds the owned shadow and its original backup independently of
+  # later standalone rdsh updates. Invalid receipts never use the legacy fallback.
+  if [ -e "$SHADOW_RECEIPT" ] || [ -L "$SHADOW_RECEIPT" ]; then
+    shadow_matches_receipt || { echo "refusing: dsh shadow receipt does not match" >&2; exit 1; }
+  else
+    shadow_matches_anchor || { echo "refusing: $PREFIX/dsh does not match the installed rdsh" >&2; exit 1; }
+  fi
+  mv -f "$PREFIX/dsh-orig" "$PREFIX/dsh"
+  rm -f "$SHADOW_RECEIPT"
+  echo "restored original dsh (rdsh still at $PREFIX/rdsh)"
   exit 0
 fi
 glibc_version() {
@@ -176,19 +246,6 @@ rustup_init_sha256() {
     aarch64-apple-darwin) printf '%s' "aeb4105778ca1bd3c6b0e75768f581c656633cd51368fa61289b6a71696ac7e1" ;;
     *) return 1 ;;
   esac
-}
-
-sha256_file() {
-  local file="$1" out
-  if command -v sha256sum >/dev/null 2>&1; then
-    out="$(sha256sum "$file")"
-  elif command -v shasum >/dev/null 2>&1; then
-    out="$(shasum -a 256 "$file")"
-  else
-    echo "no sha256sum or shasum available" >&2
-    return 1
-  fi
-  printf '%s' "${out%% *}" | tr 'A-F' 'a-f'
 }
 
 verify_pinned_sha256() {
@@ -470,29 +527,47 @@ else
   cargo build --release
 fi
 mkdir -p "$PREFIX" "$HOME/.config/rdsh"
+# Preserve a provable legacy shadow before replacing its only native anchor.
+# Unknown or already stale ownership does not block a standalone rdsh update.
+if [ ! -e "$SHADOW_RECEIPT" ] && [ ! -L "$SHADOW_RECEIPT" ] \
+  && [ -f "$PREFIX/dsh-orig" ] && shadow_matches_anchor; then
+  write_shadow_receipt "$PREFIX/dsh" "$PREFIX/dsh-orig" || exit 1
+fi
+shadow_already_rdsh=0
+if [ "$MODE" = as-dsh ] && shadow_matches_anchor; then shadow_already_rdsh=1; fi
 install -m755 "$BIN_SRC" "$PREFIX/rdsh"
 echo "installed $PREFIX/rdsh"
 if [ "$MODE" = as-dsh ]; then
-  if [ -e "$PREFIX/dsh-orig" ]; then echo "backup exists: $PREFIX/dsh-orig (use --restore first)" >&2; exit 1; fi
-  if [ -e "$PREFIX/dsh" ]; then
-    case "$("$PREFIX/dsh" --version 2>/dev/null)" in
-      rdsh*) echo "PREFIX/dsh is already rdsh; refreshing" ;;
-      *)
-        mv "$PREFIX/dsh" "$PREFIX/dsh-orig"
-        echo "$PREFIX/dsh-orig" > "$HOME/.config/rdsh/origin"
-        echo "backed up original dsh -> $PREFIX/dsh-orig" ;;
-    esac
+  if [ -e "$PREFIX/dsh-orig" ] || [ -L "$PREFIX/dsh-orig" ]; then echo "backup exists: $PREFIX/dsh-orig (use --restore first)" >&2; exit 1; fi
+  if [ -e "$SHADOW_RECEIPT" ] || [ -L "$SHADOW_RECEIPT" ]; then echo "shadow receipt exists: $SHADOW_RECEIPT (use --restore first)" >&2; exit 1; fi
+  SHADOW_TEMP="$(mktemp "$PREFIX/.dsh.new.XXXXXX")"
+  install -m755 "$PREFIX/rdsh" "$SHADOW_TEMP"
+  if [ "$shadow_already_rdsh" = 1 ]; then
+    echo "PREFIX/dsh is already rdsh; refreshing"
+  elif [ -e "$PREFIX/dsh" ] || [ -L "$PREFIX/dsh" ]; then
+    mv "$PREFIX/dsh" "$PREFIX/dsh-orig"
+    SHADOW_BACKUP_PENDING=1
+    write_shadow_receipt "$SHADOW_TEMP" "$PREFIX/dsh-orig" || exit 1
+    SHADOW_RECEIPT_PENDING=1
+    echo "backed up original dsh -> $PREFIX/dsh-orig"
   else
     echo "no existing dsh in PREFIX; PATH lookup only"
   fi
-  tmp="$PREFIX/.dsh.new.$$"
-  install -m755 "$PREFIX/rdsh" "$tmp" && mv -f "$tmp" "$PREFIX/dsh"
+  mv -f "$SHADOW_TEMP" "$PREFIX/dsh"
+  SHADOW_TEMP=""
+  SHADOW_BACKUP_PENDING=0
+  SHADOW_RECEIPT_PENDING=0
+  if [ -e "$PREFIX/dsh-orig" ]; then printf '%s\n' "$PREFIX/dsh-orig" > "$HOME/.config/rdsh/origin"; fi
   echo "installed rdsh as $PREFIX/dsh (atomic replace; revert: ./install.sh --restore)"
   # Bounded scan: regular files directly under PREFIX only (no recursion,
   # no binaries), matching the Rust doctor's own offender listing.
   # -I: バイナリは走査しない。rdsh/dsh 自身が "node" と "dsh" の両方を含むため、
   # テキストのラッパーが1つも無くても常に一致して誤検知になる。
-  node_wrappers="$(find "$PREFIX" -maxdepth 1 -type f -size -65536c -exec grep -Il "node" {} + 2>/dev/null)"
+  node_wrappers="$(find "$PREFIX" -maxdepth 1 -type f -size -65536c -exec sh -c '
+    grep -Il "node" "$@"
+    status=$?
+    [ "$status" -eq 0 ] || [ "$status" -eq 1 ]
+  ' sh {} + 2>/dev/null)"
   if [ -n "$node_wrappers" ] && printf '%s\n' "$node_wrappers" | tr '\n' '\0' | xargs -0 grep -Il "dsh" 2>/dev/null | grep -q .; then
     echo "note: wrappers calling 'node ...dsh...' break while dsh is shadowed (native binary, not JS)."
     echo "note: exec dsh/rdsh directly instead of via node; 'rdsh doctor' lists the offenders."

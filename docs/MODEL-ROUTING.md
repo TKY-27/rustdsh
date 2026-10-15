@@ -198,3 +198,62 @@ provider internals, child role executions, concurrent independent clients or an
 operator rewriting all private state. An unguarded original client remains outside
 this run contract. See [native request and browser evidence](evidence/model-dispatch/README.md)
 and the earlier [configuration-only evidence](evidence/model-routing.md).
+
+## Models the harness catalog does not carry yet
+
+DeepSeek Harness answers a catalog provider from the model catalog bundled in
+its `@earendil-works/pi-ai` dependency. That file is generated when the package
+is published, so anything a provider changes afterwards is invisible: Codex's
+`gpt-6.1-sol` was missing from the harness entirely, and Kimi Code's stable
+`kimi-for-coding` id had been upgraded in place to "K2.8 Preview" while the
+harness — and even pi-ai 1.2.0 — still carried the old name. A profile that
+lists `models:` for the route also *replaces* the bundled catalog, so whatever
+the provider says has to be named there explicitly.
+
+`rdsh models` reads the provider's own catalog and folds it into the profile:
+
+| provider | source |
+| --- | --- |
+| `openai-codex` | `codex debug models`, falling back to `$CODEX_HOME/models_cache.json` (`CODEX_HOME` defaults to `~/.codex`) |
+| `kimi-coding` | `GET {baseURL}/v1/models`, authenticated with the profile's `apiKeyEnv` credential |
+
+```sh
+rdsh models                              # read-only: what each profile is missing or names stale
+rdsh models --provider kimi-coding       # one provider only
+rdsh models sync                         # apply
+rdsh models sync --profile web --dry-run # preview one profile
+rdsh models --json                       # same report for a sidecar
+```
+
+The sync adds the ids a profile does not carry yet, and refreshes an existing
+entry's `name:` when the provider's current display name is not already part of
+it — "Kimi K3" keeps its own wording for the listing's "K3", while the
+placeholder `kimi-for-coding` becomes "K2.8 Preview". Nothing is deleted, an
+up-to-date profile is not rewritten, and a profile whose structure the command
+does not recognize (no `llm-pi-ai` entry, multiple matching entries, no provider
+block, or an inline `provider: {}`) is refused with the YAML it needs instead of
+being rewritten.
+Uninterpreted patch entries (including flow mappings, aliases, anchors, tags,
+and multiline identifiers) are reported as skipped before catalog access.
+Expand those entries to a readable `- id: llm-pi-ai` block form before syncing.
+Each profile is replaced atomically under the same lock protocol DSH uses, so a
+live config edit and this sync cannot interleave. The harness picks the new
+entries up on the next config reload or restart.
+
+A live listing is fetched with `curl`, described by a config file on stdin so
+the API key never appears in the process list, and pinned to HTTPS so a redirect
+cannot downgrade it. The Codex source never refreshes a name: the CLI's
+hyphenated style would overwrite the profile's own wording.
+
+Each appended entry carries the context window, the input modalities and the
+reasoning levels the provider advertises. `off` is deliberately left undeclared:
+the harness reads a declared `off: null` as "omit the level from pi-ai's
+`thinkingLevelMap`", and pi-ai then sends `reasoning.effort: "none"` for a model
+whose map has no `off` key, which the Codex backend rejects (`'none' is not
+supported with the 'gpt-6.1-sol' model`). Leaving `off` undeclared pins it to
+`null`, which is what pi-ai's own catalog entry does and what keeps a request
+free of a `reasoning` block when no effort is chosen.
+
+This command changes only the profile's own `models:` list; it does not upgrade
+the harness dependency, and it does not attest that the backend still serves an
+id the provider advertises.

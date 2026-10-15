@@ -382,6 +382,8 @@ expect_rc 0 "full list" sh scripts/check.sh full --list
 has "cargo clippy --release --all-targets -D warnings" "full release clippy"
 has "tests/regress.sh" "full list"
 has "release policy unittest" "full list"
+has "branch cleanup unittest" "full list"
+has "parallel dev unittest" "full list"
 exe=""
 case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) exe=.exe ;; esac
 release_bin="$(git -C "$root" rev-parse --show-toplevel)/target/release/rdsh$exe"

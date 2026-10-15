@@ -72,6 +72,7 @@ mod local_http;
 mod locale;
 #[cfg(test)]
 mod locale_test;
+mod models;
 mod opencode_header;
 mod passthrough;
 mod providers;
@@ -98,7 +99,7 @@ mod worker_scopes;
     name = "rdsh",
     version,
     about = "Rust fast launcher for dsh (safe: native fast-paths + passthrough)",
-    after_help = "USAGE:\n  rdsh [profile] [--profile <name>] [--patch <yml>...] [app-args...]\n  rdsh <native-subcommand> ...   (tokens|prune|search|search-web|compact|doctor|bench|serve|sessions|profiles|skills|logs|guard|compute|desktop|auth|setup|context|deps|settings|features|subagents|provider|task-outcomes|budget-admission|cost-ledger|question-contracts|answer-applications|instruction-queue|update|worker-scope|dump-config|boot|serial-proxy)\n\nEXAMPLES:\n  rdsh tui                        boot tui profile (slim env ON, delegates to dsh)\n  rdsh --profile web --patch x.yml boot web with overlay\n  rdsh dump-config --profile tui  delegate exact dump to dsh\n  rdsh tokens ./AGENTS.md         estimate input tokens natively\n  rdsh auth --import --provider openai-codex   import only the selected provider\n  rdsh setup                      first-run connect: import, login flow, next steps\n  rdsh provider add hai --model deepseek-v4-flash   register HAI as a dsh route\n  rdsh provider add sarashina    register Sarashina (SARASHINA_API_KEY; mini and nano built in)\n  rdsh provider add local-openai --base-url http://host:8080/v1 --discover --no-key\n  rdsh provider list              presets and per-profile route/key status\n  rdsh search hello --dir .       fast file search without Node\n  rdsh search-web \"rust async\"      web search via SearXNG (no API key)\n  rdsh desktop status             detect the Desktop (Electron) app and its reserved profile\n  rdsh desktop install            attach the bundled rdsh plugins to that profile\n  rdsh --passthrough tui          no slim env; only rdsh_inspect stays isolated\n  rdsh --dry-run tui -- --resume abc   show what would exec"
+    after_help = "USAGE:\n  rdsh [profile] [--profile <name>] [--patch <yml>...] [app-args...]\n  rdsh <native-subcommand> ...   (tokens|prune|search|search-web|compact|doctor|bench|serve|sessions|profiles|skills|logs|guard|compute|desktop|auth|setup|context|deps|settings|features|subagents|provider|task-outcomes|budget-admission|cost-ledger|models|question-contracts|answer-applications|instruction-queue|update|worker-scope|dump-config|boot|serial-proxy)\n\nEXAMPLES:\n  rdsh tui                        boot tui profile (slim env ON, delegates to dsh)\n  rdsh --profile web --patch x.yml boot web with overlay\n  rdsh dump-config --profile tui  delegate exact dump to dsh\n  rdsh tokens ./AGENTS.md         estimate input tokens natively\n  rdsh auth --import --provider openai-codex   import only the selected provider\n  rdsh setup                      first-run connect: import, login flow, next steps\n  rdsh provider add hai --model deepseek-v4-flash   register HAI as a dsh route\n  rdsh provider add sarashina    register Sarashina (SARASHINA_API_KEY; mini and nano built in)\n  rdsh provider add local-openai --base-url http://host:8080/v1 --discover --no-key\n  rdsh provider list              presets and per-profile route/key status\n  rdsh search hello --dir .       fast file search without Node\n  rdsh search-web \"rust async\"      web search via SearXNG (no API key)\n  rdsh models                     list the models a profile is missing or names stale\n  rdsh models sync                add them and refresh stale names\n  rdsh desktop status             detect the Desktop (Electron) app and its reserved profile\n  rdsh desktop install            attach the bundled rdsh plugins to that profile\n  rdsh --passthrough tui          no slim env; only rdsh_inspect stays isolated\n  rdsh --dry-run tui -- --resume abc   show what would exec"
 )]
 struct Cli {
     /// Explicitly share a project file with isolated model tools (repeatable).
@@ -461,6 +462,36 @@ enum Commands {
         #[arg(long = "json")]
         json: bool,
     },
+    /// Keep a CLI-backed provider's model list in step with the local CLI
+    /// catalog (Codex today), so a model released after the harness was built
+    /// still reaches the model picker
+    Models {
+        #[command(subcommand)]
+        action: Option<ModelsAction>,
+        /// Restrict to one provider (default: every source this build reads)
+        #[arg(long = "provider")]
+        provider: Option<String>,
+        /// Machine-readable output
+        #[arg(long = "json")]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum ModelsAction {
+    /// Append the models the local CLI advertises that the profile lacks
+    Sync {
+        #[arg(long = "profile")]
+        profile: Option<String>,
+        /// Restrict to one provider (default: every source this build reads)
+        #[arg(long = "provider")]
+        provider: Option<String>,
+        /// Print what would change without writing the profile
+        #[arg(long = "dry-run")]
+        dry_run: bool,
+        #[arg(long = "json")]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -779,6 +810,7 @@ const NATIVE_FIRST: &[&str] = &[
     "settings",
     "features",
     "cost-ledger",
+    "models",
     "update",
     "serial-proxy",
     "worker-git",
@@ -1417,6 +1449,24 @@ fn main() {
                 } => deps::cmd_impact(target, depth.unwrap_or(3).clamp(1, 8), json),
             }
         }
+        Some(Commands::Models {
+            action,
+            provider,
+            json,
+        }) => match action {
+            None => models::cmd_models_show(cli.profile.as_deref(), provider.as_deref(), json),
+            Some(ModelsAction::Sync {
+                profile,
+                provider: sync_provider,
+                dry_run,
+                json: sync_json,
+            }) => models::cmd_models_sync(
+                profile.or(cli.profile).as_deref(),
+                sync_provider.or(provider).as_deref(),
+                dry_run || dry,
+                sync_json || json,
+            ),
+        },
         Some(Commands::Auth(args)) => auth::cmd_auth(args, dry, locale),
         Some(Commands::Provider { action }) => match action {
             ProviderAction::List { json } => providers::cmd_list(json, locale),
@@ -2057,17 +2107,31 @@ fn localized_command_about(name: &str, locale: locale::Locale) -> Option<&'stati
             "DeepSeek Harness Desktop 集成",
             "DeepSeek Harness Desktop連携",
         ),
-        "deps" => ("静态代码依赖图（rdsh deps）", "静的なコード依存グラフ（rdsh deps）"),
-        "worker-git" => ("在受限工作区中运行的 git 工作进程", "制限された作業ツリーで実行する git ワーカー"),
+        "deps" => (
+            "静态代码依赖图（rdsh deps）",
+            "静的なコード依存グラフ（rdsh deps）",
+        ),
+        "worker-git" => (
+            "在受限工作区中运行的 git 工作进程",
+            "制限された作業ツリーで実行する git ワーカー",
+        ),
         "inject" => ("向 hook 注入上下文", "フックにコンテキストを注入"),
         "remember" => ("记住一条上下文条目", "コンテキスト項目を記憶"),
         "memory" => ("管理记忆的上下文条目", "記憶したコンテキスト項目を管理"),
         "distill" => ("从会话提炼上下文", "セッションからコンテキストを抽出"),
         "forget" => ("删除记忆的上下文条目", "記憶したコンテキスト項目を削除"),
-        "hook" => ("安装、确认或移除 context hook", "contextフックの導入・確認・削除"),
+        "hook" => (
+            "安装、确认或移除 context hook",
+            "contextフックの導入・確認・削除",
+        ),
         "remove" => ("移除 hook/plugin 条目", "フック/プラグイン項目を削除"),
         "query" => ("查询依赖图中的符号", "依存グラフのシンボルを照会"),
         "impact" => ("显示受影响的文件", "影響を受けるファイルを表示"),
+        "models" => ("查看与同步模型目录", "モデルカタログの表示と同期"),
+        "sync" => (
+            "同步配置文件中的模型目录",
+            "プロファイルのモデルカタログを同期",
+        ),
         "prune" => ("将文本裁剪到令牌预算", "テキストをトークン予算まで切り詰め"),
         "compact" => ("压缩文本文件", "テキストファイルを圧縮"),
         "doctor" => ("显示诊断摘要", "診断サマリーを表示"),
@@ -2109,7 +2173,10 @@ fn localized_after_help(name: &str, locale: locale::Locale) -> Option<&'static s
 fn localized_arg_help(id: &str, locale: locale::Locale) -> Option<&'static str> {
     let (chinese, japanese) = match id {
         "sessions" => ("保留最近的会话数", "保持する最近のセッション数"),
-        "require_stable" => ("git 状态或读取的文件变化时以退出码 3 结束", "git状態や読み込み済みファイルが変化したら終了コード3で終了"),
+        "require_stable" => (
+            "git 状态或读取的文件变化时以退出码 3 结束",
+            "git状態や読み込み済みファイルが変化したら終了コード3で終了",
+        ),
         "event" => ("hook 事件名称", "フックイベント名"),
         "text" => ("要记忆的文本", "記憶するテキスト"),
         "kind" => ("条目类型", "項目の種類"),

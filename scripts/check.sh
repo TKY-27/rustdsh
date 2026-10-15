@@ -247,6 +247,11 @@ fi
 if [ "$release" = 1 ]; then
   step "release policy unittest" python3 -m unittest discover -s tests -p 'test_release_*.py'
   step "icon generation unittest" python3 -m unittest discover -s tests -p 'test_icon_generation.py'
+  # CI の release-policy / rust-tests ジョブと同じく、この2つも実行する。
+  # 実行しないと tests/test_*.py を「release でカバー済み」と分類しながら
+  # 実際には一度も走らない（check.sh の never-silently-verified 方針に反する）。
+  step "branch cleanup unittest" python3 -m unittest discover -s tests -p 'test_branch_cleanup.py'
+  step "parallel dev unittest" python3 -m unittest discover -s tests -p 'test_parallel_dev.py'
   version=$(sed -n 's/^version *= *"\([^"]*\)".*/\1/p' Cargo.toml | head -n 1)
   step "prepare-release.py v$version" python3 scripts/prepare-release.py "v$version"
 fi

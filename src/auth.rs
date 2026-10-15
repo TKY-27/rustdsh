@@ -1486,6 +1486,15 @@ pub fn cmd_auth(args: AuthArgs, dry: bool, locale: crate::locale::Locale) -> any
             )
         );
     }
+    // A Codex grant only reaches the picker for models the profile lists: the
+    // harness serves a catalog generated when it was published, so a model the
+    // CLI already offers can still be missing from the profile's own list.
+    if grants
+        .iter()
+        .any(|g| g.provider == crate::models::CODEX_PROVIDER)
+    {
+        println!("{}", localized_format!(locale, "[rdsh auth] hint: `rdsh models` lists Codex models a profile has not listed yet; `rdsh models sync` adds them", "[rdsh auth] 提示：`rdsh models` 会列出配置文件尚未列出的 Codex 模型；`rdsh models sync` 可以添加它们", "[rdsh auth] ヒント: `rdsh models` はプロファイルが未登録のCodexモデルを一覧します。`rdsh models sync` で追加できます"));
+    }
     println!(
         "{}",
         localized_format!(

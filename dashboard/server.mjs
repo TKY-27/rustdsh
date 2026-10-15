@@ -705,7 +705,7 @@ export async function startDashboard(options) {
       const committed = await store.recordHandoff();
       packet.snapshot_revision = committed.revision;
       await writeJson(path.join(project.directory, "handoff.json"), packet);
-      for (const response of live)
+      for (const response of live.keys())
         response.write(`event: changed\ndata: ${store.value.revision}\n\n`);
       for (const { mcp } of sessions.values()) void mcp.notify();
       void eventsHub.flush().catch(() => {});
@@ -730,7 +730,7 @@ export async function startDashboard(options) {
         state: store.value,
         workerInspection,
       });
-      for (const response of live)
+      for (const response of live.keys())
         response.write(`event: changed\ndata: ${store.value.revision}\n\n`);
       for (const { mcp } of sessions.values()) void mcp.notify();
       const evidence = await reviewEvidence.list({
@@ -788,7 +788,7 @@ export async function startDashboard(options) {
   async function mutateUiSurface(input) {
     const task = updateQueue.then(async () => {
       const result = await store.mutateUiSurface(input);
-      for (const response of live)
+      for (const response of live.keys())
         response.write("event: changed\ndata: " + store.value.revision + "\n\n");
       for (const { mcp } of sessions.values()) void mcp.notify();
       return result;
@@ -799,7 +799,7 @@ export async function startDashboard(options) {
   async function mutateUiAction(input) {
     const task = updateQueue.then(async () => {
       const result = await store.mutateUiAction(input);
-      for (const response of live)
+      for (const response of live.keys())
         response.write("event: changed\ndata: " + store.value.revision + "\n\n");
       for (const { mcp } of sessions.values()) void mcp.notify();
       void eventsHub.flush().catch(() => {});

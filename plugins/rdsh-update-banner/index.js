@@ -173,9 +173,14 @@ async function runSync(syncScript) {
         [syncScript],
         { timeout: RUN_TIMEOUT_MS, maxBuffer: 256 * 1024 },
         (err, stdout, stderr) => {
-          const tail = String(stdout || "").split("\n").slice(-6).join("\n");
-          if (err) resolve({ ok: false, message: "update failed: " + tail });
-          else resolve({ ok: true, message: tail || "update finished" });
+          const tail = (chunk) => String(chunk || "").split("\n").slice(-6).join("\n").trim();
+          if (err) {
+            // The reason can be written to stderr only; keep both so it is not lost.
+            const reason = [tail(stdout), tail(stderr)].filter((part) => part !== "").join("\n");
+            resolve({ ok: false, message: "update failed: " + reason });
+            return;
+          }
+          resolve({ ok: true, message: tail(stdout) || "update finished" });
         },
       );
     } catch (e) {
