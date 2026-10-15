@@ -16,13 +16,14 @@ import { feedbackValidity } from "./question-contracts.mjs";
 import { costScopeSchema, costReportSchema } from "./cost-ledger.mjs";
 import { outcomeSchema, milestoneSchema } from "./task-outcomes.mjs";
 
-// Bucket E (MCP) diagnostics — Issues #76-#79:
-// Exposure control (#76), remote OAuth (#77), single-screen server
-// diagnostics (#78), and binary resource handling (#79) live in the outer
-// MCP layers, not in this dashboard server. Changes here stay limited to
-// diagnostic wording and comments so callers can tell which name/URI failed,
-// what exists, and what to do next. Security-sensitive execution stays behind
-// the separate approval and sandbox adapters below.
+// Bucket E (MCP) diagnostics — Issues #63 and #76-#79:
+// The source-linked handoff contract (#63) shares project-scoped state,
+// feedback, and acceptance resources. Exposure control (#76), remote OAuth
+// (#77), single-screen server diagnostics (#78), and binary resource handling
+// (#79) live in the outer MCP layers, not in this dashboard server. Changes
+// here stay limited to diagnostic wording and comments so callers can tell
+// which name/URI failed, what exists, and what to do next. Security-sensitive
+// execution stays behind the separate approval and sandbox adapters below.
 
 const string = { type: "string", minLength: 1, maxLength: 8000 };
 const object = (properties, required = []) => ({
@@ -220,6 +221,20 @@ export const tools = [
     description: "Atomically consume the approved attempt before executing its exact operation in the probed OS sandbox. Review permits only file.read; implementation rights remain bounded by the contract roots, origin, and exact executable arguments. Output is returned to this call, but sensitive body, query, and stdout/stderr contents are not stored in the approval ledger. Direct DSH tools and unsupported platforms remain denied.",
     inputSchema: approvalUseSchema,
   },
+  {
+    name: "dashboard_create_handoff",
+    description:
+      "Create a durable, source-linked snapshot for one task. It reports purpose, remaining work, constraints, decisions, artifact references, verification, and next step. Unknown information stays unknown; arbitrary event artifact paths are not opened and tests are not rerun. Registered acceptance evidence is inspected read-only for integrity metadata, without copying file contents or private paths. Later reads identify changed or missing source references.",
+    inputSchema: object({ task_id: { type: "string", minLength: 1, maxLength: 160 } }, [
+      "task_id",
+    ]),
+  },
+  {
+    name: "dashboard_get_handoff",
+    description:
+      "Read the latest durable handoff packet and compare its source references with current task, decision, artifact, and acceptance state.",
+    inputSchema: object({}),
+  },
 ];
 const routes = {
   dashboard_update_metrics: "metrics",
@@ -252,6 +267,9 @@ export async function executeTool(api, name, args = {}) {
   if (name === "dashboard_check_approval") return await api.checkApproval(args);
   if (name === "dashboard_claim_approval") return await api.claimApproval(args);
   if (name === "dashboard_execute_approved_operation") return await api.executeApproval(args);
+  if (name === "dashboard_create_handoff")
+    return await api.createHandoff(args.task_id);
+  if (name === "dashboard_get_handoff") return await api.getHandoff();
   if (name === "dashboard_get_feedback")
     return feedbackSince(await api.getState(), args.after ?? 0);
   if (routes[name]) {
@@ -260,7 +278,7 @@ export async function executeTool(api, name, args = {}) {
   }
   throw new Error(diagnoseUnknownTool(name));
 }
-const resourceDefinitions = [
+export const resourceDefinitions = [
   {
     uri: "dashboard://state",
     name: "Project dashboard state",
@@ -269,6 +287,16 @@ const resourceDefinitions = [
   {
     uri: "dashboard://feedback",
     name: "Human answers",
+    mimeType: "application/json",
+  },
+  {
+    uri: "dashboard://handoff",
+    name: "Latest task handoff packet",
+    mimeType: "application/json",
+  },
+  {
+    uri: "dashboard://acceptance",
+    name: "Current acceptance inspection for the latest handoff task",
     mimeType: "application/json",
   },
 ];
@@ -298,6 +326,28 @@ export function diagnoseUnknownResource(uri) {
     `auto-executed. Use an explicit action to reach the origin server/URI.`
   );
 }
+export async function readResource(api, uri) {
+  if (!resourceDefinitions.some((resource) => resource.uri === uri))
+    throw new Error(diagnoseUnknownResource(uri));
+  let value;
+  if (uri === "dashboard://state" || uri === "dashboard://feedback") {
+    const state = await api.getState();
+    value = uri === "dashboard://feedback" ? state.feedback : state;
+  } else if (uri === "dashboard://handoff") {
+    value = await api.getHandoff();
+  } else {
+    value = await api.getAcceptance();
+  }
+  return {
+    contents: [
+      {
+        uri,
+        mimeType: "application/json",
+        text: JSON.stringify(value),
+      },
+    ],
+  };
+}
 export function createMcpServer(api) {
   const server = new Server(
     { name: "rdsh-project-dashboard", version: "0.1.0" },
@@ -323,20 +373,7 @@ export function createMcpServer(api) {
   }));
   server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
     const uri = request.params.uri;
-    if (!resourceDefinitions.some((resource) => resource.uri === uri))
-      throw new Error(diagnoseUnknownResource(uri));
-    const state = await api.getState();
-    return {
-      contents: [
-        {
-          uri,
-          mimeType: "application/json",
-          text: JSON.stringify(
-            uri === "dashboard://feedback" ? state.feedback : state,
-          ),
-        },
-      ],
-    };
+    return readResource(api, uri);
   });
   server.setRequestHandler(SubscribeRequestSchema, async (request) => {
     if (
@@ -401,6 +438,10 @@ export async function runStdio(project) {
     claimApproval: (input) => request("api/approvals/claim", input),
     executeApproval: (input) => request("api/approvals/execute", input),
     checkWorkerStart: (input) => request("api/workers/check", input),
+    createHandoff: (taskId) =>
+      request("api/handoff/create", { task_id: taskId }),
+    getHandoff: () => request("api/handoff"),
+    getAcceptance: () => request("api/acceptance"),
   });
   await mcp.server.connect(new StdioServerTransport());
   // Resource subscribers receive change notifications; disconnected clients can recover with cursors.

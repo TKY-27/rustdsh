@@ -279,7 +279,9 @@ test("MCP 2.0 discovers events and serves the same tools on an authenticated end
         accept: "application/json, text/event-stream",
         "mcp-protocol-version": "2026-07-28",
         "mcp-method": method,
-        ...(params.name ? { "mcp-name": params.name } : {}),
+        ...(params.name || params.uri
+          ? { "mcp-name": params.name || params.uri }
+          : {}),
       },
       body: JSON.stringify({
         jsonrpc: "2.0",
@@ -301,9 +303,16 @@ test("MCP 2.0 discovers events and serves the same tools on an authenticated end
   assert.ok(discovery.supportedVersions.includes("2026-07-28"));
   assert.deepEqual(discovery.capabilities.events, {});
   const discoveredEvents = (await request("events/list")).events;
+  assert.equal(discoveredEvents.length, 11);
   assert.ok(discoveredEvents.some((event) => event.name === "dashboard.contract.updated"));
   assert.ok(discoveredEvents.every((event) => typeof event.description === "string" && event.description.length > 0));
-  assert.ok((await request("tools/list")).tools.some((tool) => tool.name === "dashboard_check_task_contract"));
+  const listedTools = (await request("tools/list")).tools;
+  assert.equal(listedTools.length, 15);
+  assert.ok(listedTools.some((tool) => tool.name === "dashboard_check_task_contract"));
+  const resources = await request("resources/list");
+  assert.ok(
+    resources.resources.some((resource) => resource.uri === "dashboard://handoff"),
+  );
   const diagnostics = async () =>
     (
       await fetch(dashboard.localUrl + "api/diagnostics", {
@@ -368,6 +377,18 @@ test("MCP 2.0 discovers events and serves the same tools on an authenticated end
   } });
   assert.equal(JSON.parse(workerChecked.content[0].text).reason, "sandbox_runner_unavailable");
   assert.equal(JSON.parse(workerChecked.content[0].text).fallback, "disabled");
+  const createdHandoff = await request("tools/call", {
+    name: "dashboard_create_handoff",
+    arguments: { task_id: "T1" },
+  });
+  assert.equal(createdHandoff.resultType, "complete");
+  const handoffResource = await request("resources/read", {
+    uri: "dashboard://handoff",
+  });
+  assert.equal(
+    JSON.parse(handoffResource.contents[0].text).task_id,
+    "T1",
+  );
   await request("tools/call", {
     name: "dashboard_update_metrics",
     arguments: {
