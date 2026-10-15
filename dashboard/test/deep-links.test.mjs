@@ -13,8 +13,11 @@ import {
 const state = {
   project: { id: "project-a" },
   tasks: [{ id: "task-1", title: "same name" }],
-  questions: [{ id: "question-1", question: "confirm?" }],
-  events: [{ sequence: 42, title: "progress" }],
+  questions: [
+    { id: "question-1", question: "confirm?" },
+    { id: "question-2", question: "decided?", answer: "yes" },
+  ],
+  events: [{ sequence: 42, event_id: "evt-42", title: "progress" }],
   answer_applications: { consumers: {
     consumer_a: { consumer_id: "consumer_a", run_id: "run-a", session_id: "session-a" },
     consumer_b: { consumer_id: "consumer_b", run_id: "run-b", session_id: "session-a" },
@@ -45,11 +48,23 @@ test("task, question, session and log targets resolve by exact scoped IDs", () =
   for (const [kind, id, runId, elementId] of [
     ["task", "task-1", undefined, "task-task-1"],
     ["question", "question-1", undefined, "question-question-1"],
-    ["event", "42", undefined, "event-42"],
+    // 回答済みの質問は main の annotation 対象 id (decision-*) を返す。
+    ["question", "question-2", undefined, "decision-question-2"],
+    // main の event アンカーは event-<event_id> を使う。
+    ["event", "42", undefined, "event-evt-42"],
   ]) {
     const target = parseProjectDeepLink(createProjectDeepLink("https://x.test/", "project-a", kind, id));
     assert.deepEqual(resolveProjectDeepLink(target, state), { status: "found", kind, id, elementId });
   }
+  // event_id を持たない旧イベントは legacy-<sequence> のアンカーへ解決する。
+  const legacy = { ...state, events: [{ sequence: 42, title: "progress" }] };
+  assert.deepEqual(
+    resolveProjectDeepLink(
+      { status: "target", projectId: "project-a", kind: "event", id: "42" },
+      legacy,
+    ),
+    { status: "found", kind: "event", id: "42", elementId: "event-legacy-42" },
+  );
   const session = parseProjectDeepLink(createProjectDeepLink("https://x.test/", "project-a", "session", "session-a", "run-b"));
   assert.deepEqual(resolveProjectDeepLink(session, state), {
     status: "found", kind: "session", id: "session-a", consumerId: "consumer_b",

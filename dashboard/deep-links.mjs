@@ -1,3 +1,9 @@
+import {
+  decisionTargetId,
+  eventIdentifier,
+  eventTargetId,
+} from "./annotation-identifiers.mjs";
+
 const kinds = new Set(["task", "question", "session", "event"]);
 const urlFields = ["rdsh_project", "rdsh_kind", "rdsh_id"];
 const storageKey = "rdsh_pending_project_deep_link_v1";
@@ -99,7 +105,11 @@ export function resolveProjectDeepLink(target, state) {
           status: "found",
           kind: value.kind,
           id: value.id,
-          elementId: `question-${item.id}`,
+          // 未回答は #questions の question-*、回答済みは main の decision-* id。
+          elementId:
+            item.answer == null
+              ? `question-${item.id}`
+              : decisionTargetId(item.id),
         }
       : { status: "not_found", kind: value.kind };
   }
@@ -110,7 +120,8 @@ export function resolveProjectDeepLink(target, state) {
           status: "found",
           kind: value.kind,
           id: value.id,
-          elementId: `event-${item.sequence}`,
+          // main の annotation は event-<event_id|legacy-seq> を対象にする。
+          elementId: eventTargetId(eventIdentifier(item)),
         }
       : { status: "not_found", kind: value.kind };
   }

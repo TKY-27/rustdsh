@@ -7,6 +7,11 @@ import QRCode from "qrcode";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { ProjectStore, writeJson, stateHome, publicState } from "./state.mjs";
+import {
+  InstructionQueueWorker,
+  resolveRdshExecutable,
+  supportsInstructionQueueServe,
+} from "./instruction-queue-worker.mjs";
 import { createMcpServer } from "./mcp.mjs";
 import { enableShare, inspectShare } from "./tailscale.mjs";
 import { startHarness, proxyHarness, upgradeHarness } from "./harness.mjs";
@@ -16,11 +21,22 @@ import { AnswerApplicationServer } from "./answer-application-server.mjs";
 import { BudgetAdmissionServer } from "./budget-server.mjs";
 import { createHistoryBackup, backupMaximum } from "./history-backup.mjs";
 import { AcceptanceStore } from "./acceptance.mjs";
+import { inspectTaskOutcomes } from "./task-outcomes-view.mjs";
+import { ObservedCliStore } from "./observed-cli.mjs";
+import {
+  acceptanceHandoffView,
+  buildHandoff,
+  handoffFreshness,
+  handoffResource,
+  isHandoffPacket,
+} from "./handoffs.mjs";
 import {
   ConnectionObservations,
   connectionReport,
   inspectTunnel,
 } from "./connection-diagnostics.mjs";
+import { HumanAnnotationStore } from "./human-annotations.mjs";
+import { inspectGitHubStatus } from "./github-status.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const equal = (a, b) =>
@@ -28,6 +44,93 @@ const equal = (a, b) =>
   typeof b === "string" &&
   Buffer.byteLength(a) === Buffer.byteLength(b) &&
   timingSafeEqual(Buffer.from(a), Buffer.from(b));
+const loopbackAddresses = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
+const forwardingHeaders = ["forwarded", "x-forwarded-for", "x-forwarded-host"];
+// Exclusive live-instance lock: stale-lock reclamation is serialized
+// in-process, cross-process steals use an atomic rename, and cleanup only
+// removes a lock owned by this starter (`pid:token`).
+let dashboardLockQueue = Promise.resolve();
+function parseDashboardLock(content) {
+  const text = String(content ?? "").trim();
+  const sep = text.indexOf(":");
+  if (sep === -1) return { pid: Number(text), token: null };
+  return { pid: Number(text.slice(0, sep)), token: text.slice(sep + 1) };
+}
+function dashboardPidAlive(pid) {
+  if (!Number.isFinite(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === "EPERM";
+  }
+}
+export async function removeDashboardLockIfOwned(lockFile, ownedContent) {
+  let current = null;
+  try {
+    current = await fs.readFile(lockFile, "utf8");
+  } catch {
+    return false;
+  }
+  if (current !== ownedContent) return false;
+  try {
+    await fs.unlink(lockFile);
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+  return true;
+}
+export async function acquireDashboardLock(lockFile, ownedContent) {
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try {
+      await fs.writeFile(lockFile, ownedContent, { flag: "wx", mode: 0o600 });
+      return;
+    } catch (error) {
+      if (error?.code !== "EEXIST") throw error;
+    }
+    let existing = null;
+    try {
+      existing = await fs.readFile(lockFile, "utf8");
+    } catch (error) {
+      if (error?.code === "ENOENT") continue;
+      throw error;
+    }
+    if (dashboardPidAlive(parseDashboardLock(existing).pid)) {
+      throw new Error(
+        "This dashboard is already running; use rdsh-dashboard open with the same project",
+      );
+    }
+    const backup = `${lockFile}.stale.${process.pid}.${randomUUID()}`;
+    try {
+      await fs.rename(lockFile, backup);
+    } catch (error) {
+      if (error?.code === "ENOENT") continue;
+      throw error;
+    }
+    let stolen = null;
+    try {
+      stolen = await fs.readFile(backup, "utf8");
+    } catch {
+      stolen = null;
+    }
+    if (stolen !== existing) {
+      if (stolen !== null) {
+        try {
+          await fs.writeFile(lockFile, stolen, { flag: "wx", mode: 0o600 });
+          await fs.unlink(backup).catch(() => {});
+        } catch (restoreError) {
+          if (restoreError?.code !== "EEXIST") throw restoreError;
+          await fs.unlink(backup).catch(() => {});
+        }
+      } else {
+        await fs.unlink(backup).catch(() => {});
+      }
+      continue;
+    }
+    await fs.unlink(backup).catch(() => {});
+  }
+  throw new Error("Could not acquire dashboard lock");
+}
 function json(res, status, value) {
   res.writeHead(status, { "content-type": "application/json; charset=utf-8" });
   res.end(JSON.stringify(value));
@@ -44,6 +147,8 @@ async function readBody(req, maximum = 131072) {
 }
 export async function startDashboard(options) {
   const { kind = "project", project, tailscale = true } = options;
+  const githubStatusInspector =
+    options.githubStatusInspector || inspectGitHubStatus;
   const port =
     options.port ||
     (kind === "harness"
@@ -54,31 +159,13 @@ export async function startDashboard(options) {
   await fs.mkdir(directory, { recursive: true });
   // Exclusive live-instance lock: never launch two writers for the same project.
   const lockFile = path.join(directory, "server.lock");
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      await fs.writeFile(lockFile, String(process.pid), {
-        flag: "wx",
-        mode: 0o600,
-      });
-      break;
-    } catch (e) {
-      if (e.code !== "EEXIST") throw e;
-      const pid = Number(await fs.readFile(lockFile, "utf8"));
-      let alive = false;
-      try {
-        process.kill(pid, 0);
-        alive = true;
-      } catch (error) {
-        if (error.code === "EPERM") alive = true;
-      }
-      if (alive)
-        throw new Error(
-          "This dashboard is already running; use rdsh-dashboard open with the same project",
-        );
-      await fs.unlink(lockFile);
-      if (attempt === 1) throw new Error("Could not acquire dashboard lock");
-    }
-  }
+  const lockContent = `${process.pid}:${randomUUID()}`;
+  const acquisition = dashboardLockQueue.then(
+    () => acquireDashboardLock(lockFile, lockContent),
+    () => acquireDashboardLock(lockFile, lockContent),
+  );
+  dashboardLockQueue = acquisition.catch(() => {});
+  await acquisition;
   const token = randomBytes(32).toString("hex"); // local administrator
   const mcpToken = randomBytes(32).toString("hex");
   const browserToken = randomBytes(32).toString("hex");
@@ -87,14 +174,34 @@ export async function startDashboard(options) {
   const connections = new ConnectionObservations();
   const localUrl = `http://127.0.0.1:${port}/`;
   const cookieName = `rdsh_${kind === "project" ? project.id : "harness"}`;
-  let store, eventsHub;
+  let store, eventsHub, humanAnnotations, observedCli, instructionQueueWorker;
   try {
-    store = kind === "project" ? await ProjectStore.open(project) : null;
+    if (kind === "project") {
+      instructionQueueWorker = options.instructionQueueWorker || null;
+      // Keep the JSONL subprocess experimental until it meets the live
+      // mutation latency gate; tests and benchmarks can still opt in.
+      if (
+        !instructionQueueWorker &&
+        process.env.RDSH_DASHBOARD_RUST_INSTRUCTION_QUEUE === "1"
+      ) {
+        const executable = await resolveRdshExecutable();
+        if (executable && (await supportsInstructionQueueServe(executable)))
+          instructionQueueWorker = new InstructionQueueWorker(executable);
+      }
+      store = await ProjectStore.open(project, { instructionQueueWorker });
+    } else store = null;
+    humanAnnotations = store ? await HumanAnnotationStore.open(project) : null;
     eventsHub = store
       ? await EventsHub.open(project, () => store.value, options.webhookPost)
       : null;
+    observedCli = store
+      ? await ObservedCliStore.open(project, {
+          observe: options.observeExternalCli,
+        })
+      : null;
   } catch (error) {
-    await fs.unlink(lockFile);
+    await instructionQueueWorker?.close().catch(() => {});
+    await removeDashboardLockIfOwned(lockFile, lockContent).catch(() => {});
     throw error;
   }
   const live = new Set(),
@@ -113,7 +220,13 @@ export async function startDashboard(options) {
   const budgets = store ? new BudgetAdmissionServer(mutateBudget) : null;
   const modern = store
     ? modernMcpHandler(
-        { getState: visibleState, mutate },
+        {
+          getState: visibleState,
+          mutate,
+          createHandoff,
+          getHandoff,
+          getAcceptance,
+        },
         eventsHub,
         connections,
       )
@@ -133,6 +246,7 @@ export async function startDashboard(options) {
   let updateQueue = Promise.resolve();
   let refreshPromise = null;
   let closing = false;
+  let closePromise = null;
   // Parsed once per share change; the old code rebuilt the Set and parsed
   // the share URL on every request (twice per request via trusted()).
   let originsCache = null;
@@ -173,6 +287,12 @@ export async function startDashboard(options) {
     return (
       allowed.hosts.has(host) &&
       (!req.headers.origin || allowed.origins.has(req.headers.origin))
+    );
+  }
+  function directLoopback(req) {
+    return (
+      loopbackAddresses.has(req.socket.remoteAddress) &&
+      forwardingHeaders.every((name) => req.headers[name] === undefined)
     );
   }
   function browserUrl(base, root = false) {
@@ -285,6 +405,72 @@ export async function startDashboard(options) {
     updateQueue = task.catch(() => {});
     return task;
   }
+  async function inspectAcceptance(taskId) {
+    if (!project || !store)
+      throw new Error("Acceptance inspection is unavailable in Harness mode");
+    return (await AcceptanceStore.open(project)).inspect(taskId);
+  }
+  async function loadHandoff() {
+    if (!project || !store)
+      throw new Error("Handoff packets are unavailable in Harness mode");
+    const file = path.join(project.directory, "handoff.json");
+    let bytes;
+    try {
+      bytes = await fs.readFile(file);
+    } catch (error) {
+      if (error.code === "ENOENT") return null;
+      throw error;
+    }
+    if (bytes.length > 1024 * 1024)
+      throw new Error("Stored handoff packet exceeds the size limit");
+    const packet = JSON.parse(bytes.toString("utf8"));
+    if (!isHandoffPacket(packet))
+      throw new Error("Stored handoff packet is invalid; create a new packet");
+    return packet;
+  }
+  async function getHandoff() {
+    const packet = await loadHandoff();
+    if (!packet) return handoffResource(null);
+    const [state, acceptance] = await Promise.all([
+      visibleState(),
+      inspectAcceptance(packet.task_id),
+    ]);
+    return handoffResource(packet, handoffFreshness(packet, state, acceptance));
+  }
+  async function getAcceptance() {
+    const packet = await loadHandoff();
+    if (!packet)
+      return {
+        schema: 1,
+        status: "unknown",
+        reason: "handoff_packet_not_created",
+      };
+    return acceptanceHandoffView(await inspectAcceptance(packet.task_id));
+  }
+  async function createHandoff(taskId) {
+    if (!store || !project)
+      throw new Error("Handoff packets are unavailable in Harness mode");
+    const task = updateQueue.then(async () => {
+      const state = await visibleState();
+      const acceptance = await inspectAcceptance(taskId);
+      const packet = buildHandoff(state, taskId, acceptance);
+      const committed = await store.recordHandoff();
+      packet.snapshot_revision = committed.revision;
+      await writeJson(path.join(project.directory, "handoff.json"), packet);
+      for (const response of live)
+        response.write(`event: changed\ndata: ${store.value.revision}\n\n`);
+      for (const { mcp } of sessions.values()) void mcp.notify();
+      void eventsHub.flush().catch(() => {});
+      const currentState = await visibleState();
+      const currentAcceptance = await inspectAcceptance(taskId);
+      return handoffResource(
+        packet,
+        handoffFreshness(packet, currentState, currentAcceptance),
+      );
+    });
+    updateQueue = task.catch(() => {});
+    return task;
+  }
   async function mutateReply(operation, input, context) {
     const task = updateQueue.then(async () => {
       const result = await store.mutateReply(operation, input, context);
@@ -383,6 +569,10 @@ export async function startDashboard(options) {
       const agentRoute =
         route === "/mcp" ||
         route === "/api/state" ||
+        (req.method === "GET" &&
+          ["/api/handoff", "/api/acceptance"].includes(route)) ||
+        (req.method === "POST" && route === "/api/handoff/create") ||
+        (req.method === "GET" && route === "/api/task-outcomes") ||
         route === "/api/instructions/context" ||
         (req.method === "POST" && route === "/api/instructions/submit") ||
         (req.method === "POST" &&
@@ -431,15 +621,21 @@ export async function startDashboard(options) {
           route === "/app.mjs" ||
           route === "/deep-links.mjs" ||
           route === "/deep-link-ui.mjs" ||
+          route === "/human-annotations-ui.mjs" ||
+          route === "/annotation-identifiers.mjs" ||
           route === "/observations.mjs" ||
           route === "/reports-view.mjs" ||
           route === "/question-cards-ui.mjs" ||
+          route === "/model-catalog-ui.mjs" ||
           route === "/project-overview.mjs" ||
           route === "/connection-diagnostics-ui.mjs" ||
+          route === "/github-status-ui.mjs" ||
           route === "/answer-applications-ui.mjs" ||
           route === "/instruction-queue-ui.mjs" ||
           route === "/cost-ledger-ui.mjs" ||
           route === "/budget-ui.mjs" ||
+          route === "/task-outcomes-ui.mjs" ||
+          route === "/observed-cli-ui.mjs" ||
           route === "/favicon.ico" ||
           route === "/icon.png" ||
           route === "/icon.svg");
@@ -530,15 +726,21 @@ export async function startDashboard(options) {
           "/app.mjs",
           "/deep-links.mjs",
           "/deep-link-ui.mjs",
+          "/human-annotations-ui.mjs",
+          "/annotation-identifiers.mjs",
           "/observations.mjs",
           "/reports-view.mjs",
           "/question-cards-ui.mjs",
+          "/model-catalog-ui.mjs",
           "/project-overview.mjs",
           "/connection-diagnostics-ui.mjs",
+          "/github-status-ui.mjs",
           "/answer-applications-ui.mjs",
           "/instruction-queue-ui.mjs",
           "/cost-ledger-ui.mjs",
           "/budget-ui.mjs",
+          "/task-outcomes-ui.mjs",
+          "/observed-cli-ui.mjs",
         ].includes(route)
       ) {
         res.writeHead(200, {
@@ -546,12 +748,62 @@ export async function startDashboard(options) {
         });
         return res.end(await fs.readFile(path.join(here, route.slice(1))));
       }
+      if (kind === "project" && route === "/api/observed-cli") {
+        if (!humanAuthorized)
+          return json(res, 403, { error: "Dashboard owner browser required" });
+        if (req.method === "GET")
+          return json(res, 200, await observedCli.inspect(store.value));
+        if (req.method === "POST") {
+          const record = await observedCli.register(
+            await readBody(req, 4096),
+            store.value,
+          );
+          return json(res, 201, {
+            process: {
+              id: record.id,
+              task_id: record.task_id,
+              cli_kind: record.cli_kind,
+              pid: record.pid,
+              registered_at: record.registered_at,
+            },
+          });
+        }
+        return json(res, 405, { error: "Method not allowed" });
+      }
+      if (
+        kind === "project" &&
+        route?.startsWith("/api/observed-cli/")
+      ) {
+        if (!humanAuthorized)
+          return json(res, 403, { error: "Dashboard owner browser required" });
+        const match = route.match(/^\/api\/observed-cli\/([0-9a-f-]{36})$/);
+        if (req.method !== "DELETE" || !match)
+          return json(res, 404, { error: "Unknown observed CLI operation" });
+        return json(
+          res,
+          200,
+          await observedCli.unregister({ id: match[1] }),
+        );
+      }
       if (
         kind === "project" &&
         req.method === "GET" &&
         route === "/api/diagnostics"
       )
         return json(res, 200, await diagnostics());
+      if (
+        kind === "project" &&
+        req.method === "GET" &&
+        route === "/api/github/status"
+      ) {
+        if (!humanAuthorized)
+          return json(res, 403, { error: "Human browser credential required" });
+        return json(
+          res,
+          200,
+          await githubStatusInspector({ cwd: project.directory }),
+        );
+      }
       if (req.method === "GET" && route === "/api/config")
         return json(res, 200, {
           kind,
@@ -580,14 +832,10 @@ export async function startDashboard(options) {
       }
       if (kind === "project") {
         if (req.method === "POST" && route?.startsWith("/api/backup/")) {
-          if (
-            !adminAuthorized ||
-            !["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(
-              req.socket.remoteAddress,
-            )
-          )
+          if (!adminAuthorized || !directLoopback(req))
             return json(res, 403, {
-              error: "Backup requires the local administrator credential",
+              error:
+                "Backup requires a local administrator credential and direct loopback access",
             });
           const action = route.slice("/api/backup/".length);
           if (!["preview", "restore", "history"].includes(action))
@@ -602,13 +850,9 @@ export async function startDashboard(options) {
           );
         }
         if (req.method === "POST" && route?.startsWith("/api/budget/")) {
-          if (
-            !["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(
-              req.socket.remoteAddress,
-            )
-          )
+          if (!directLoopback(req))
             return json(res, 403, {
-              error: "Budget control requires loopback access",
+              error: "Budget control requires direct loopback access",
             });
           const action = route.slice("/api/budget/".length);
           const input = await readBody(req);
@@ -718,8 +962,73 @@ export async function startDashboard(options) {
             await mutate("question", { ...input, action: "cancel" }),
           );
         }
+        if (route === "/api/annotations") {
+          if (!humanAnnotations)
+            return json(res, 404, { error: "Project annotations are unavailable" });
+          if (!humanAuthorized)
+            return json(res, 403, { error: "Human browser credential required" });
+          if (req.method === "GET")
+            return json(res, 200, await humanAnnotations.inspect(store.value));
+          if (req.method === "POST") {
+            const input = await readBody(req);
+            if (!input || typeof input !== "object" || Array.isArray(input))
+              return json(res, 400, { error: "Invalid annotation input" });
+            const result =
+              input.action === "delete"
+                ? await humanAnnotations.remove(input)
+                : input.action === "create"
+                  ? await humanAnnotations.add(input, store.value)
+                  : null;
+            if (!result)
+              return json(res, 400, { error: "Unknown annotation action" });
+            return json(res, input.action === "create" ? 201 : 200, result);
+          }
+          return json(res, 405, { error: "Method not allowed" });
+        }
         if (req.method === "GET" && route === "/api/state")
           return json(res, 200, await visibleState());
+        if (req.method === "GET" && route === "/api/handoff") {
+          if (!mcpAuthorized)
+            return json(res, 403, { error: "MCP bearer credential required" });
+          return json(res, 200, await getHandoff());
+        }
+        if (req.method === "GET" && route === "/api/acceptance") {
+          if (!mcpAuthorized)
+            return json(res, 403, { error: "MCP bearer credential required" });
+          return json(res, 200, await getAcceptance());
+        }
+        if (req.method === "POST" && route === "/api/handoff/create") {
+          if (!mcpAuthorized)
+            return json(res, 403, { error: "MCP bearer credential required" });
+          const input = await readBody(req);
+          if (
+            !input ||
+            typeof input !== "object" ||
+            Array.isArray(input) ||
+            Object.keys(input).length !== 1 ||
+            typeof input.task_id !== "string"
+          )
+            return json(res, 400, { error: "Expected only a task_id field" });
+          return json(res, 200, await createHandoff(input.task_id));
+        }
+        if (req.method === "GET" && route === "/api/task-outcomes") {
+          const entries = [...url.searchParams.entries()];
+          if (entries.length !== 1)
+            return json(res, 400, {
+              error: "Select exactly one task_id or milestone_id",
+            });
+          const state = store.clone();
+          const result = await inspectTaskOutcomes(
+            project,
+            state,
+            Object.fromEntries(entries),
+          );
+          if (store.value.revision !== state.revision)
+            return json(res, 409, {
+              error: "Project state changed; refresh and inspect again",
+            });
+          return json(res, 200, result);
+        }
         if (req.method === "POST" && route?.startsWith("/api/update/")) {
           const operation = route.slice("/api/update/".length);
           if (
@@ -769,6 +1078,9 @@ export async function startDashboard(options) {
             const mcp = createMcpServer({
               getState: visibleState,
               mutate,
+              createHandoff,
+              getHandoff,
+              getAcceptance,
             });
             const transport = new StreamableHTTPServerTransport({
               sessionIdGenerator: randomUUID,
@@ -791,7 +1103,7 @@ export async function startDashboard(options) {
       json(res, 404, { error: "Not found" });
     } catch (e) {
       if (!res.headersSent)
-        json(res, [401, 403, 409].includes(e.status) ? e.status : 400, {
+        json(res, [401, 403, 409, 413, 500, 504].includes(e.status) ? e.status : 400, {
           error: e.message,
         });
       else res.end();
@@ -812,21 +1124,31 @@ export async function startDashboard(options) {
     }
     upgradeHarness(req, socket, head, harness.port, cookieName, token);
   });
-  async function close() {
-    if (closing) return;
-    if (harness && !(await harness.stop()).confirmed)
-      throw new Error(
-        "Owned Harness exit unverified; dashboard remains available",
-      );
-    closing = true;
-    if (deliveryTimer) clearInterval(deliveryTimer);
-    for (const response of live) response.end();
-    for (const { mcp } of sessions.values()) await mcp.server.close();
-    await updateQueue;
-    await eventsHub?.queue;
-    for (const socket of sockets) socket.destroy();
-    await new Promise((resolve) => server.close(resolve));
-    await fs.unlink(lockFile).catch(() => {});
+  function close() {
+    if (closePromise) return closePromise;
+    if (closing) return Promise.resolve();
+    const attempt = Promise.resolve().then(async () => {
+      if (harness && !(await harness.stop()).confirmed)
+        throw new Error(
+          "Owned Harness exit unverified; dashboard remains available",
+        );
+      closing = true;
+      if (deliveryTimer) clearInterval(deliveryTimer);
+      for (const response of live) response.end();
+      for (const { mcp } of sessions.values()) await mcp.server.close();
+      await updateQueue;
+      await instructionQueueWorker?.close();
+      await eventsHub?.queue;
+      for (const socket of sockets) socket.destroy();
+      await new Promise((resolve) => server.close(resolve));
+      await removeDashboardLockIfOwned(lockFile, lockContent).catch(() => {});
+    });
+    closePromise = attempt;
+    // A failed preflight leaves the dashboard available, so let a later caller retry.
+    void attempt.then(undefined, () => {
+      if (!closing && closePromise === attempt) closePromise = null;
+    });
+    return attempt;
   }
   try {
     await new Promise((resolve, reject) => {

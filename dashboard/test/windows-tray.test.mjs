@@ -1,12 +1,41 @@
-import test from "node:test";
+import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { PassThrough } from "node:stream";
 import { setImmediate as tick } from "node:timers/promises";
 import { startWindowsTray } from "../windows-tray.mjs";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { fileURLToPath } from "node:url";
+import { createHash } from "node:crypto";
+
+const originalPath = process.env.PATH;
+const originalCwd = process.cwd();
+let placeholder;
+// Non-Windows hosts have no pwsh.exe; a trailing PATH entry lets mock tests resolve one.
+before(async () => {
+  placeholder = await fs.mkdtemp(path.join(os.tmpdir(), "rdsh-tray-path-"));
+  await fs.writeFile(path.join(placeholder, "pwsh.exe"), "");
+  process.env.PATH = [originalPath, placeholder]
+    .filter(Boolean)
+    .join(path.delimiter);
+});
+after(async () => {
+  process.env.PATH = originalPath;
+  process.chdir(originalCwd);
+  await fs.rm(placeholder, { recursive: true, force: true });
+});
+async function plantedDirectory(executable) {
+  const planted = await fs.mkdtemp(path.join(os.tmpdir(), "rdsh-tray-cwd-"));
+  const decoy = path.join(planted, "pwsh.exe");
+  if (executable) await fs.copyFile(executable, decoy);
+  else await fs.writeFile(decoy, "");
+  process.chdir(planted);
+  return planted;
+}
 
 function fixture(close) {
   const server = new EventEmitter();
@@ -51,6 +80,51 @@ test("tray passes no URL/credential to PowerShell; Open uses its exact server", 
   assert.equal(f.child.stdin.writableEnded, true);
 });
 
+test("tray helper is resolved from an absolute PATH entry, never the working directory", async () => {
+  const planted = await plantedDirectory();
+  const searched = process.env.PATH;
+  process.env.PATH = "." + path.delimiter + searched;
+  try {
+    const f = fixture(async () => {});
+    f.child.stdout.write("ready\n");
+    (await f.pending).dispose();
+    const [command] = f.invocation;
+    assert.ok(path.isAbsolute(command), command);
+    assert.equal(path.basename(command), "pwsh.exe");
+    assert.notEqual(path.dirname(command), planted);
+    await fs.access(command);
+  } finally {
+    process.env.PATH = searched;
+    process.chdir(originalCwd);
+    await fs.rm(planted, { recursive: true, force: true });
+  }
+});
+
+test("tray fails closed before spawning when PATH has no pwsh.exe", async () => {
+  const empty = await fs.mkdtemp(path.join(os.tmpdir(), "rdsh-tray-empty-"));
+  const searched = process.env.PATH;
+  process.env.PATH = empty;
+  const server = new EventEmitter();
+  let spawned = false;
+  try {
+    await assert.rejects(
+      startWindowsTray({
+        dashboard: { server, close: async () => {} },
+        open: () => {},
+        spawnProcess: () => {
+          spawned = true;
+        },
+      }),
+      /pwsh\.exe/,
+    );
+    assert.equal(spawned, false);
+    assert.equal(server.listenerCount("close"), 0);
+  } finally {
+    process.env.PATH = searched;
+    await fs.rm(empty, { recursive: true, force: true });
+  }
+});
+
 test("tray tooltip identifies its project and bounds Unicode labels", async () => {
   const server = new EventEmitter();
   const child = new EventEmitter();
@@ -76,6 +150,32 @@ test("tray tooltip identifies its project and bounds Unicode labels", async () =
   );
   tray.dispose();
 });
+
+test(
+  "tray accepts readiness after the first 15 seconds of Windows startup",
+  { timeout: 5000 },
+  async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const f = fixture(async () => {});
+    let settled = false;
+    const observed = f.pending.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+
+    t.mock.timers.tick(15000);
+    await tick();
+    assert.equal(settled, false);
+
+    f.child.stdout.write("ready\n");
+    (await f.pending).dispose();
+    await observed;
+  },
+);
 
 test("Exit closes only its captured dashboard, coalesces clicks, and waits for proof", async () => {
   let calls = 0,
@@ -144,7 +244,7 @@ test("failed tray startup cleans only its owned helper", async () => {
   assert.equal(f.server.listenerCount("close"), 0);
 });
 
-test("an unready tray retains its original 15-second startup deadline and owns only its helper", async (t) => {
+test("an unready tray retains its 30-second startup deadline and owns only its helper", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
   let calls = 0;
   const slow = fixture(async () => {
@@ -166,7 +266,7 @@ test("an unready tray retains its original 15-second startup deadline and owns o
     calls++;
   });
   const rejected = assert.rejects(lost.pending, /did not become ready/);
-  t.mock.timers.tick(14999);
+  t.mock.timers.tick(29999);
   await tick();
   assert.equal(lost.child.killed, undefined);
   t.mock.timers.tick(1);
@@ -178,13 +278,22 @@ test("an unready tray retains its original 15-second startup deadline and owns o
 
 test("tray diagnostics bound stderr and keep its contents out of observations", async () => {
   const f = fixture(async () => {});
-  f.child.stdout.write("phase:powershell-start:7.5.2\nphase:forms-loaded\n");
+  f.child.stdout.write(
+    "phase:powershell-start:7.5.2\nphase:forms-loaded\nphase:drawing-loaded\n",
+  );
   f.child.stdout.write("phase:untrusted:DUMMY_PHASE_SECRET\n");
   f.child.stderr.write("DUMMY_STDERR_SECRET".repeat(2000));
   f.child.stdout.write("ready\n");
   const tray = await f.pending;
   const report = tray.diagnostics();
   assert.equal(report.powershell, "7.5.2");
+  assert.deepEqual(report.phases.map((entry) => entry.phase), [
+    "spawn-requested",
+    "powershell-start",
+    "forms-loaded",
+    "drawing-loaded",
+    "ready",
+  ]);
   assert.equal(report.stderr.bytes, 16384);
   assert.equal(report.stderr.truncated, true);
   assert.match(report.stderr.sha256, /^[0-9a-f]{64}$/);
@@ -196,10 +305,11 @@ test("tray diagnostics bound stderr and keep its contents out of observations", 
 
 async function stopFixtureHelper(child) {
   if (!child?.pid || child.exitCode !== null || child.signalCode !== null)
-    return;
+    return true;
   const exited = once(child, "exit", { signal: AbortSignal.timeout(5000) });
   child.kill();
   await exited;
+  return child.exitCode !== null || child.signalCode !== null;
 }
 
 test("a lost warning pipe cannot leak a rejected stop promise", async () => {
@@ -224,6 +334,13 @@ test(
     timeout: 25000,
   },
   async (t) => {
+    const started = performance.now();
+    const phases = [];
+    const stderrHash = createHash("sha256");
+    let stderrBytes = 0,
+      hashedBytes = 0,
+      stderrTruncated = false,
+      pendingLine = "";
     const child = spawn(
       "pwsh.exe",
       [
@@ -236,10 +353,56 @@ test(
         "-File",
         fileURLToPath(new URL("./windows-tray-native.ps1", import.meta.url)),
       ],
-      { windowsHide: true, stdio: "ignore" },
+      { windowsHide: true, stdio: ["ignore", "ignore", "pipe"] },
     );
-    t.after(() => stopFixtureHelper(child));
-    const [code] = await once(child, "exit", { signal: t.signal });
+    child.stderr.on("data", (chunk) => {
+      const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      stderrBytes += bytes.length;
+      const remaining = 16384 - hashedBytes;
+      if (remaining > 0) {
+        stderrHash.update(bytes.subarray(0, remaining));
+        hashedBytes += Math.min(bytes.length, remaining);
+      }
+      if (bytes.length > remaining) stderrTruncated = true;
+      pendingLine += bytes.toString("utf8");
+      if (pendingLine.length > 512 && !pendingLine.includes("\n"))
+        pendingLine = pendingLine.slice(-512);
+      let newline;
+      while ((newline = pendingLine.indexOf("\n")) >= 0) {
+        const line = pendingLine.slice(0, newline).replace(/\r$/, "");
+        pendingLine = pendingLine.slice(newline + 1);
+        if (
+          /^RDSH_TRAY_TEST phase=[a-z-]+ elapsed_ms=\d+(?: powershell=[0-9A-Za-z.-]{1,32})?$/.test(
+            line,
+          ) &&
+          phases.length < 16
+        ) {
+          phases.push(line);
+          t.diagnostic(line);
+        }
+      }
+    });
+    t.after(async () => {
+      const cleanupExitObserved = await stopFixtureHelper(child);
+      t.diagnostic(
+        JSON.stringify({
+          tray_native_test: {
+            node: process.version,
+            elapsed_ms: Math.round(performance.now() - started),
+            exit_code: child.exitCode,
+            signal: child.signalCode,
+            cleanup_exit_observed: cleanupExitObserved,
+            phases,
+            stderr: {
+              bytes: stderrBytes,
+              sha256: stderrHash.digest("hex"),
+              truncated: stderrTruncated,
+            },
+          },
+        }),
+      );
+    });
+    const [code] = await once(child, "close", { signal: t.signal });
     assert.equal(code, 0);
   },
 );
@@ -276,6 +439,45 @@ test(
 );
 
 test(
+  "native Windows runs real PowerShell despite a planted pwsh.exe in the working directory",
+  {
+    skip: process.platform !== "win32",
+    timeout: 25000,
+  },
+  async (t) => {
+    // A genuine executable under the helper's name: it exits on PowerShell's
+    // arguments instead of printing "ready", so selecting it fails this test.
+    const planted = await plantedDirectory(process.execPath);
+    const server = new EventEmitter();
+    let helper;
+    t.after(async () => {
+      process.chdir(originalCwd);
+      await stopFixtureHelper(helper);
+      await fs.rm(planted, { recursive: true, force: true });
+    });
+    const tray = await startWindowsTray({
+      dashboard: {
+        server,
+        browserUrl: "http://127.0.0.1:38101/#key=dummy",
+        close: async () => server.emit("close"),
+      },
+      open: () => {},
+      spawnProcess: (...args) => {
+        helper = spawn(...args);
+        return helper;
+      },
+    });
+    assert.notEqual(path.dirname(helper.spawnfile), planted);
+    assert.match(tray.diagnostics().powershell, /^\d+\./);
+    const exit = once(helper, "exit", { signal: t.signal });
+    server.emit("close");
+    tray.dispose();
+    const [code] = await exit;
+    assert.equal(code, 0);
+  },
+);
+
+test(
   "native Windows timeout reports phases and observes its exact helper's exit",
   {
     skip: process.platform !== "win32",
@@ -307,7 +509,7 @@ test(
       return /did not become ready/.test(error.message);
     });
     await phase;
-    t.mock.timers.tick(15000);
+    t.mock.timers.tick(30000);
     await rejected;
     assert.equal(failure.trayDiagnostics.cleanup.exit_observed, true);
     assert.ok(
