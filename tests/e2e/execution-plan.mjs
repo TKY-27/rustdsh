@@ -10,6 +10,7 @@ import { identity, ProjectStore } from "../../dashboard/state.mjs";
 import { ExecutionPlans } from "../../dashboard/execution-plan.mjs";
 import { AcceptanceStore } from "../../dashboard/acceptance.mjs";
 import { startDashboard } from "../../dashboard/server.mjs";
+import { readLocalRuntime } from "../../dashboard/private-runtime.mjs";
 const { chromium } = await import(
   process.env.RDSH_PLAYWRIGHT_MODULE || "playwright"
 );
@@ -131,9 +132,7 @@ try {
   const port = portProbe.address().port;
   await new Promise((r) => portProbe.close(r));
   server = await startDashboard({ project, tailscale: false, port });
-  const info = JSON.parse(
-    await fs.readFile(path.join(project.directory, "runtime.json"), "utf8"),
-  );
+  const info = await readLocalRuntime(project.directory);
   browser = await chromium.launch({
     headless: true,
     ...(process.env.RDSH_CHROME_PATH

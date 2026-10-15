@@ -10,6 +10,7 @@ import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { identity, ProjectStore } from "../../dashboard/state.mjs";
 import { startDashboard } from "../../dashboard/server.mjs";
+import { readLocalRuntime } from "../../dashboard/private-runtime.mjs";
 import { RunHistory } from "../../dashboard/run-history.mjs";
 import { AcceptanceStore } from "../../dashboard/acceptance.mjs";
 import { queueRevision } from "../../dashboard/instruction-queue.mjs";
@@ -102,9 +103,7 @@ try {
   const port = socket.address().port;
   await new Promise((resolve) => socket.close(resolve));
   server = await startDashboard({ project, port, tailscale: false });
-  const runtime = JSON.parse(
-    await fs.readFile(path.join(project.directory, "runtime.json"), "utf8"),
-  );
+  const runtime = await readLocalRuntime(project.directory);
   browser = await chromium.launch({
     headless: true,
     ...(process.env.RDSH_CHROME_PATH
