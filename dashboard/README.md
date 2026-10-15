@@ -623,13 +623,20 @@ has only `id`, `request_version`, `attempt`, `cost_usd`; it cannot mint a grant.
 It is consumed as a binding once per check, without consuming the ledger's
 retry/cost allowance. External `repository`, `tool_result`, `web` and `agent`
 envelopes created by `provenance.mjs` always have `untrusted_data` authority.
-Summary/forward transformations preserve original references, content digests
-and lineage. These are self-reported attribution, not identity authentication or
-cryptographic proof. `renderExternalQuote` renders content/references using
+References are bounded locators: URL userinfo, queries, fragments and common
+credential-shaped assignments are rejected, so callers must supply a redacted
+reference when a source URL contains tracking or secret parameters. This is
+input hygiene, not authentication of the claimed source.
+Summary/forward transformations preserve original references and link every
+content digest to the immediately preceding digest. These are self-reported
+attribution, not identity authentication or cryptographic proof.
+`renderExternalQuote` renders content/references using
 `textContent`; audit reports retain metadata/digests, not source or operation
 bodies. Reports list uninspected session replay, compaction, context injection
-and direct-backend paths. Automatic source capture through those DSH subsystems
-and integration into the dashboard source UI remain unfinished.
+and direct-backend paths. The pinned DSH `tools/result` hook exposes a final tool
+outcome but does not assign repository/web/agent origin metadata to arbitrary
+result text. Automatic source capture through those DSH subsystems and
+integration into the dashboard source UI remain unfinished.
 
 The real-runtime fixture uses existing libraries without DSH boot/auth/LLM:
 
