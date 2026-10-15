@@ -40,7 +40,7 @@ fn force_init_recovers_corrupt_settings_and_loads_defaults() {
     for raw in ["{broken", "", "null", "[]", "false", "42", "\"text\""] {
         let fixture = Fixture::new(raw);
         let output = fixture.run(&["settings", "init", "--force"]);
-        assert!(output.status.success(), "{:?}", output);
+        assert!(output.status.success(), "{output:?}");
         let settings: serde_json::Value = serde_json::from_str(&fixture.read()).unwrap();
         assert_eq!(settings["schema"], 1);
         assert_eq!(settings["extras"]["enable"], serde_json::json!([]));
@@ -300,6 +300,12 @@ fn feature_switches_list_defaults_and_round_trip_through_the_cli() {
         "{keys}"
     );
     assert!(keys.contains("features.sound(bool, default OFF)"), "{keys}");
+    // The bundled answer guard reads this id, so it must stay registered:
+    // an id that is missing here is dropped from rdsh.json on the next write.
+    assert!(
+        keys.contains("features.answer_guard(bool, default ON)"),
+        "{keys}"
+    );
 }
 
 #[test]

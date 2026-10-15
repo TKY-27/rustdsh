@@ -1,11 +1,16 @@
+import { renderAttention } from "./attention-view.mjs";
 import { renderReports } from "./reports-view.mjs";
 import { renderQuestionCards } from "./question-cards-ui.mjs";
 import { renderAnswerApplications } from "./answer-applications-ui.mjs";
 import { renderOverview } from "./project-overview.mjs";
 import { renderConnectionDiagnostics } from "./connection-diagnostics-ui.mjs";
+import { renderGitHubStatus } from "./github-status-ui.mjs";
 import { createInstructionPanel } from "./instruction-queue-ui.mjs";
 import { createCostPanel } from "./cost-ledger-ui.mjs";
+import { createModelCatalogPanel } from "./model-catalog-ui.mjs";
 import { renderBudget } from "./budget-ui.mjs";
+import { renderModelRouting } from "./model-routing-ui.mjs";
+import { createTaskOutcomesPanel } from "./task-outcomes-ui.mjs";
 import { createHumanAnnotationPanel } from "./human-annotations-ui.mjs";
 import { setupObservedCli } from "./observed-cli-ui.mjs";
 
@@ -48,6 +53,50 @@ let latestState = null;
 let selectedTask = "";
 let selectionKey = "";
 let observedCli = null;
+let workspaceLayoutStorageKey = null;
+const workspaceLayouts = ["1", "2", "3"];
+function setWorkspaceLayout(value, { persist = true, announce = true } = {}) {
+  if (!workspaceLayouts.includes(value)) return false;
+  $("workspace-grid").dataset.layout = value;
+  document
+    .querySelectorAll('input[name="workspace-layout"]')
+    .forEach((input) => {
+      input.checked = input.value === value;
+    });
+  let saved = false;
+  if (persist && workspaceLayoutStorageKey) {
+    try {
+      localStorage.setItem(workspaceLayoutStorageKey, value);
+      saved = true;
+    } catch {}
+  }
+  if (announce) {
+    $("workspace-layout-status").textContent = saved
+      ? `PC表示の最大列数を${value}列に設定し、このブラウザーにprojectごとに保存しました。`
+      : "表示を変更しましたが、このブラウザーには保存できませんでした。";
+  }
+  return true;
+}
+function restoreWorkspaceLayout(projectId) {
+  let layout = "3";
+  if (typeof projectId === "string" && projectId.trim()) {
+    workspaceLayoutStorageKey =
+      `rdsh:workspace-layout:v1:${encodeURIComponent(projectId)}`;
+    try {
+      const saved = localStorage.getItem(workspaceLayoutStorageKey);
+      if (workspaceLayouts.includes(saved)) layout = saved;
+    } catch {}
+  }
+  setWorkspaceLayout(layout, { persist: false, announce: false });
+  $("workspace-layout-controls").disabled = false;
+}
+document
+  .querySelectorAll('input[name="workspace-layout"]')
+  .forEach((input) =>
+    input.addEventListener("change", () => {
+      if (input.checked) setWorkspaceLayout(input.value);
+    }),
+  );
 function navigateTo(id) {
   const target = $(id);
   if (!target) return;
@@ -137,12 +186,36 @@ $("diagnostics-refresh").onclick = async () => {
     $("diagnostics-refresh").disabled = false;
   }
 };
+$("github-status-refresh").onclick = async () => {
+  const button = $("github-status-refresh");
+  button.disabled = true;
+  $("github-status-message").textContent =
+    "ローカルSHA・追跡先・GitHubの状態を取得中…";
+  try {
+    const report = await api("github/status");
+    renderGitHubStatus($("github-status-result"), report, node);
+    $("github-status-message").textContent =
+      "読み取り専用の観測結果です。時刻とSHAを確認してください。";
+  } catch {
+    $("github-status-result").replaceChildren();
+    $("github-status-message").textContent =
+      "状態を取得できません。未確認として扱い、成功表示へ置き換えません。";
+  } finally {
+    button.disabled = false;
+  }
+};
 const renderInstructions = createInstructionPanel($("instruction-panel"), {
   node,
   api,
   refreshState,
 });
 const renderCosts = createCostPanel($("cost-ledger"), node);
+const renderTaskOutcomes = createTaskOutcomesPanel(
+  $("tasks"),
+  $("task-milestones"),
+  { node, api },
+);
+const renderCatalog = createModelCatalogPanel($("model-catalog"), node);
 const renderHumanAnnotations = createHumanAnnotationPanel(
   $("human-annotations-panel"),
   { api, node, navigateTo },
@@ -154,11 +227,13 @@ function render(state) {
   observedCli?.render(state);
   renderInstructions(state);
   renderCosts(state);
+  renderCatalog();
   renderBudget($("budget-admission"), state, node);
   updateOverview(state);
   renderHumanAnnotations(state);
   renderReports(state);
   const unanswered = state.questions.filter((question) => question.answer === null);
+  renderTaskOutcomes(state);
   renderQuestionCards($("questions"), unanswered, state.question_contracts, {
     node,
     api,
@@ -190,18 +265,45 @@ function render(state) {
         return element;
       }),
   );
+  renderAttention(state);
   $("connection").textContent = "接続済み · プロジェクト専用";
   $("updated").textContent =
     `最終受信: ${state.updated_at ? new Date(state.updated_at).toLocaleString("ja-JP") : "まだ報告がありません"} · 鮮度は各項目の観測時刻から判定します。累計欄は報告元のAPI換算値です。台帳は出所ごとの報告値です。`;
 }
 async function refreshState() {
+  await refreshModelRouting();
+}
+let routingRefreshing = false;
+async function refreshModelRouting() {
+  if (routingRefreshing) return;
+  routingRefreshing = true;
   try {
     render(await api("state"));
   } catch (e) {
     $("connection").textContent = e.message;
     $("overview-state").textContent = "画面の更新に失敗 · 対象の現在状態は不明";
   }
+  try {
+    renderModelRouting(
+      $("model-routing"),
+      (await api("model-routing")).runs,
+      node,
+    );
+  } catch {
+    $("model-routing").replaceChildren(
+      node(
+        "p",
+        "モデルの照合履歴を取得できません。現在のモデルは未確認です。",
+        "sub",
+      ),
+    );
+  } finally {
+    routingRefreshing = false;
+  }
 }
+setInterval(() => {
+  if (!document.hidden) void refreshModelRouting();
+}, 5000);
 let qrObjectUrl = null;
 async function renderShare(config) {
   const share = config.share;
@@ -346,6 +448,7 @@ document.addEventListener("keydown", (event) => {
 try {
   const config = await api("config");
   if (config.kind === "project") observedCli = setupObservedCli({ api });
+  restoreWorkspaceLayout(config.project?.id);
   await renderShare(config);
   if (config.kind === "harness") {
     $("connection-detail").hidden = true;
@@ -372,6 +475,9 @@ try {
         };
         $("managed-status").textContent =
           labels[scope?.status] ?? "所有する実行はありません";
+        $("managed-provider").textContent = value.provider
+          ? `起動先: ${value.provider.label} · ${value.provider.capabilities.connection} · 停止: ${value.provider.capabilities.stop}`
+          : "";
         $("managed-remaining").textContent = scope
           ? `残存プロセス ${scope.remaining_count ?? "未確認"} 件` +
             (scope.remaining_pids.length
