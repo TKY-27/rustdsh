@@ -89,7 +89,6 @@ test('status is truthful with no Desktop app and no profile', async (t) => {
   assert.equal(status.command.path, null);
   assert.deepEqual(status.profile.plugins.map((p) => [p.name, p.enabled]), [['rdsh-settings', false], ['rdsh-translation', false], ['rdsh-compute', false]]);
 });
-
 test('status reports the Desktop command and enabled plugins', async (t) => {
   const { box, env } = await baseEnv(t);
   const command = await stubCommand(box);
@@ -195,4 +194,3 @@ test('a --plugins-dir without the plugins is skipped for a real checkout', async
   assert.match(resolved, /plugins$/);
   assert.equal(existsSync(join(resolved, 'rdsh-settings', 'package.json')), true);
 });
-

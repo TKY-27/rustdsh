@@ -44,7 +44,9 @@ mod budget_admission;
 mod compact;
 mod compute;
 mod context;
+mod context_hook;
 mod cost_ledger;
+mod deps;
 mod desktop;
 mod dsh_args;
 mod file_lock;
@@ -72,6 +74,7 @@ mod tokens;
 mod tool_security;
 mod update_auto;
 mod websearch;
+mod worker_git;
 mod worker_scopes;
 
 #[derive(Parser, Debug)]
@@ -79,7 +82,7 @@ mod worker_scopes;
     name = "rdsh",
     version,
     about = "Rust fast launcher for dsh (safe: native fast-paths + passthrough)",
-    after_help = "USAGE:\n  rdsh [profile] [--profile <name>] [--patch <yml>...] [app-args...]\n  rdsh <native-subcommand> ...   (tokens|prune|search|search-web|compact|doctor|bench|serve|sessions|profiles|skills|logs|guard|compute|desktop|auth|setup|context|settings|features|subagents|provider|task-outcomes|budget-admission|cost-ledger|question-contracts|answer-applications|instruction-queue|update|worker-scope|dump-config|boot|serial-proxy)\n\nEXAMPLES:\n  rdsh tui                        boot tui profile (slim env ON, delegates to dsh)\n  rdsh --profile web --patch x.yml boot web with overlay\n  rdsh dump-config --profile tui  delegate exact dump to dsh\n  rdsh tokens ./AGENTS.md         estimate input tokens natively\n  rdsh auth --import --provider openai-codex   import only the selected provider\n  rdsh setup                      first-run connect: import, login flow, next steps\n  rdsh provider add hai --model deepseek-v4-flash   register HAI as a dsh route\n  rdsh provider add sarashina    register Sarashina (SARASHINA_API_KEY; mini and nano built in)\n  rdsh provider add local-openai --base-url http://host:8080/v1 --discover --no-key\n  rdsh provider list              presets and per-profile route/key status\n  rdsh search hello --dir .       fast file search without Node\n  rdsh search-web \"rust async\"      web search via SearXNG (no API key)\n  rdsh desktop status             detect the Desktop (Electron) app and its reserved profile\n  rdsh desktop install            attach the bundled rdsh plugins to that profile\n  rdsh --passthrough tui          no slim env; mandatory tool isolation remains\n  rdsh --dry-run tui -- --resume abc   show what would exec"
+    after_help = "USAGE:\n  rdsh [profile] [--profile <name>] [--patch <yml>...] [app-args...]\n  rdsh <native-subcommand> ...   (tokens|prune|search|search-web|compact|doctor|bench|serve|sessions|profiles|skills|logs|guard|compute|desktop|auth|setup|context|deps|settings|features|subagents|provider|task-outcomes|budget-admission|cost-ledger|question-contracts|answer-applications|instruction-queue|update|worker-scope|dump-config|boot|serial-proxy)\n\nEXAMPLES:\n  rdsh tui                        boot tui profile (slim env ON, delegates to dsh)\n  rdsh --profile web --patch x.yml boot web with overlay\n  rdsh dump-config --profile tui  delegate exact dump to dsh\n  rdsh tokens ./AGENTS.md         estimate input tokens natively\n  rdsh auth --import --provider openai-codex   import only the selected provider\n  rdsh setup                      first-run connect: import, login flow, next steps\n  rdsh provider add hai --model deepseek-v4-flash   register HAI as a dsh route\n  rdsh provider add sarashina    register Sarashina (SARASHINA_API_KEY; mini and nano built in)\n  rdsh provider add local-openai --base-url http://host:8080/v1 --discover --no-key\n  rdsh provider list              presets and per-profile route/key status\n  rdsh search hello --dir .       fast file search without Node\n  rdsh search-web \"rust async\"      web search via SearXNG (no API key)\n  rdsh desktop status             detect the Desktop (Electron) app and its reserved profile\n  rdsh desktop install            attach the bundled rdsh plugins to that profile\n  rdsh --passthrough tui          no slim env; mandatory tool isolation remains\n  rdsh --dry-run tui -- --resume abc   show what would exec"
 )]
 struct Cli {
     /// Explicitly share a project file with isolated model tools (repeatable).
@@ -264,6 +267,9 @@ enum Commands {
         #[arg(long, value_parser = parse_positive_usize)]
         rpm: Option<usize>,
     },
+    /// Internal JSON bridge for dashboard Git observations
+    #[command(name = "worker-git", hide = true)]
+    WorkerGit,
     /// Inventory, select and import only explicitly shared credentials
     Auth(auth_sharing::AuthArgs),
     /// Register an OpenAI-compatible endpoint (HAI, a home LLM server) as a
@@ -295,10 +301,15 @@ enum Commands {
         #[arg(long = "n")]
         n: Option<u32>,
     },
-    /// Context engine prototype (test): rebuild per-turn context from local files
+    /// Context engine (experimental): assemble or inject per-turn context, memory, hooks
     Context {
         #[command(subcommand)]
         action: ContextAction,
+    },
+    /// Static code-dependency graph: persistent index, symbol lookup, change impact
+    Deps {
+        #[command(subcommand)]
+        action: DepsAction,
     },
     /// Resident pure-compute worker (stdio NDJSON, opt-in Web PoC).
     /// No filesystem/auth/session access; DSH keeps the original path.
@@ -385,11 +396,11 @@ enum Commands {
     /// Pure logic: no provider call and no file write.
     #[command(name = "instruction-queue")]
     InstructionQueue {
-        /// validate | context | submit | resolve | control
+        /// validate | context | submit | resolve | control | serve
         action: String,
         /// Request JSON file holding { operation, state, input, context }
         #[arg(long = "input-file")]
-        input_file: String,
+        input_file: Option<String>,
     },
     /// Feature switches: list every optional capability, or turn one on/off
     Features {
@@ -534,6 +545,12 @@ enum ContextAction {
         query: Option<String>,
         #[arg(long = "budget")]
         budget: Option<usize>,
+        /// Past sessions to carry over (overrides settings context.max_sessions)
+        #[arg(long = "sessions")]
+        sessions: Option<usize>,
+        /// Exit 3 when the repository changed while the context was assembled
+        #[arg(long = "require-stable")]
+        require_stable: bool,
         #[arg(long = "json")]
         json: bool,
     },
@@ -555,6 +572,121 @@ enum ContextAction {
         query: Option<String>,
         #[arg(long = "budget")]
         budget: Option<usize>,
+    },
+    /// Emit the hook JSON that injects this turn's context (DSH UserPromptSubmit)
+    Inject {
+        /// Hook event: user-prompt-submit (default) or session-start
+        #[arg(long = "event", default_value = "user-prompt-submit")]
+        event: String,
+        /// Prompt text; without it the hook payload on stdin is used
+        #[arg(long = "query")]
+        query: Option<String>,
+        /// Past sessions to carry over (default: settings context.inject_session_count)
+        #[arg(long = "sessions")]
+        sessions: Option<usize>,
+        /// Add diagnostics to the emitted JSON (never changes additionalContext)
+        #[arg(long = "json")]
+        json: bool,
+    },
+    /// Remember one item: goal / decision / constraint / task / file / note
+    Remember {
+        text: String,
+        /// Item kind (default: note)
+        #[arg(long = "kind")]
+        kind: Option<String>,
+        #[arg(long = "json")]
+        json: bool,
+    },
+    /// List remembered items (active and superseded)
+    Memory {
+        #[arg(long = "json")]
+        json: bool,
+    },
+    /// Extract memory candidates from a session transcript (dry-run by default)
+    Distill {
+        /// Transcript path (default: newest session under $DSH_HOME/sessions)
+        #[arg(long = "session")]
+        session: Option<String>,
+        /// Write the extracted items into the memory store
+        #[arg(long = "apply")]
+        apply: bool,
+        #[arg(long = "json")]
+        json: bool,
+    },
+    /// Drop one remembered item from the active set (history is kept)
+    Forget {
+        id: String,
+        #[arg(long = "json")]
+        json: bool,
+    },
+    /// Install the inject hook into a DSH hooks.json (idempotent)
+    Hook {
+        #[command(subcommand)]
+        action: HookAction,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum HookAction {
+    /// Add the UserPromptSubmit entry that calls rdsh context inject
+    Install {
+        /// Hook config path (default: $DSH_HOME/hooks.json)
+        #[arg(long = "path")]
+        path: Option<String>,
+        /// rdsh binary to reference (default: rdsh, resolved from PATH)
+        #[arg(long = "rdsh")]
+        rdsh: Option<String>,
+        /// Print the resulting file without writing it
+        #[arg(long = "dry-run")]
+        dry_run: bool,
+        #[arg(long = "json")]
+        json: bool,
+    },
+    /// Show whether the entry is present
+    Status {
+        #[arg(long = "path")]
+        path: Option<String>,
+        #[arg(long = "json")]
+        json: bool,
+    },
+    /// Remove the entry (other hooks are left untouched)
+    Remove {
+        #[arg(long = "path")]
+        path: Option<String>,
+        #[arg(long = "dry-run")]
+        dry_run: bool,
+        #[arg(long = "json")]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum DepsAction {
+    /// Build or refresh the persistent dependency index
+    Build {
+        /// Repository root (default: the current directory)
+        #[arg(long = "root")]
+        root: Option<String>,
+        /// Re-parse every file instead of reusing unchanged entries
+        #[arg(long = "force")]
+        force: bool,
+        #[arg(long = "json")]
+        json: bool,
+    },
+    /// Show where a symbol is defined and referenced
+    Query {
+        symbol: String,
+        #[arg(long = "json")]
+        json: bool,
+    },
+    /// List what depends on a file or symbol, and the tests that cover it
+    Impact {
+        target: String,
+        /// Transitive depth (default 3, max 8)
+        #[arg(long = "depth")]
+        depth: Option<usize>,
+        #[arg(long = "json")]
+        json: bool,
     },
 }
 
@@ -613,11 +745,13 @@ const NATIVE_FIRST: &[&str] = &[
     "setup",
     "search-web",
     "context",
+    "deps",
     "settings",
     "features",
     "cost-ledger",
     "update",
     "serial-proxy",
+    "worker-git",
     "subagents",
     "task-outcomes",
     "budget-admission",
@@ -660,6 +794,13 @@ fn main() {
     }
     // NOTE: --version/-V is served by clap itself (prints "rdsh x.y.z", exit 0).
     let cli = Cli::parse();
+    if matches!(cli.command.as_ref(), Some(Commands::WorkerGit)) {
+        if let Err(error) = worker_git::cmd() {
+            eprintln!("[rdsh] error: {error:#}");
+            std::process::exit(1);
+        }
+        return;
+    }
     if let Some(Commands::WorkerScope { action }) = &cli.command {
         let result = match action {
             WorkerScopeAction::Validate => worker_scopes::cmd_validate(),
@@ -684,6 +825,24 @@ fn main() {
     // Recovery, pure task-outcome and cost-ledger validators, and the pure
     // subagent planner do not depend on settings. Commands that use settings
     // still fail closed on a corrupt document.
+    // A DSH hook must never block a prompt. `context inject` therefore runs
+    // before anything reads the settings document: a corrupt or unreadable
+    // rdsh.json must not turn an injection into a failed hook call.
+    if let Some(Commands::Context {
+        action:
+            ContextAction::Inject {
+                event,
+                query,
+                sessions,
+                json,
+            },
+    }) = &cli.command
+    {
+        let _ = context::cmd_inject(event.as_str(), query.clone(), *sessions, *json);
+        std::process::exit(0);
+    }
+    // Explicit recovery must work even when the current settings cannot be read.
+    // Every other command still fails closed on a corrupt settings document.
     let cfg = if matches!(
         &cli.command,
         Some(Commands::Settings {
@@ -779,6 +938,7 @@ fn main() {
             max_body_bytes,
             rpm,
         }),
+        Some(Commands::WorkerGit) => unreachable!("worker-git handled before settings load"),
         Some(Commands::Bench { n }) => bench(n.unwrap_or(cfg.bench.n)),
         Some(Commands::Compute { once }) => compute::cmd_compute(once),
         Some(Commands::WorkerScope { .. }) => {
@@ -972,9 +1132,18 @@ fn main() {
         Some(Commands::AnswerApplications { action, input_file }) => {
             answer_applications::cmd_answer_applications(&action, &input_file)
         }
-        Some(Commands::InstructionQueue { action, input_file }) => {
-            instruction_queue::cmd_instruction_queue(&action, &input_file)
-        }
+        Some(Commands::InstructionQueue { action, input_file }) => match action.as_str() {
+            "serve" if input_file.is_none() => instruction_queue::cmd_instruction_queue_serve(),
+            "serve" => Err(anyhow::anyhow!(
+                "instruction-queue serve does not accept --input-file"
+            )),
+            _ => match input_file {
+                Some(input_file) => instruction_queue::cmd_instruction_queue(&action, &input_file),
+                None => Err(anyhow::anyhow!(
+                    "--input-file is required for instruction-queue actions"
+                )),
+            },
+        },
         Some(Commands::Features { action, json }) => match action {
             None => features_list(&cfg, json),
             Some(FeaturesAction::On { id }) => features_toggle(&id, true),
@@ -1010,23 +1179,98 @@ fn main() {
             }) => desktop::cmd_verify(&require, json || inner),
         },
         Some(Commands::Context { action }) => {
-            if !rdsh_config::feature_enabled(&cfg, "context_engine") {
+            // inject runs as a DSH hook: it must never block a prompt, so it
+            // decides internally (feature switch + fail-open) and always exits 0.
+            if let ContextAction::Inject {
+                event,
+                query,
+                sessions,
+                json,
+            } = action
+            {
+                context::cmd_inject(&event, query, sessions, json)
+            } else {
+                let engine_on = rdsh_config::feature_enabled(&cfg, "context_engine");
+                match action {
+                    // Hook wiring edits a config file; it stays usable with the
+                    // engine off, but says plainly that nothing will be injected.
+                    ContextAction::Hook { action } => {
+                        if !engine_on {
+                            eprintln!(
+                                "[rdsh] note: context_engine is OFF — the hook injects nothing until: rdsh features on context_engine"
+                            );
+                        }
+                        match action {
+                            HookAction::Install {
+                                path,
+                                rdsh,
+                                dry_run,
+                                json,
+                            } => context_hook::cmd_hook("install", path, rdsh, dry_run, json),
+                            HookAction::Status { path, json } => {
+                                context_hook::cmd_hook("status", path, None, false, json)
+                            }
+                            HookAction::Remove {
+                                path,
+                                dry_run,
+                                json,
+                            } => context_hook::cmd_hook("remove", path, None, dry_run, json),
+                        }
+                    }
+                    _ if !engine_on => {
+                        eprintln!(
+                            "[rdsh] context engine is OFF by default (experimental) — enable with: rdsh features on context_engine"
+                        );
+                        std::process::exit(2);
+                    }
+                    ContextAction::Build {
+                        query,
+                        budget,
+                        sessions,
+                        require_stable,
+                        json,
+                    } => context::cmd_build(context::BuildOptions {
+                        query,
+                        budget,
+                        sessions,
+                        require_stable,
+                        json,
+                    }),
+                    ContextAction::Search { query, max } => {
+                        context::cmd_search(query, max.unwrap_or(cfg.context.max_code_hits))
+                    }
+                    ContextAction::Status { json } => context::cmd_status(json),
+                    ContextAction::Explain { query, budget } => context::cmd_explain(query, budget),
+                    ContextAction::Remember { text, kind, json } => {
+                        context::cmd_remember(text, kind, json)
+                    }
+                    ContextAction::Memory { json } => context::cmd_memory(json),
+                    ContextAction::Distill {
+                        session,
+                        apply,
+                        json,
+                    } => context::cmd_distill(session, apply, json),
+                    ContextAction::Forget { id, json } => context::cmd_forget(id, json),
+                    // inject and hook are handled above.
+                    ContextAction::Inject { .. } => Ok(()),
+                }
+            }
+        }
+        Some(Commands::Deps { action }) => {
+            if !rdsh_config::feature_enabled(&cfg, "dep_graph") {
                 eprintln!(
-                    "[rdsh] context engine is OFF by default (experimental) — enable with: rdsh features on context_engine"
+                    "[rdsh] dependency graph is OFF — enable with: rdsh features on dep_graph"
                 );
                 std::process::exit(2);
             }
             match action {
-                ContextAction::Build {
-                    query,
-                    budget,
+                DepsAction::Build { root, force, json } => deps::cmd_build(root, force, json),
+                DepsAction::Query { symbol, json } => deps::cmd_query(symbol, json),
+                DepsAction::Impact {
+                    target,
+                    depth,
                     json,
-                } => context::cmd_build(query, budget, json),
-                ContextAction::Search { query, max } => {
-                    context::cmd_search(query, max.unwrap_or(cfg.context.max_code_hits))
-                }
-                ContextAction::Status { json } => context::cmd_status(json),
-                ContextAction::Explain { query, budget } => context::cmd_explain(query, budget),
+                } => deps::cmd_impact(target, depth.unwrap_or(3).clamp(1, 8), json),
             }
         }
         Some(Commands::Auth(args)) => auth::cmd_auth(args, dry),
@@ -2323,6 +2567,10 @@ mod default_profile_tests {
             .split('|')
             .collect();
         for name in crate::NATIVE_FIRST {
+            if *name == "worker-git" {
+                // Internal dashboard bridge is native-first but intentionally hidden from help.
+                continue;
+            }
             assert!(listed.contains(name), "after_help is missing {name:?}");
         }
     }
