@@ -66,6 +66,22 @@ updates:
       prefix: chore(deps)
     open-pull-requests-limit: 5
   - package-ecosystem: npm
+    directory: /plugins/rdsh-mcp-oauth
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: chore(deps)
+    open-pull-requests-limit: 5
+  - package-ecosystem: npm
+    directory: /plugins/mcp-resource-artifacts
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: chore(deps)
+    open-pull-requests-limit: 5
+  - package-ecosystem: npm
     directory: /tests/e2e
     schedule:
       interval: weekly
