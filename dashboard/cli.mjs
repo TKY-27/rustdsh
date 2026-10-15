@@ -24,6 +24,7 @@ import { Checkpoints } from "./checkpoints.mjs";
 import { AcceptanceStore } from "./acceptance.mjs";
 import { ExecutionPlans } from "./execution-plan.mjs";
 import { registerDashboardShutdown } from "./shutdown.mjs";
+import { WorkflowRecipes, recipeApprovalQuestion } from "./workflow-recipes.mjs";
 import { ModelRouting } from "./model-routing.mjs";
 import { requestedSelection, validSelection } from "./model-selection.mjs";
 import { ReplyConsumer } from "./reply-consumer.mjs";
@@ -92,6 +93,10 @@ rdsh-dashboard acceptance define|run|report|inspect --project <directory> --task
 rdsh-dashboard plan define --project <directory> --input-file <json>
 rdsh-dashboard plan enforce --project <directory> --plan-id <id> --run-id <confirmed-run>
 rdsh-dashboard plan inspect|stop --project <directory> [--plan-id <id>]
+rdsh-dashboard recipe save --project <directory> --input-file <recipe.json> --expected-revision <n>
+rdsh-dashboard recipe list --project <directory>
+rdsh-dashboard recipe inspect --project <directory> --recipe-id <id> [--expected-revision <n>]
+rdsh-dashboard recipe preview|apply --project <directory> --recipe-id <id> [--expected-revision <n>] --run-id <confirmed-run> --plan-id <id> --input-file <bindings.json> [--preview-token <token>]
 rdsh-dashboard routing bind|enforce|inspect|probe|allow-change --project <directory> --run-id <id> [--route-file <json>] [--authorization-file <json>] [--executable <original-dsh>] [--entrypoint <bin.js>]
 rdsh-dashboard session-ledger list|record|resolve|start|resume --project <directory> [--run-id <run_id>] [--task-id <id>] [--session-id <id>] [--label <name>] [--provider <name>] [--cwd <directory>] [--cli <name>] [--executable <original-dsh>] [--entrypoint <bin.js>] [--docker-linux-worker --docker-worker-mount-root <directory>]
 rdsh-dashboard reply-consumer inspect|once|serve --project <directory> [--run-id <run_id>] [--command-id <reply_id>] [--executable <original-dsh>] [--entrypoint <bin.js>]
@@ -167,6 +172,8 @@ const { values, positionals } = parseArgs({
     entrypoint: { type: "string" },
     "run-id": { type: "string" },
     "plan-id": { type: "string" },
+    "recipe-id": { type: "string" },
+    "preview-token": { type: "string" },
     "task-id": { type: "string" },
     "session-id": { type: "string" },
     label: { type: "string" },
@@ -575,11 +582,11 @@ try {
     throw new Error("Backup options require backup");
   if (
     values["expected-revision"] !== undefined &&
-    !["backup", "integration", "workers"].includes(command) &&
+    !["backup", "integration", "workers", "recipe"].includes(command) &&
     !(command === "project-move" && positionals[1] === "apply")
   )
     throw new Error(
-      "Expected revision requires backup, integration, workers or project-move apply",
+      "Expected revision requires backup, integration, workers, recipe or project-move apply",
     );
   if (
     values["expected-head"] !== undefined &&
@@ -646,8 +653,8 @@ try {
     )
   )
     throw new Error("Model route options require routing");
-  if (command !== "plan" && values["plan-id"] !== undefined)
-    throw new Error("Plan options require plan");
+  if (!["plan", "recipe"].includes(command) && values["plan-id"] !== undefined)
+    throw new Error("Plan options require plan or recipe");
   if (values.help || !command) {
     console.log(help);
   } else if (command === "set-contract") {
@@ -846,6 +853,133 @@ try {
         action === "stop"
           ? await plans.stop(values["plan-id"])
           : await plans.inspect(values["plan-id"] ?? null);
+    }
+    console.log(JSON.stringify(result, null, 2));
+  } else if (command === "recipe") {
+    const action = positionals[1],
+      allowed = new Set([
+        "project",
+        "recipe-id",
+        "run-id",
+        "plan-id",
+        "input-file",
+        "expected-revision",
+        "preview-token",
+        "help",
+      ]);
+    if (
+      positionals.length !== 2 ||
+      !["save", "list", "inspect", "preview", "apply"].includes(action) ||
+      Object.keys(values).some((key) => !allowed.has(key))
+    )
+      throw new Error("Specify recipe save, list, inspect, preview or apply with supported options");
+    const project = await identity(values.project || process.cwd()),
+      recipes = WorkflowRecipes.open(project);
+    let result;
+    if (action === "save") {
+      if (values["recipe-id"] || values["run-id"] || values["plan-id"] || values["preview-token"] || values["expected-revision"] === undefined)
+        throw new Error("recipe save requires --input-file and --expected-revision only");
+      result = await recipes.save(
+        await localJson(values["input-file"]),
+        Number(values["expected-revision"]),
+      );
+    } else if (action === "list") {
+      if ([values["recipe-id"], values["run-id"], values["plan-id"], values["input-file"], values["expected-revision"], values["preview-token"]].some((item) => item !== undefined))
+        throw new Error("recipe list takes no options except --project");
+      result = await recipes.list();
+    } else if (action === "inspect") {
+      if (!values["recipe-id"] || [values["run-id"], values["plan-id"], values["input-file"], values["preview-token"]].some((item) => item !== undefined))
+        throw new Error("recipe inspect requires --recipe-id and optional --expected-revision");
+      result = await recipes.get(
+        values["recipe-id"],
+        values["expected-revision"] === undefined ? null : Number(values["expected-revision"]),
+      );
+    } else {
+      if (!values["recipe-id"] || !values["run-id"] || !values["plan-id"] || !values["input-file"] ||
+        (action === "preview" && values["preview-token"] !== undefined) ||
+        (action === "apply" && !values["preview-token"]))
+        throw new Error("recipe preview/apply requires --recipe-id, --run-id, --plan-id and --input-file; apply also requires --preview-token");
+      const bindings = await localJson(values["input-file"]);
+      result = await recipes.preview(
+        values["recipe-id"],
+        values["expected-revision"] === undefined ? null : Number(values["expected-revision"]),
+        values["run-id"],
+        bindings,
+        values["plan-id"],
+      );
+      if (action === "apply") {
+        if (result.status !== "ready" || !result.plan_definition) {
+          process.exitCode = 2;
+        } else {
+          if (result.preview_token !== values["preview-token"])
+            throw new Error("recipe_preview_changed; inspect the fresh preview before applying");
+          const version = await recipes.get(values["recipe-id"], result.recipe.revision),
+            ledger = await SessionLedger.open(project),
+            run = await ledger.resolve(values["run-id"]),
+            projectStore = await ProjectStore.open(project),
+            plans = ExecutionPlans.open(project),
+            existing = (await plans.read()).plans.some(
+              (item) => item.definition.plan_id === values["plan-id"],
+            );
+          if (existing) throw new Error("plan_id_unavailable");
+          const definition = structuredClone(result.plan_definition),
+            questionIds = [],
+            bindingsByStep = bindings;
+          try {
+            for (const step of version.definition.steps) {
+              if (!step.approval) continue;
+              const taskId = bindingsByStep[step.key],
+                questionId = "recipe_" + randomUUID(),
+                { ref, ...question } = recipeApprovalQuestion({
+                  questionId,
+                  planId: values["plan-id"],
+                  targetHash: definition.recipe.target_hash,
+                  run,
+                  taskId,
+                  step,
+                  budget: version.definition.max_budget_usd,
+                  expiresAt: definition.limits.stop_at,
+                });
+              await projectStore.mutate("question", question);
+              questionIds.push(questionId);
+              const card = projectStore.value.question_contracts.cards[questionId];
+              const node = definition.nodes.find((item) => item.task_id === taskId);
+              if (!node) throw new Error("recipe_step_binding_changed");
+              node.approval = {
+                question_id: questionId,
+                revision: card.revision,
+                fingerprint: card.fingerprint,
+                action_id: ref.action_id,
+                action_revision: ref.action_revision,
+              };
+            }
+            const plan = await plans.define(definition);
+            result = {
+              status: "disabled_plan_created",
+              execution_started: false,
+              plan,
+              approval_question_ids: questionIds,
+              next_step:
+                "Review each typed approval in the dashboard, then explicitly run plan enforce for the confirmed native session.",
+            };
+          } catch (error) {
+            for (const id of questionIds) {
+              const card = projectStore.value.question_contracts.cards[id];
+              if (card?.status === "open") {
+                await projectStore
+                  .mutate("question", {
+                    id,
+                    action: "cancel",
+                    expected_revision: card.revision,
+                    cancel_reason: "Recipe plan creation did not complete",
+                  })
+                  .catch(() => {});
+              }
+            }
+            throw error;
+          }
+        }
+      }
     }
     console.log(JSON.stringify(result, null, 2));
   } else if (command === "release") {
