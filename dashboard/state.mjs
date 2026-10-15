@@ -58,6 +58,12 @@ import {
   validateDecisionLog,
   publicDecisionReferences,
 } from "./decision-log.mjs";
+import {
+  activateProjectProfile,
+  createProjectProfile,
+  emptyProfileCatalog,
+  validateProfileCatalog,
+} from "./project-profiles.mjs";
 
 // Bucket D display notes preserve schema 1; explicit state migrations can move
 // legacy projects to schema 2 without changing nested extension schemas.
@@ -127,6 +133,7 @@ export class ProjectStore {
         questions: [],
         events: [],
         feedback: [],
+        profile_catalog: emptyProfileCatalog(),
       };
     }
     if (
@@ -154,6 +161,8 @@ export class ProjectStore {
     validateBudgetAdmission(value);
     validateUiSurfaces(value);
     validateDecisionLog(value);
+    if (value.profile_catalog !== undefined)
+      validateProfileCatalog(value.profile_catalog);
     validateTaskOutcomes(value);
     return new ProjectStore(project, value, options);
   }
@@ -265,6 +274,8 @@ export class ProjectStore {
       ui_surface: "dashboard.ui.presented",
       ui_action: "dashboard.ui.action",
       decision_log: "dashboard.decision.recorded",
+      profile_save: "dashboard.profile.updated",
+      profile_activate: "dashboard.profile.activated",
     };
     const summary =
       operation === "answer"
@@ -273,7 +284,9 @@ export class ProjectStore {
           ? input.question || input.cancel_reason
           : operation === "decision_log"
             ? input.policy || input.action || input.subject || "決定ログを更新"
-            : input.title || "指標を更新";
+            : operation?.startsWith("profile_")
+              ? input.name || input.id || "運用プロファイルを更新"
+              : input.title || "指標を更新";
     if (operation) {
       next.changes ||= [];
       next.changes.push({
@@ -575,6 +588,14 @@ export function applyOperation(state, operation, input) {
       applyTaskOutcomes(state, input);
       if (index < 0) state.tasks.push(task);
       else state.tasks[index] = task;
+      break;
+    }
+    case "profile_save": {
+      createProjectProfile(state, input);
+      break;
+    }
+    case "profile_activate": {
+      activateProjectProfile(state, input);
       break;
     }
     case "question": {

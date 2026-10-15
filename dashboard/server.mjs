@@ -44,6 +44,10 @@ import {
   isHandoffPacket,
 } from "./handoffs.mjs";
 import {
+  emptyProfileCatalog,
+  previewProjectProfile,
+} from "./project-profiles.mjs";
+import {
   ConnectionObservations,
   connectionReport,
   inspectTunnel,
@@ -1300,6 +1304,35 @@ export async function startDashboard(options) {
             "content-length": String(preview.bytes.length),
           });
           return res.end(preview.bytes);
+        }
+        if (kind === "project" && req.method === "GET" && route === "/api/profiles") {
+          if (!humanAuthorized)
+            return json(res, 403, { error: "Human browser credential required" });
+          return json(res, 200, store.value.profile_catalog || emptyProfileCatalog());
+        }
+        if (
+          kind === "project" &&
+          req.method === "POST" &&
+          ["/api/profiles/save", "/api/profiles/activate"].includes(route)
+        ) {
+          if (!humanAuthorized)
+            return json(res, 403, { error: "Human browser credential required" });
+          const operation = route.endsWith("/save") ? "profile_save" : "profile_activate";
+          await mutate(operation, await readBody(req));
+          return json(res, 200, store.value.profile_catalog);
+        }
+        if (
+          kind === "project" &&
+          req.method === "POST" &&
+          route === "/api/profiles/preview"
+        ) {
+          if (!humanAuthorized)
+            return json(res, 403, { error: "Human browser credential required" });
+          return json(
+            res,
+            200,
+            previewProjectProfile(store.value, await readBody(req)),
+          );
         }
         if (req.method === "GET" && route === "/api/handoff") {
           if (!mcpAuthorized)
