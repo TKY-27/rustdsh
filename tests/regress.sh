@@ -181,7 +181,8 @@ if grep -q -- "--version" "$ZS/calls" 2>/dev/null; then ok "sessions --tokens pr
 # The piped bytes are the only identity a stdin-streamed child sees: they must
 # equal the s2 frame exactly, which also proves s1 (with a content size) was
 # never handed to `-dc`.
-if grep -q -- "-dc" "$ZS/calls" && [ -f "$ZS/stdin" ] && cmp -s "$ZS/stdin" "$ZS/dsh/sessions/p/s2/a.zstd"; then ok "zstd -dc streams only the frame without a content size"; else echo "FAIL: zstd -dc must stream exactly the size-less s2 frame"; cat "$ZS/calls" 2>/dev/null; exit 1; fi
+if [ "$(grep -c -- '^-dc$' "$ZS/calls")" = 1 ] && [ "$(grep -c -- '-dc' "$ZS/calls")" = 1 ]; then ok "one path-free zstd -dc call"; else echo "FAIL: expected one path-free zstd -dc call"; cat "$ZS/calls"; exit 1; fi
+if [ -f "$ZS/stdin" ] && cmp -s "$ZS/stdin" "$ZS/dsh/sessions/p/s2/a.zstd"; then ok "zstd -dc streams only the frame without a content size"; else echo "FAIL: zstd -dc must stream exactly the size-less s2 frame"; cat "$ZS/calls" 2>/dev/null; exit 1; fi
 if grep -q "zstd CLI not found" "$ZS/err"; then echo "FAIL: zstd note printed although the CLI is available"; exit 1; else ok "no zstd note when the CLI exists"; fi
 rm -f "$ZS/shim/zstd"
 PATH="$ZS/shim" RDSH_TOKENS_CACHE=0 DSH_HOME="$ZS/dsh" "$BIN" sessions --tokens --project p --limit 5 > "$ZS/out" 2> "$ZS/err"

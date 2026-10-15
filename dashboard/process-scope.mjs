@@ -739,7 +739,9 @@ export async function spawnOwnedProcess({
     scope_path: initial.scope_path ?? null,
     inspect,
     async release() {
-      const result = await request("release");
+      // Deferred release performs the actual launch and identity observation.
+      // Give it the startup budget rather than the shorter control-request one.
+      const result = await request("release", startupTimeoutMs);
       if (Number.isSafeInteger(result?.root_pid) && result.root_pid > 0) {
         descriptor.root_pid = result.root_pid;
         descriptor.root_identity = validProcessIdentity(result.root_identity)

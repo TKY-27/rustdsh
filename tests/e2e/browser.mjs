@@ -205,6 +205,19 @@ try{
  assert.equal(await projectPage.locator('#palette-list [role="option"]').count(),5);
  assert.equal(await paletteSearch.getAttribute('aria-expanded'),'true');
  assert.equal(await paletteSearch.getAttribute('aria-activedescendant'),'palette-option-toggle-share');
+ for(const composition of [{isComposing:true,keyCode:0},{isComposing:false,keyCode:229}]){
+  await paletteSearch.evaluate(e=>e.dispatchEvent(new CompositionEvent('compositionstart',{bubbles:true,data:'共有'})));
+  for(const key of ['ArrowDown','ArrowUp','Escape','Enter']){
+   const result=await paletteSearch.evaluate((e,{key,composition})=>{
+    const snapshot=()=>({open:document.querySelector('#palette').open,active:e.getAttribute('aria-activedescendant'),expanded:e.getAttribute('aria-expanded'),focus:document.activeElement.id});
+    const before=snapshot(),event=new KeyboardEvent('keydown',{key,...composition,bubbles:true,cancelable:true});
+    e.dispatchEvent(event);return {before,after:snapshot(),prevented:event.defaultPrevented};
+   },{key,composition});
+   assert.deepEqual(result.after,result.before,`IME ${key} must leave the palette unchanged (${JSON.stringify(composition)})`);
+   assert.equal(result.prevented,false,`IME ${key} must remain available for composition`);
+  }
+  await paletteSearch.evaluate(e=>e.dispatchEvent(new CompositionEvent('compositionend',{bubbles:true,data:'共有'})));
+ }
  await paletteSearch.fill('share');
  assert.equal(await projectPage.locator('#palette-list [role="option"]').count(),2);
  assert.equal(await projectPage.locator('#palette-count').getAttribute('role'),'status');
@@ -221,6 +234,7 @@ try{
  await paletteSearch.press('Escape');
  await palette.waitFor({state:'hidden'});
  await projectPage.waitForFunction(()=>document.activeElement.id==='palette-toggle');
+ await projectPage.waitForFunction(()=>document.querySelector('#palette-toggle').getAttribute('aria-expanded')==='false');
  assert.equal(await projectPage.evaluate(()=>document.activeElement.id),'palette-toggle');
  assert.equal(await projectPage.locator('#share').isHidden(),true,'Esc must cancel without running the selected command');
  assert.equal(await projectPage.locator('#palette-toggle').getAttribute('aria-expanded'),'false');

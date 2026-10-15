@@ -189,6 +189,10 @@ fn legacy_cache_cannot_promote_an_old_estimate_to_exact() {
         assert_eq!(row["tokens"], 2048);
         assert_eq!(row["tokens_exact"], true);
     } else {
+        // Without a safe beneath-directory open, use a fresh inexact estimate.
+        // The legacy cache's decompressed size must not become an exact result.
+        assert_eq!(row["tokens"], metadata.len() / 4);
+        assert_ne!(row["tokens"], 1024);
         assert_eq!(row["tokens_exact"], false);
     }
 }

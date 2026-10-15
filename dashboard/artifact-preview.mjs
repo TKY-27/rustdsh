@@ -202,7 +202,9 @@ export async function openedFileMatches(handle, stat, rootReal, resolvedPath) {
   }
   let current;
   try {
-    current = await fs.stat(resolvedPath);
+    const currentReal = await fs.realpath(resolvedPath);
+    if (!inside(rootReal, currentReal)) return false;
+    current = await fs.stat(currentReal);
   } catch {
     return false;
   }

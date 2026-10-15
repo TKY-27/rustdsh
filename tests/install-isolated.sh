@@ -130,7 +130,7 @@ register_cases() {
     "CASE OK: unsupported-arch" "" 0 ""
   # CLI behaviors that a new user hits right after installing.
   add_case "cli/as-dsh-roundtrip" "ubuntu-24.04" "as-dsh-roundtrip.sh" ok \
-    "CASE OK: as-dsh-roundtrip" "" 0 ""
+    "CASE OK: as-dsh-roundtrip" "" 1 ""
   add_case "cli/reinstall" "ubuntu-24.04" "reinstall.sh" ok \
     "CASE OK: reinstall" "" 0 ""
   add_case "cli/wsl-detect" "ubuntu-24.04" "wsl-detect.sh" ok \

@@ -24,6 +24,35 @@ out="$("$PREFIX/dsh" doctor 2>&1)"
 case "$out" in *rdsh*) ;; *) echo "dsh is not rdsh after --as-dsh: $out" >&2; exit 1 ;; esac
 expect_version
 
+# A standalone install may update rdsh while the owned dsh shadow stays at its
+# earlier build. Both archives are genuine staged release builds for this case.
+shadow_sum="$(sha256sum "$PREFIX/dsh" | awk '{print $1}')"
+install_rdsh --from-release --musl
+updated_sum="$(sha256sum "$PREFIX/rdsh" | awk '{print $1}')"
+[ "$updated_sum" != "$shadow_sum" ] || { echo "update fixture did not use a different build" >&2; exit 1; }
+[ "$(sha256sum "$PREFIX/dsh" | awk '{print $1}')" = "$shadow_sum" ] || { echo "standalone update changed the dsh shadow" >&2; exit 1; }
+
+# Receipts are raw ASCII records; Bash read must not silently discard NUL bytes.
+receipt="$PREFIX/.rdsh-dsh-shadow"
+IFS= read -r receipt_line < "$receipt"
+backup_sum="$(sha256sum "$PREFIX/dsh-orig" | awk '{print $1}')"
+for nul_position in in after; do
+  if [ "$nul_position" = in ]; then
+    printf '%s\0%s\n' "${receipt_line:0:32}" "${receipt_line:32}" > "$receipt"
+  else
+    printf '%s\n\0' "$receipt_line" > "$receipt"
+  fi
+  invalid_receipt_sum="$(sha256sum "$receipt" | awk '{print $1}')"
+  if bash /install.sh --restore; then
+    echo "restore accepted a NUL $nul_position the receipt" >&2
+    exit 1
+  fi
+  [ "$(sha256sum "$PREFIX/dsh" | awk '{print $1}')" = "$shadow_sum" ] || { echo "refused restore changed the dsh shadow" >&2; exit 1; }
+  [ "$(sha256sum "$PREFIX/dsh-orig" | awk '{print $1}')" = "$backup_sum" ] || { echo "refused restore changed the original backup" >&2; exit 1; }
+  [ "$(sha256sum "$receipt" | awk '{print $1}')" = "$invalid_receipt_sum" ] || { echo "refused restore changed the receipt" >&2; exit 1; }
+done
+printf '%s\n' "$receipt_line" > "$receipt"
+
 bash /install.sh --restore
 out="$("$PREFIX/dsh")"
 case "$out" in original-dsh*) ;; *) echo "restore did not bring the original dsh back: $out" >&2; exit 1 ;; esac
