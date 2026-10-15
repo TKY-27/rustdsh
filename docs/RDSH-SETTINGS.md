@@ -82,7 +82,8 @@ rdsh context status   # 有効化後に記憶の状態を見る
 | discord | on | Discord Rich Presence（DSH Web が動いているときだけ表示） |
 | update_check | on | 更新確認と更新バナーの表示 |
 | update_notifications | on | 更新が見つかったときの通知 |
-| sound | off | DSH サウンド通知の導入（インストーラの SOUND=1） |
+| sound | on | DSH サウンド通知の導入（不要ならインストーラの SOUND=0／`features.sound=false`） |
+| gitview | on | DSH Git パネルの導入（不要ならインストーラの GITVIEW=0／`features.gitview=false`） |
 | serve | off | ローカル閲覧画面（rdsh serve） |
 | search-web | off | SearXNG 経由の Web 検索 |
 | context_engine | off | 実験的なコンテキストエンジン |

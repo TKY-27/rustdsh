@@ -64,6 +64,8 @@ jobs:
         run: python3 -m unittest discover -s tests -p 'test_release_*.py'
       - name: Test ICO directory validation
         run: python3 -m unittest discover -s tests -p 'test_icon_generation.py'
+      - name: Test branch cleanup safeguards
+        run: python3 -m unittest discover -s tests -p 'test_branch_cleanup.py'
       - name: Check the current version's release notes
         run: |
           version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')
@@ -78,6 +80,26 @@ jobs:
         with:
           node-version: 22
       - run: node --test tests/update-banner.test.mjs
+
+  fedora:
+    name: Fedora packages
+    runs-on: ubuntu-latest
+    container: fedora:latest
+    timeout-minutes: 45
+    steps:
+      # The package names here are the ones docs/FEDORA.md documents; if Fedora
+      # renames one, this job fails before a user hits it.
+      - run: dnf install -y --setopt=install_weak_deps=False git gcc gcc-c++ make cargo zstd bubblewrap nodejs python3 tar gzip curl diffutils findutils
+      - uses: actions/checkout@v7
+      - run: cargo build --locked
+      - run: cargo test --locked
+      - name: doctor reports the Fedora dependency state
+        run: './target/debug/rdsh doctor | grep -F "[rdsh] fedora: optional tools present (zstd, bubblewrap)"'
+      - name: Regress with a stub dsh
+        shell: bash
+        run: |
+          printf '#!/bin/sh\necho stub-dsh $@' > /tmp/stub-dsh && chmod +x /tmp/stub-dsh
+          BIN=./target/debug/rdsh DSH_ORIG_BIN=/tmp/stub-dsh sh tests/regress.sh
 
   plugin-security:
     name: "plugin-security${{ github.event_name == 'push' && github.ref_type == 'branch' && github.event.repository.default_branch && github.ref_name != github.event.repository.default_branch && ' [branch push]' || '' }}"
@@ -227,6 +249,11 @@ jobs:
       - if: '! matrix.regress'
         shell: pwsh
         run: |
+          # install.ps1 cannot be executed end to end without a release, but its
+          # syntax (including the Desktop block) is parsed here on every run.
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path ./install.ps1), [ref]$null, [ref]$errors) | Out-Null
+          if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error $_ }; exit 1 }
           ./tests/installer-security.ps1
           ./tests/installer-security.ps1 -Version v0.0.0-rc.1
           ./tests/icon-assets.ps1
@@ -314,8 +341,6 @@ jobs:
       - run: cargo build --release
       - run: npm ci --prefix dashboard
       - run: npm ci --prefix tests/e2e
-      - name: Test translation plugin against a real Cordis context
-        run: RDSH_CORDIS_MODULE="$GITHUB_WORKSPACE/tests/e2e/node_modules/cordis/lib/index.js" node --test plugins/rdsh-translation/test/*.test.mjs
       - run: npx playwright install --with-deps chromium
         working-directory: tests/e2e
       - run: |

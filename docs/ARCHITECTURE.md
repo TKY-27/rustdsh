@@ -36,6 +36,9 @@ operation that replaces the document with defaults.
 | `main.rs` | CLI definition (clap), dispatch, `--dry-run` / `--passthrough` handling |
 | `dsh_args.rs` | dsh-compatible arg parsing, profile / patch / overlay handling |
 | `passthrough.rs` | Verbatim `exec` delegation to the original `dsh` |
+| `executable.rs` | Effective-user executable checks shared by discovery, Desktop and distro diagnostics |
+| `desktop.rs` | Desktop runtime discovery, plugin installation and verification |
+| `distro.rs` | Read-only optional dependency diagnostics for rpm-based hosts |
 | `slim.rs` | Slim env for delegated boot (`NODE_COMPILE_CACHE`, node-tree lookup) |
 | `tokens.rs` | Fast token estimation |
 | `compact.rs` | Context compaction to a token budget |
@@ -63,7 +66,7 @@ operation that replaces the document with defaults.
 
 Separate from the Rust launcher. Two modes, both loopback-bound:
 
-- `project`: project metrics / tasks / Q&A via six project-scoped MCP tools.
+- `project`: project metrics / tasks / Q&A / structured UI via seven project-scoped MCP tools.
 - `harness`: launches the original Harness Web UI in a managed child process.
 
 Phone access goes through Tailscale Serve (QR holds the access key).

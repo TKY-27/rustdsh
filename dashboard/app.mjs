@@ -9,6 +9,7 @@ import { renderGitHubStatus } from "./github-status-ui.mjs";
 import { createInstructionPanel } from "./instruction-queue-ui.mjs";
 import { createCostPanel } from "./cost-ledger-ui.mjs";
 import { createModelCatalogPanel } from "./model-catalog-ui.mjs";
+import { renderSurface } from "./ui/blocks.mjs";
 import { renderBudget } from "./budget-ui.mjs";
 import {
   clearPendingProjectDeepLink,
@@ -36,6 +37,7 @@ import { setupDeviceAccess } from "./devices-ui.mjs";
 import { renderProviderStatuses } from "./provider-status-ui.mjs";
 
 const $ = (id) => document.getElementById(id);
+const SVG_NS = "http://www.w3.org/2000/svg";
 const base = location.pathname.startsWith("/_rdsh") ? "/_rdsh/" : "/";
 let deviceAccess = null;
 let deepLinkStorage = null;
@@ -778,6 +780,62 @@ const renderTaskOutcomes = createTaskOutcomesPanel(
   { node, api, makeDeepLink },
 );
 const renderCatalog = createModelCatalogPanel($("model-catalog"), node);
+// rdsh-ui/1: the agent presents a surface, and a human action returns to the
+// same session. The rendered surface is skipped until its revision changes so
+// an update never wipes a draft, a selection or focus.
+let renderedSurfaceKey = "";
+let uiActionSequence = 0;
+async function submitUiAction(action, block, value) {
+  const surface = latestState?.ui_surfaces?.current;
+  const status = $("agent-ui-status");
+  if (!surface) {
+    status.textContent = "提示されたUIがありません。";
+    return;
+  }
+  uiActionSequence += 1;
+  const body = {
+    surface_id: surface.surface_id,
+    surface_revision: surface.revision,
+    block_id: block.id,
+    action_id: action.id,
+    action_request_id: "act_" + Date.now().toString(36) + "_" + uiActionSequence,
+  };
+  if (value !== null && value !== undefined) body.value = value;
+  try {
+    const result = await api("ui/actions", body);
+    status.className = result.followup_required ? "" : "ok";
+    status.textContent = result.followup_required
+      ? "要求として記録しました。実行は別の認可された経路で行われます。"
+      : "選択をセッションへ返しました（受付 " + result.sequence + "）。実行権限は発行していません。";
+  } catch (error) {
+    status.className = "error";
+    status.textContent = "送信できません: " + error.message;
+  }
+}
+function renderAgentUi(state) {
+  const surface = state.ui_surfaces?.current || null;
+  const key = surface ? surface.surface_id + "@" + surface.revision : "none";
+  if (key === renderedSurfaceKey) return;
+  renderedSurfaceKey = key;
+  renderSurface($("agent-ui"), surface, node, submitUiAction);
+  const meta = $("agent-ui-meta");
+  const status = $("agent-ui-status");
+  meta.replaceChildren();
+  status.className = "";
+  status.textContent = "";
+  if (!surface) {
+    meta.append(node("span", "提示待ち"));
+    return;
+  }
+  meta.append(
+    node("span", surface.surface_id, "ui-surface-id"),
+    node("span", "版 " + surface.revision),
+    node("span", "提示 " + (surface.presented_at
+      ? new Date(surface.presented_at).toLocaleString("ja-JP")
+      : "未取得")),
+    node("span", "ブロック " + surface.blocks.length),
+  );
+}
 const renderHumanAnnotations = createHumanAnnotationPanel(
   $("human-annotations-panel"),
   { api, node, navigateTo },

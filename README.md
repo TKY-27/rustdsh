@@ -51,6 +51,11 @@ It ports frequently used CLI operations (token calculation, code search, session
 
 ## Quick Start
 
+Already using **Claude Code, Codex, Cursor, VS Code Copilot, OpenCode or Gemini CLI**?
+[Connect the project dashboard through MCP](docs/MCP-CLIENTS.md)
+to share tasks, questions and structured UI while keeping your current coding agent.
+This entry point requires Node.js 22+; DSH and Rust are optional.
+
 ### 1. Install (Prebuilt Binary)
 
 **Linux / macOS / WSL**:
@@ -440,9 +445,10 @@ rewrites the profile:
 
 ```sh
 rdsh desktop status                 # app, command runtime, profile, plugin state (read-only)
-rdsh desktop install --plugins-dir .   # attach rdsh-settings and rdsh-translation
+rdsh desktop install --plugins-dir .   # rdsh-settings + default third-party (sound, gitview)
 rdsh desktop install --plugins-dir . --compute   # + the resident compute bridge
-rdsh desktop verify                 # require the default rdsh-settings and translation plugins
+rdsh desktop install --plugins-dir . --no-sound --no-gitview  # skip third-party
+rdsh desktop verify                 # exit nonzero when the profile has no rdsh plugin
 ```
 
 The same is available through the profile installer and the installers:
@@ -592,6 +598,7 @@ Measurements conducted on Linux x86_64:
 | [docs/RDSH-SETTINGS.md](docs/RDSH-SETTINGS.md) | Settings UI and CLI options |
 | [docs/PROVIDERS.md](docs/PROVIDERS.md) | `rdsh provider`: HAI, Sarashina and home LLM server routes |
 | [docs/DESKTOP-INTEGRATION.md](docs/DESKTOP-INTEGRATION.md) | DeepSeek Harness Desktop (Electron) integration |
+| [docs/FEDORA.md](docs/FEDORA.md) | Fedora / RHEL packages, optional tools, and the Linux desktop reality |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | Project roadmap and planned capabilities |
 | [docs/RELEASING.md](docs/RELEASING.md) | Release procedures |
 | [docs/SERIAL-PROXY.md](docs/SERIAL-PROXY.md) | Concurrency-limiting proxy for single-slot providers |
@@ -614,6 +621,7 @@ Thanks to the upstream developers and everyone contributing code, reviews, tests
 - Security reports & review: [GrEarl](https://github.com/GrEarl), [PENTACoXIAN](https://x.com/PENTACoXIAN)
 - Contributions & validation: [StudioYebisu](https://github.com/yebisu0529-ship-it), [RNA4219](https://github.com/RNA4219), [eightman999](https://github.com/eightman999)
 - Ideas & feedback: [@remydre8](https://x.com/remydre8)
+- Default Web UI plugins (used with upstream permission, MIT): [dsh-sound-notifications](https://github.com/cwd514/dsh-sound-notifications) by [cwd514](https://github.com/cwd514) ((c) 2026) — synthesized tones and desktop notifications; [dsh-gitview](https://github.com/yugapor/dsh-gitview) by [yugapor](https://github.com/yugapor) ((c) 2026) — Git panel with diffs, history, and CI status. Both are fetched from upstream GitHub at install time (see `plugins/recommended.md`).
 
 Third-party DSH plugins that rdsh uses, adapts or recommends (MIT, by their
 authors):

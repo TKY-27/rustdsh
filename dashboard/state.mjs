@@ -46,6 +46,12 @@ import {
   queueRevision,
 } from "./instruction-queue.mjs";
 import {
+  presentSurface,
+  applyUiAction,
+  validateUiSurfaces,
+  publicUiSurfaces,
+} from "./ui/surface.mjs";
+import {
   declareCostScope,
   recordCostReport,
   validateCostLedger,
@@ -635,6 +641,20 @@ export class ProjectStore {
     await this.commit(next);
     return structuredClone(result);
   }
+  // rdsh-ui/1: the agent presents a surface; a human action returns to the
+  // same session as feedback. Neither call executes an operation.
+  async mutateUiSurface(input) {
+    const next = this.clone();
+    const result = presentSurface(next, input);
+    await this.commit(next, "ui_surface", input);
+    return structuredClone(result);
+  }
+  async mutateUiAction(input) {
+    const next = this.clone();
+    const result = applyUiAction(next, input);
+    await this.commit(next, "ui_action", input);
+    return structuredClone(result);
+  }
   async restoreBackup(input, evidenceIds, acceptanceTaskIds) {
     const next = structuredClone(this.value);
     const result = restoreHistoryBackup(
@@ -676,6 +696,7 @@ export function publicState(value, observations, deliveries, budgetJobs) {
   if (value.budget_admission)
     visible.budget_admission = publicBudgetAdmission(value, budgetJobs);
   visible.input_queue_revision = queueRevision(value);
+  if (value.ui_surfaces) visible.ui_surfaces = publicUiSurfaces(value);
   if (visible.instructions) {
     visible.instructions = structuredClone(visible.instructions);
     const queueIndex = replyQueueIndex(value);

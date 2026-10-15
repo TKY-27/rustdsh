@@ -1,5 +1,8 @@
 # Project dashboard and private Harness access
 
+[Coding agent MCP quickstart](../docs/MCP-CLIENTS.md): add tasks, questions
+and structured UI to your existing coding agent through the local stdio bridge.
+
 [Worker scopes and worktrees](../docs/WORKER-WORKSPACES.md): local CLI allocation,
 source/worker conflict scans and retained checkouts after lease expiry or release.
 
@@ -294,6 +297,9 @@ appropriate configuration into your agent's MCP settings. The dashboard must be
 running before the stdio bridge is used. The stdio bridge reads the current
 runtime credential on each operation. HTTP clients must reload the generated
 configuration after a restart, because the bearer key rotates.
+画面はライトとダークの2テーマです。初回はOSの設定に従い、ヘッダーの
+「ダーク表示／ライト表示」で切り替えると選択が保存されます。
+
 `runtime.json` の `token` は管理用、`mcp_token` は MCP 用です。ブラウザー用の
 鍵は `browser_url` に含まれます。これらを別用途で使い回さないでください。
 
