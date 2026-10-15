@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { buildInbox, buildAttentionHistory, normalizeAttention, validateAttentionState } from "../attention.mjs";
-import { applyOperation, ProjectStore } from "../state.mjs";
+import { applyOperation, ProjectStore, resealStoredState } from "../state.mjs";
 
 function initial() {
   return { schema: 1, project: { id: "project-one", name: "Fixture", root: "/fixture" },
@@ -380,7 +380,9 @@ test("legacy states remain readable and corrupt new metadata is rejected without
   ]) {
     const broken = structuredClone(store.value);
     corrupt(broken);
-    const serialized = JSON.stringify(broken);
+    // Keep the HMAC seal valid so the attention validator, not the seal
+    // check, is what rejects the corrupt metadata.
+    const serialized = JSON.stringify(await resealStoredState(project, broken));
     await fs.writeFile(path.join(temporary, "state.json"), serialized);
     await assert.rejects(ProjectStore.open(project), /[Aa]ttention/);
     assert.equal(await fs.readFile(path.join(temporary, "state.json"), "utf8"), serialized);

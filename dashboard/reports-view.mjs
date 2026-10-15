@@ -1,4 +1,5 @@
 import { metricView, observationView, ratioView } from "./observations.mjs";
+import { deepLinkButton } from "./deep-link-ui.mjs";
 import { eventIdentifier, eventTargetId } from "./annotation-identifiers.mjs";
 
 const $ = (id) => document.getElementById(id);
@@ -40,6 +41,13 @@ const freshnessLabels = {
   stale: "古い情報",
   unknown: "鮮度未確認",
   unavailable: "未取得",
+};
+const changeLabels = {
+  "dashboard.answer.created": "回答を保存",
+  "dashboard.question.created": "判断の質問を更新",
+  "dashboard.task.updated": "タスクを更新",
+  "dashboard.progress.updated": "進捗報告を追加",
+  "dashboard.metrics.updated": "指標を更新",
 };
 let openObservations = new Set();
 function provenance(view, label, format = String, id = "") {
@@ -106,7 +114,10 @@ function rateText(state, a, b, now) {
 export function renderReports(
   state,
   now = Date.now(),
+  sourceEventIds = [],
   onPreviewArtifact = () => {},
+  makeDeepLink = () => {},
+  focusedEventSequence = null,
 ) {
   openObservations = new Set(
     [...document.querySelectorAll("details.observation-details[open]")]
@@ -178,17 +189,32 @@ export function renderReports(
   // Task outcome cards and milestones have a dedicated renderer. This
   // function can run again for the same SSE revision, so it must not replace
   // content owned by that revision-aware renderer.
-  renderEvents(state, now, onPreviewArtifact);
+  // #57: その renderer に project deep link の focus 対応を渡す。
+  renderEvents(state, now, sourceEventIds, onPreviewArtifact, makeDeepLink, focusedEventSequence);
   if (activeDisclosure)
     [...document.querySelectorAll("summary[data-observation-id]")]
       .find((summary) => summary.dataset.observationId === activeDisclosure)?.focus();
 }
+// `sourceEventIds` pins the events the update summary cites,
 // `onPreviewArtifact` arrives as an argument (not a module global) so the
-// preview button actually reaches the handler wired by the shell.
-function renderEvents(state, now, onPreviewArtifact = () => {}) {
+// preview button reaches the handler wired by the shell, and
+// `makeDeepLink` / `focusedEventSequence` focus the deep-linked event.
+function renderEvents(
+  state,
+  now,
+  sourceEventIds = [],
+  onPreviewArtifact = () => {},
+  makeDeepLink = () => {},
+  focusedEventSequence = null,
+) {
+  const visible = state.events.slice(-30);
+  const focused = focusedEventSequence === null
+    ? null
+    : state.events.find((event) => String(event.sequence) === focusedEventSequence);
+  if (focused && !visible.some((event) => event.sequence === focused.sequence))
+    visible.push(focused);
   $("events").replaceChildren(
-    ...state.events
-      .slice(-30)
+    ...visible
       .reverse()
       .map((event) => {
         const element = node("article", undefined, "event");
@@ -217,6 +243,8 @@ function renderEvents(state, now, onPreviewArtifact = () => {}) {
           observationView(event.title, event.observation, now),
           undefined, String, "event:" + event.sequence,
         ));
+        const link = deepLinkButton(node, makeDeepLink, "event", String(event.sequence), `報告 ${event.sequence}`);
+        if (link) element.append(link);
         return element;
       }),
   );
@@ -224,4 +252,37 @@ function renderEvents(state, now, onPreviewArtifact = () => {}) {
     $("events").append(
       node("div", "進捗・成果物の報告はまだありません", "empty"),
     );
+  const changes = $("change-records");
+  if (!changes) return;
+  const allRecords = Array.isArray(state.change_records) ? state.change_records : [];
+  const pinned = new Set(sourceEventIds);
+  const selectedRecords = new Map(
+    allRecords.slice(-30).map((record) => [record.event_id, record]),
+  );
+  for (const record of allRecords)
+    if (pinned.has(record.event_id)) selectedRecords.set(record.event_id, record);
+  const records = [...selectedRecords.values()]
+    .sort((a, b) => b.revision - a.revision)
+    .slice(0, 50);
+  changes.replaceChildren(
+    ...records.map((record) => {
+      const element = node("article", undefined, "event");
+      element.id = `change-${record.event_id}`;
+      element.append(
+        node("strong", changeLabels[record.name] || "状態を更新"),
+        node(
+          "div",
+          `版 ${record.revision} · ${record.event_id}`,
+          "sub",
+        ),
+      );
+      if (record.entity_id)
+        element.append(node("div", `対象: ${record.entity_id}`, "sub"));
+      if (record.timestamp)
+        element.append(node("div", date(record.timestamp), "sub"));
+      return element;
+    }),
+  );
+  if (!records.length)
+    changes.append(node("div", "状態更新の記録はありません", "empty"));
 }
