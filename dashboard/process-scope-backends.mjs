@@ -538,6 +538,7 @@ export async function linuxScope(config, stdio) {
       },
       kind: "linux_cgroup_v2",
       kernel_id: ino,
+      scope_path: directory,
       snapshot,
       term,
       kill: async () => {
@@ -592,34 +593,48 @@ export async function linuxScope(config, stdio) {
   }
 }
 
-export async function windowsScope(config) {
+export async function windowsScope(config, deferStart = false) {
   const win = await import("@deepseek-ai/dsh-win32-process");
   const api = win.loadWin32ProcessBindings();
-  const info = win.spawnCurrentTokenJobProcess(api, {
-    command: config.command[0],
-    applicationName: config.command[0],
-    args: config.command.slice(1),
-    cwd: config.cwd,
-    env: config.env ?? process.env,
-    stdio: { stdin: 3, stdout: 4, stderr: 5 },
-  });
   const child = new EventEmitter();
-  child.pid = info.pid;
-  const timer = setInterval(() => {
-    try {
-      const code = win.pollProcessExit(api, info.process);
-      if (code !== undefined) {
-        clearInterval(timer);
-        child.emit("exit", code, null);
-      }
-    } catch {
-      clearInterval(timer);
-      child.emit("error", new Error("monitor_lost"));
-    }
-  }, 20);
+  child.pid = null;
+  let info = null,
+    timer = null;
   let closed = false;
+  const start = () => {
+    if (closed || info) throw new Error("ownership_unavailable");
+    info = win.spawnCurrentTokenJobProcess(api, {
+      command: config.command[0],
+      applicationName: config.command[0],
+      args: config.command.slice(1),
+      cwd: config.cwd,
+      env: config.env ?? process.env,
+      stdio: { stdin: 3, stdout: 4, stderr: 5 },
+    });
+    child.pid = info.pid;
+    timer = setInterval(() => {
+      try {
+        const code = win.pollProcessExit(api, info.process);
+        if (code !== undefined) {
+          clearInterval(timer);
+          child.emit("exit", code, null);
+        }
+      } catch {
+        clearInterval(timer);
+        child.emit("error", new Error("monitor_lost"));
+      }
+    }, 20);
+  };
+  if (!deferStart) start();
   const snapshot = async () => {
     if (closed) throw new Error("monitor_lost");
+    if (!info)
+      return {
+        status: "exit_confirmed",
+        remaining_pids: [],
+        remaining_count: 0,
+        members_truncated: false,
+      };
     // BASIC_PROCESS_ID_LIST uses pointer-sized IDs; this pinned API is 64-bit.
     const buffer = Buffer.alloc(16 + maxMembers * 8);
     if (
@@ -644,24 +659,32 @@ export async function windowsScope(config) {
   };
   return {
     child,
-    release: async () => {},
+    release: async () => {
+      if (!info) start();
+      return { root_pid: info.pid };
+    },
     kind: "windows_job",
     kernel_id: config.owner_id,
+    scope_path: null,
     snapshot,
     term: async () => ({
       status: "unsupported",
       reason: "windows_graceful_uses_protocol_and_stdin_eof",
     }),
     kill: async () => {
+      if (!info)
+        return { status: "requested", reason: "no_process_started" };
       win.terminateJob(api, info.job, 137);
       return { status: "requested", reason: "terminate_owned_job_handle" };
     },
     close: async () => {
       if ((await snapshot()).status !== "exit_confirmed") return false;
       closed = true;
-      clearInterval(timer);
-      win.closeHandleChecked(api, info.process, "owned process");
-      win.closeHandleChecked(api, info.job, "owned job");
+      if (timer) clearInterval(timer);
+      if (info) {
+        win.closeHandleChecked(api, info.process, "owned process");
+        win.closeHandleChecked(api, info.job, "owned job");
+      }
       return true;
     },
   };

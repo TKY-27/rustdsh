@@ -2,7 +2,7 @@
 import { readFile } from "node:fs/promises";
 import { resolve, join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { loadRuntime } from "./runtime.mjs";
+import { loadRuntime, resolveMcpPath } from "./runtime.mjs";
 import { createOAuthManager, safeError, OAuthFailure } from "./oauth.mjs";
 import { changeSeam, verifySeam } from "./native-seam.mjs";
 
@@ -44,12 +44,14 @@ export async function main(
     )
       throw new OAuthFailure("invalid_arguments");
     if (!options["dsh-package"]) throw new OAuthFailure("dsh_package_required");
-    const runtime = await loadRuntime(resolve(options["dsh-package"]));
-    if (
-      command === "install-seam" ||
-      command === "revert-seam" ||
-      command === "verify-seam"
-    ) {
+    const packagePath = resolve(options["dsh-package"]);
+    if (command === "revert-seam") {
+      const result = await changeSeam(await resolveMcpPath(packagePath), "revert");
+      stdout.write(JSON.stringify(result) + "\n");
+      return 0;
+    }
+    const runtime = await loadRuntime(packagePath);
+    if (command === "install-seam" || command === "verify-seam") {
       const result =
         command === "verify-seam"
           ? { sha256: await verifySeam(runtime.mcpPath) }

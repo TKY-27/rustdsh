@@ -41,3 +41,13 @@ test('unknown tools, malformed responses and cancellation fail before any emitte
   const controller = new AbortController(); controller.abort();
   await assert.rejects(collect(adapter(async () => { throw new Error('must not execute'); }).stream({ provider: 'cursor-sdk', model: 'model', messages: [], signal: controller.signal })), { name: 'AbortError' });
 });
+
+test('adapter rejects unsupported generation controls before invoking either backend', async () => {
+  for (const provider of providers) {
+    let calls = 0;
+    const instance = adapter(async () => { calls++; return { text: 'must not generate', toolCalls: [] }; }, undefined, provider);
+    for (const options of [{ temperature: 0 }, { maxTokens: 1 }, { stop: [] }, { stop: ['END'] }])
+      await assert.rejects(collect(instance.stream({ provider, model: 'synthetic', messages: [], ...options })), { code: 'UNSUPPORTED_GENERATION_OPTION' });
+    assert.equal(calls, 0);
+  }
+});
