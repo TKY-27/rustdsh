@@ -1,5 +1,6 @@
+use std::io::Write;
 use std::path::PathBuf;
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 
 use serde_json::{json, Map, Value};
 use sha2::Digest;
@@ -71,6 +72,124 @@ impl Drop for Fixture {
 }
 
 #[test]
+fn instruction_queue_serve_processes_ordered_requests_after_errors() {
+    let fixture = Fixture::new();
+    let state = serde_json::json!({
+        "project": {"id": "p"},
+        "feedback": [],
+        "answer_applications": {
+            "consumers": {
+                "consumer-1": {
+                    "consumer_id": "consumer-1",
+                    "run_id": "run-1",
+                    "session_id": "session-1"
+                }
+            },
+            "commands": {}
+        }
+    });
+    let submit = serde_json::json!({
+        "operation": "submit",
+        "prevalidated": true,
+        "state": state,
+        "input": {
+            "command_id": "input_00000000-0000-0000-0000-000000000071",
+            "consumer_id": "consumer-1",
+            "run_id": "run-1",
+            "session_id": "session-1",
+            "text": "常駐Rustプロセスで追加",
+            "mode": "next_turn",
+            "expected_queue_revision": 0
+        },
+        "context": {"actor": "human", "now": "2026-10-15T01:00:00.000Z"}
+    });
+    let invalid = serde_json::json!({
+        "operation": "submit",
+        "state": state,
+        "input": {"unknown": true},
+        "context": {"actor": "human"}
+    });
+    let validate = serde_json::json!({
+        "operation": "validate",
+        "state": state
+    });
+    let mut child = Command::new(env!("CARGO_BIN_EXE_rdsh"))
+        .args(["instruction-queue", "serve"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .env("HOME", fixture.root.join("home"))
+        .env("USERPROFILE", fixture.root.join("home"))
+        .env("APPDATA", fixture.root.join("appdata"))
+        .env("XDG_DATA_HOME", fixture.root.join("data"))
+        .env("XDG_CONFIG_HOME", fixture.root.join("config"))
+        .env_remove("RDSH_ORIG_BIN")
+        .env_remove("RDSH_PASSTHROUGH")
+        .env_remove("RDSH_DRY_RUN")
+        .spawn()
+        .unwrap();
+    {
+        let stdin = child.stdin.as_mut().unwrap();
+        for request in [submit, invalid, validate] {
+            writeln!(stdin, "{request}").expect("serve must accept JSONL requests on stdin");
+        }
+    }
+    drop(child.stdin.take());
+    let output = child.wait_with_output().unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let responses: Vec<serde_json::Value> = stdout
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(responses.len(), 3);
+    assert_eq!(responses[0]["result"]["request"]["status"], "accepted");
+    assert_eq!(responses[0]["state_validated"], true);
+    assert_eq!(responses[0]["state"].as_object().unwrap().len(), 1);
+    assert!(responses[0]["state"]["instructions"]["requests"].is_object());
+    assert_eq!(responses[1]["status"], 400);
+    assert_eq!(responses[1]["error"], "Unknown instruction field");
+    assert_eq!(responses[2]["valid"], true);
+}
+
+#[test]
+fn instruction_queue_serve_advertises_prevalidated_state_support() {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_rdsh"))
+        .args(["instruction-queue", "serve"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    stdin
+        .write_all(b"{\"operation\":\"capabilities\"}\n")
+        .unwrap();
+    drop(stdin);
+
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let response: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        response,
+        json!({
+            "operation": "capabilities",
+            "protocol": 1,
+            "features": {"prevalidated_state": true}
+        })
+    );
+}
+
+#[test]
 fn validate_accepts_a_state_without_an_instruction_registry() {
     let fixture = Fixture::new();
     let output = fixture.run(
@@ -105,6 +224,37 @@ fn validate_accepts_a_snapshot_created_by_the_javascript_module() {
     assert_eq!(
         output.stdout,
         b"{\"operation\":\"validate\",\"valid\":true}\n"
+    );
+}
+
+#[test]
+fn file_cli_does_not_trust_the_worker_prevalidation_hint() {
+    let fixture = Fixture::new();
+    let id = "input_00000000-0000-0000-0000-000000000001";
+    let mut document: Value =
+        serde_json::from_str(include_str!("fixtures/instruction_queue_valid.json")).unwrap();
+    let request = document["state"]["instructions"]["requests"][id].clone();
+    document["operation"] = Value::String("submit".into());
+    document["prevalidated"] = Value::Bool(true);
+    document["state"]["instructions"]["requests"][id]["unexpected"] = Value::Bool(true);
+    document["input"] = serde_json::json!({
+        "command_id": id,
+        "consumer_id": request["consumer_id"],
+        "run_id": request["run_id"],
+        "session_id": request["session_id"],
+        "text": request["text"],
+        "mode": request["mode"],
+        "expected_queue_revision": request["expected_queue_revision"],
+        "active_command_id": request["active_command_id"],
+    });
+    document["context"] = serde_json::json!({ "actor": "human" });
+    let output = fixture.run("submit", &document.to_string());
+
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("Unknown instruction field"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
     );
 }
 
