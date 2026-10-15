@@ -35,3 +35,8 @@ fact is shown separately as `state_revision_changed`.
 Creating a packet advances the project revision so disconnected MCP clients can
 observe the resource update. This snapshot operation does not change task status
 or authorize execution.
+
+The saved packet, including its formatted JSON and trailing newline, may be at
+most 1 MiB in UTF-8. Creation rejects a larger packet before advancing the project
+revision or replacing the previous packet. Recorded decisions are not truncated;
+the previous snapshot remains readable through the handoff and acceptance APIs.
