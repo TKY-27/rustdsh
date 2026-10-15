@@ -6,6 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import { identity } from "../state.mjs";
 import { startDashboard } from "../server.mjs";
+import { readRuntime } from "./owner-runtime.mjs";
 
 async function freePort() {
   const probe = net.createServer();
@@ -46,9 +47,7 @@ test("device permissions are scoped, persistent, and revoked connections close",
     port: await freePort(),
     tailscale: false,
   });
-  const ownerRuntime = JSON.parse(
-    await fs.readFile(path.join(project.directory, "runtime.json"), "utf8"),
-  );
+  const ownerRuntime = await readRuntime(project.directory);
   const ownerToken = new URL(ownerRuntime.browser_url).hash.slice("#key=".length);
   const ownerHeaders = {
     "x-rdsh-browser-token": ownerToken,
@@ -227,9 +226,7 @@ test("device permissions are scoped, persistent, and revoked connections close",
     headers: ownerHeaders,
   });
   assert.equal(list.status, 401);
-  const runtime = JSON.parse(
-    await fs.readFile(path.join(project.directory, "runtime.json"), "utf8"),
-  );
+  const runtime = await readRuntime(project.directory);
   const newOwnerHeaders = {
     "x-rdsh-browser-token": new URL(runtime.browser_url).hash.slice(5),
   };

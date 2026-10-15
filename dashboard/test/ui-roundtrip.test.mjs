@@ -8,6 +8,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { identity, ProjectStore } from "../state.mjs";
 import { startDashboard } from "../server.mjs";
+import { readRuntime } from "./owner-runtime.mjs";
 
 async function freePort() {
   const socket = net.createServer();
@@ -33,7 +34,7 @@ test("an agent presents UI and the human action returns to the same session", as
   await ProjectStore.open(project);
   const dashboard = await startDashboard({ project, port: await freePort(), tailscale: false });
   t.after(() => dashboard.close());
-  const runtime = JSON.parse(await fs.readFile(path.join(project.directory, "runtime.json"), "utf8"));
+  const runtime = await readRuntime(project.directory);
   const browserToken = new URL(runtime.browser_url).hash.replace(/^#key=/, "");
   const browserHeaders = { "x-rdsh-browser-token": browserToken, "content-type": "application/json" };
   const client = new Client({ name: "ui-roundtrip", version: "1.0.0" }, { capabilities: {} });

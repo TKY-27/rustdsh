@@ -102,6 +102,8 @@ export const tools = [
     description:
       "Record one provider/CLI status report for this project. Reports are stored as agent-reported; the dashboard validates their shape and age but does not authenticate provider origin. Use explicit provider evidence; classify rate_limited, quota_exhausted, authentication_failed, or unknown. Include the actual observed_at, a safe source label, a stable event_id and a strictly increasing per-scope sequence. Add quota counts or retry_after only when the provider explicitly supplies them; omit unavailable values. Reports expire by max_age_seconds. This only stores observations: it does not scrape providers, retry requests, log in, or change credentials/budgets.",
     inputSchema: providerStatusSchema,
+  },
+  {
     name: "dashboard_check_worker_start",
     description: "Check the live Linux sandbox profile for a review/implementation worker. This does not start an LLM worker or authorize direct DSH filesystem tools; approved operations must use dashboard_execute_approved_operation. Unsupported environments stay on hold with no fallback.",
     inputSchema: object({ task_id: string, contract_version: { type: "integer", minimum: 1 },

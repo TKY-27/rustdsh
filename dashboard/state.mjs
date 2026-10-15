@@ -621,6 +621,16 @@ export class ProjectStore {
         next.changes = next.changes.slice(-10000);
       }
     }
+    if (!this.integrityKey) {
+      // Stores constructed directly (tests and one-off tools) have no key yet;
+      // create or adopt the project key so the written state stays sealed.
+      const keyState = await loadStateIntegrityKey(this.project, {
+        hadStateSeal: false,
+        stateExists: true,
+        migrationPending: true,
+      });
+      this.integrityKey = keyState.key;
+    }
     sealState(next, this.integrityKey);
     await persistStateIntegrityKey(this.project, this.integrityKey);
     await writeJson(path.join(this.project.directory, "state.json"), next);

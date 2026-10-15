@@ -6,6 +6,7 @@ import path from "node:path";
 import net from "node:net";
 import { identity, ProjectStore } from "../state.mjs";
 import { startDashboard } from "../server.mjs";
+import { readRuntime } from "./owner-runtime.mjs";
 
 async function freePort() {
   const server = net.createServer();
@@ -34,9 +35,7 @@ test("project profiles are browser-managed, previewed without execution, and dur
   });
 
   dashboard = await startDashboard({ project, port: await freePort(), tailscale: false });
-  const runtime = JSON.parse(
-    await fs.readFile(path.join(project.directory, "runtime.json"), "utf8"),
-  );
+  const runtime = await readRuntime(project.directory);
   const browserToken = new URL(runtime.browser_url).hash.slice("#key=".length);
   const browser = { "x-rdsh-browser-token": browserToken };
   const mcp = { authorization: `Bearer ${runtime.mcp_token}` };

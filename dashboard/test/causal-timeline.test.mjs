@@ -13,6 +13,7 @@ import { queueRevision } from "../instruction-queue.mjs";
 import { readCausalTimeline, timelineProjection } from "../causal-timeline.mjs";
 import { startDashboard } from "../server.mjs";
 import { AcceptanceStore } from "../acceptance.mjs";
+import { readRuntime } from "./owner-runtime.mjs";
 
 async function fixture(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "rdsh-timeline-"));
@@ -619,9 +620,7 @@ test("HTTP summary hides raw records, human detail is scoped, and MCP cannot rea
     tailscale: false,
   });
   try {
-    const runtime = JSON.parse(
-      await fs.readFile(path.join(f.project.directory, "runtime.json"), "utf8"),
-    );
+    const runtime = await readRuntime(f.project.directory);
     const headers = {
       "x-rdsh-browser-token": new URL(runtime.browser_url).hash.slice(5),
     };

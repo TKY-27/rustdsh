@@ -7,6 +7,7 @@ import net from "node:net";
 import { identity, ProjectStore } from "../state.mjs";
 import { RunHistory } from "../run-history.mjs";
 import { startDashboard } from "../server.mjs";
+import { readRuntime } from "./owner-runtime.mjs";
 
 async function freePort() {
   const server = net.createServer();
@@ -62,7 +63,7 @@ test("browser notification read state and settings persist while MCP cannot read
     await startDashboard({ project, port: await freePort(), tailscale: false });
   dashboard = await start();
   const runtimeFile = path.join(project.directory, "runtime.json");
-  let runtime = JSON.parse(await fs.readFile(runtimeFile, "utf8"));
+  let runtime = await readRuntime(project.directory);
   const browserHeaders = {
     "x-rdsh-browser-token": new URL(runtime.browser_url).hash.slice("#key=".length),
   };
@@ -139,7 +140,7 @@ test("browser notification read state and settings persist while MCP cannot read
   await dashboard.close();
   dashboard = null;
   dashboard = await start();
-  runtime = JSON.parse(await fs.readFile(runtimeFile, "utf8"));
+  runtime = await readRuntime(project.directory);
   browserHeaders["x-rdsh-browser-token"] = new URL(runtime.browser_url).hash.slice("#key=".length);
   state = await browserState();
   assert.equal(state.notifications.preferences.minimum_importance, "high");

@@ -12,6 +12,7 @@ import { renderProviderStatuses } from "../provider-status-ui.mjs";
 import { identity, ProjectStore, publicState } from "../state.mjs";
 import { startDashboard } from "../server.mjs";
 import { executeTool, tools } from "../mcp.mjs";
+import { readRuntime } from "./owner-runtime.mjs";
 
 const report = (overrides = {}) => ({
   provider_id: "codex",
@@ -259,7 +260,7 @@ test("provider status HTTP report is MCP-authenticated, project-local and read-o
   });
   const dashboard = await startDashboard({ project, port: await freePort(), tailscale: false });
   t.after(() => dashboard.close());
-  const runtime = JSON.parse(await fs.readFile(path.join(project.directory, "runtime.json"), "utf8"));
+  const runtime = await readRuntime(project.directory);
   const body = JSON.stringify(report());
   const mcpHeaders = {
     authorization: `Bearer ${runtime.mcp_token}`,
