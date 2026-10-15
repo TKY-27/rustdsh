@@ -101,8 +101,31 @@ The `cd` workflow first refuses malformed or lightweight tags, tags outside
 versions, missing CHANGELOG entries and incomplete release notes. It also
 requires every required check on the tagged commit to be successful, then builds
 five targets with `cargo build --locked --release` only after those gates pass.
-The exact required check names live in `scripts/release_ci.py`; CI workflow
-job-name changes must update that list and its tests:
+After the exact-tag CI wait, the gate queries the pinned `ci.yml` and `codeql.yml`
+workflows, using only push runs for the exact SHA on `main` or the release tag. It selects
+by GitHub's per-workflow `run_number`, then verifies `run_attempt` and the latest
+execution of each required job within that run. A failed-jobs-only rerun can
+retain earlier successful jobs; a newer queued job cannot reuse an older result.
+Missing or malformed identity/attempt metadata, incomplete API pages, skipped
+jobs and changing run snapshots all fail closed. Nullable check start times and
+workflow display names are not ordering or identity evidence.
+
+Tag pushes also trigger `ci.yml`. The earlier wait requires that exact tag-push
+run to appear and succeed before this gate can accept main/tag push evidence.
+If it is still missing or running after 15 minutes, validation refuses publication;
+wait for it to finish, then rerun the failed CD validation job. After all job
+reads, the gate re-lists the workflow runs and re-reads the selected run to detect
+a newer run or attempt. This is a
+checked snapshot, not an atomic lock against a later rerun after validation.
+Validation uses `actions: read` and `contents: read`; only the final publication
+job receives `contents: write`. The build/upload/publish dependency chain is unchanged.
+
+GitHub documents the stable run number and increasing attempt number in its
+[variables reference](https://docs.github.com/en/actions/reference/workflows-and-actions/variables).
+The [workflow jobs API](https://docs.github.com/en/rest/actions/workflow-jobs)
+provides all job executions, including previous attempts. The required workflow
+files and job names live in `scripts/release_ci.py`; workflow/job-name changes
+must update that mapping and its tests:
 
 | Platform | Archive |
 | --- | --- |
