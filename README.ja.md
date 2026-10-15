@@ -1,5 +1,7 @@
 <img src="assets/icon.png" width="96" alt="rdsh icon">
 
+[English](README.md) · [简体中文](README.zh-CN.md)
+
 # rdsh — `dsh` を速く・安全に起動する Rust 製ランチャー
 
 [![ci](https://github.com/jimoto-no-llm/rustdsh/actions/workflows/ci.yml/badge.svg)](https://github.com/jimoto-no-llm/rustdsh/actions/workflows/ci.yml)
@@ -421,6 +423,19 @@ rdsh settings set extras.enable serve  # 機能を有効化
 rdsh serve                             # 起動（ローカルホスト限定、一時トークンで保護）
 ```
 
+### 表示言語
+
+rdsh 自身が表示する CLI 診断と内蔵ローカル画面は、英語・簡体字中国語・日本語に対応します。1回だけ指定するには `--language`、保存するには `rdsh.json` を使います。既定の `auto` は最初の空でないロケール環境変数を使い、未設定・未対応なら英語になります。
+
+```sh
+rdsh --language ja settings show
+rdsh settings set general.language zh-CN
+```
+
+優先順は `--language`、`RDSH_LANG`、`general.language`、`LC_ALL`、`LC_MESSAGES`、`LANG` です。明示した `general.language` が不正なら設定を書き換えずに停止します。委譲する `dsh` 引数、モデル出力、JSON フィールド、ファイル、プロトコル識別子は翻訳しません。
+
+`worker-scope validate` と `worker-scope policy` のヘルプ・CLI診断も3言語に対応します。この純粋な処理とそのヘルプは無関係な壊れた設定に依存しません。通常のコマンドとルートのヘルプは設定エラーを報告します。正規JSON・ポリシーコード・渡されたパスは変えません。
+
 ### 拡張ダッシュボード (`rdsh-dashboard`)
 
 プロジェクト全体の稼働状況、質問・回答の確認、モバイル端末からの接続などを行える拡張ダッシュボードです（要 Node.js 22+）：
@@ -560,3 +575,15 @@ rdsh が利用・改変・推薦している第三者製 DSH プラグインで�
 ## ライセンス
 
 MIT（[LICENSE](LICENSE)）です。本家 DeepSeek Harness および依存ライブラリにはそれぞれのライセンスが適用されます。
+
+## 保護付き起動の対応版
+
+明示的な共有ファイルだけを扱う隔離機能は、Linux x86_64 と bubblewrap・prlimit・ユーザー名前空間が必要です。監査済みのDSHとツールランタイムの同一版の組は `0.2.0-rc.2`、`0.2.1-alpha.1`、`0.2.1-alpha.3` です。未知・混在・改変されたランタイムや別の依存先へ解決されたランタイムは拒否します。macOSとWindowsでは保護付き委譲を拒否します。[ダッシュボードの固定更新](docs/STAGED-UPDATES.md)は別の対応版一覧を持ちます。
+
+### 外部エージェントのジョブ
+
+`node dashboard/cli.mjs --language ja agents list`で表示言語を選べます。外部エージェントのヘルプとCLI診断は英語・簡体字中国語・日本語に対応します。ジョブ状態・エラーコード・JSONキー・エージェント出力は原文を保持します。日本語のファイル名と指示文はUTF-8の`--prompt-file`で渡せます。[コマンドと権限の制約](docs/AGENT-RUNNERS.md)を確認してください。実ジョブは外部サービスの料金が発生する場合があります。言語検証はローカルのテスト用実行ファイルで行います。
+
+`budget-admission apply|validate|public --input-file <request-json>`も設定に依存しない純JSONコマンドです。nativeとDashboardのヘルプ・診断を3言語化し、予算コードとJSON出力は保持します。プロバイダーの呼び出しや予算台帳の書き込みは行いません。[予算管理](docs/BUDGET-CONTROL.md)を参照してください。
+
+`question-contracts apply|validate|public`、`answer-applications apply|validate|public|schema`、`instruction-queue validate|context|submit|resolve|control`も`--input-file <request-json>`を受け取り、無関係な設定を読みません。nativeとDashboardのヘルプ・所有する診断は3言語に対応し、エンジンのメッセージ・状態コード・正規JSONは上流の値を保持します。任意の[応答ガード](plugins/rdsh-answer-guard/README.md)も通知要約と設定エラーを3言語化し、モデルへの再出力指示は保持します。

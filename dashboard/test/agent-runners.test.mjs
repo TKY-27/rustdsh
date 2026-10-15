@@ -671,8 +671,12 @@ test("sanitizeText strips ANSI and control characters but keeps newline and tab"
 
 test("CLI end-to-end with fake agents", async (t) => {
   const f = await fixture(t);
-  const env = { ...process.env, RDSH_DASHBOARD_HOME: path.join(f.dir, "cli-state") };
-  const node = (...args) => exec(process.execPath, [cli, "agents", ...args], { env });
+  const env = {
+    ...process.env,
+    DSH_HOME: path.join(f.dir, "cli-dsh"),
+    RDSH_DASHBOARD_HOME: path.join(f.dir, "cli-state"),
+  };
+  const node = (...args) => exec(process.execPath, [cli, "--language", "en", "agents", ...args], { env });
   const promptFile = await f.prompt("ok");
   const submitted = JSON.parse(
     (await node("submit", "--agent", "devin", "--project", f.project, "--prompt-file", promptFile, "--executable", process.execPath, "--entrypoint", f.devinBin, "--permission", "edit")).stdout,

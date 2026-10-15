@@ -1766,6 +1766,19 @@ fn priority_order() -> Vec<&'static str> {
     ]
 }
 
+fn text(
+    locale: crate::locale::Locale,
+    english: &'static str,
+    chinese: &'static str,
+    japanese: &'static str,
+) -> &'static str {
+    match locale {
+        crate::locale::Locale::English => english,
+        crate::locale::Locale::Chinese => chinese,
+        crate::locale::Locale::Japanese => japanese,
+    }
+}
+
 struct Assembled {
     sections: Vec<Section>,
     snapshot: Snapshot,
@@ -1805,8 +1818,8 @@ fn append_memory(body: &mut String, memory: &MemoryStore, kind: &str) {
     }
 }
 
-fn assemble(query: &str, cfg: &ContextConfig) -> Assembled {
-    assemble_at(query, cfg, None, 0)
+fn assemble(query: &str, cfg: &ContextConfig, locale: crate::locale::Locale) -> Assembled {
+    assemble_at(query, cfg, None, 0, locale)
 }
 
 fn assemble_at(
@@ -1814,6 +1827,7 @@ fn assemble_at(
     cfg: &ContextConfig,
     deadline: Option<Instant>,
     carry_sessions: usize,
+    locale: crate::locale::Locale,
 ) -> Assembled {
     let mut tracker = SnapshotTracker::start(deadline);
     let path = memory_path();
@@ -1834,7 +1848,7 @@ fn assemble_at(
     // rather than failing the assembly.
     let memory_unknown = loaded.is_err();
     let memory = loaded.unwrap_or_default();
-    let mut secs = assemble_sections(query, cfg, &memory, &mut tracker, deadline);
+    let mut secs = assemble_sections(query, cfg, &memory, &mut tracker, deadline, locale);
     if memory_unknown {
         secs.push(Section {
             name: "memory",
@@ -1870,11 +1884,19 @@ fn assemble_sections(
     memory: &MemoryStore,
     tracker: &mut SnapshotTracker,
     deadline: Option<Instant>,
+    locale: crate::locale::Locale,
 ) -> Vec<Section> {
     let mut secs = Vec::new();
     let goal = if cfg.goal.trim().is_empty() {
         memory_lines(memory, "goal").pop().unwrap_or_else(|| {
-            "(unset — set with: rdsh settings set context.goal \"...\")".to_string()
+            if locale == crate::locale::Locale::English {
+                "(unset — set with: rdsh settings set context.goal \"...\")".to_string()
+            } else {
+                format!(
+                    "({})",
+                    crate::locale::ui_message(locale, crate::locale::UiMessage::GoalUnset)
+                )
+            }
         })
     } else {
         cfg.goal.clone()
@@ -1918,11 +1940,34 @@ fn assemble_sections(
                 }
                 Err(reason) => {
                     let hint = match reason {
-                        "outside-root" => "outside repo root — not read",
-                        "not-a-file" => "not a regular file",
-                        _ => "missing or binary",
+                        "outside-root" => text(
+                            locale,
+                            "outside repo root — not read",
+                            "位于仓库根目录外 — 未读取",
+                            "リポジトリルート外です — 読み込みません",
+                        ),
+                        "not-a-file" => text(
+                            locale,
+                            "not a regular file",
+                            "不是常规文件",
+                            "通常ファイルではありません",
+                        ),
+                        _ => text(
+                            locale,
+                            "missing or binary",
+                            "缺失或二进制文件",
+                            "存在しないかバイナリです",
+                        ),
                     };
-                    parts.push(format!("## {f}\n({hint} — verify before trusting)"));
+                    parts.push(format!(
+                        "## {f}\n({hint} — {})",
+                        text(
+                            locale,
+                            "verify before trusting",
+                            "请先验证再信任",
+                            "信頼する前に検証してください"
+                        )
+                    ));
                 }
             }
         }
@@ -2238,7 +2283,7 @@ fn missing_files(cfg: &ContextConfig) -> Vec<String> {
     out
 }
 
-pub fn cmd_status(json: bool) -> anyhow::Result<()> {
+pub fn cmd_status(json: bool, locale: crate::locale::Locale) -> anyhow::Result<()> {
     let cfg = load_config();
     let wm = format!(
         "goal={} constraints={} decisions={} files={} tasks={}",
@@ -2301,9 +2346,11 @@ pub fn cmd_status(json: bool) -> anyhow::Result<()> {
     }
     let stdout = std::io::stdout();
     let mut out = std::io::BufWriter::new(stdout.lock());
-    writeln!(out, "[rdsh context: v{SCHEMA}]")?;
-    writeln!(out, "config: {} (legacy: {})", config_path(), legacy_path())?;
-    writeln!(out, "budget: {} tokens", cfg.token_budget)?;
+    writeln!(
+        out,
+        "[rdsh {}: v{SCHEMA}]",
+        crate::locale::ui_message(locale, crate::locale::UiMessage::ContextStatus)
+    )?;
     writeln!(
         out,
         "dependency_graph: {}",
@@ -2320,28 +2367,85 @@ pub fn cmd_status(json: bool) -> anyhow::Result<()> {
     )?;
     writeln!(
         out,
-        "code_hits={} sessions={} git_diff={}",
+        "{}: {} ({}: {})",
+        text(locale, "config", "配置", "設定"),
+        config_path(),
+        text(locale, "legacy", "旧版", "旧形式"),
+        legacy_path()
+    )?;
+    writeln!(
+        out,
+        "{}: {} {}",
+        text(locale, "budget", "预算", "予算"),
+        cfg.token_budget,
+        text(locale, "tokens", "令牌", "トークン")
+    )?;
+    writeln!(
+        out,
+        "{}: {}/{}/{}",
+        text(
+            locale,
+            "retriever/packer/verifier",
+            "检索器/打包器/验证器",
+            "取得/パッカー/検証"
+        ),
+        cfg.enable_retriever,
+        cfg.enable_packer,
+        cfg.enable_verifier
+    )?;
+    writeln!(
+        out,
+        "{}={} {}={} {}={}",
+        text(locale, "code_hits", "代码命中", "コード一致"),
         cfg.max_code_hits,
+        text(locale, "sessions", "会话", "セッション"),
         cfg.max_sessions,
+        text(locale, "git_diff", "git 差异", "git 差分"),
         if cfg.include_git_diff { "on" } else { "off" }
     )?;
-    writeln!(out, "working memory: {wm} (~{wm_tokens} tokens)")?;
+    writeln!(
+        out,
+        "{}: {wm} (~{wm_tokens} {})",
+        text(locale, "working memory", "工作记忆", "作業メモリ"),
+        text(locale, "tokens", "令牌", "トークン")
+    )?;
     if cfg.goal.trim().is_empty() {
         writeln!(
             out,
-            "goal: (unset — rdsh settings set context.goal \"...\")"
+            "{}: ({})",
+            text(locale, "goal", "目标", "目標"),
+            crate::locale::ui_message(locale, crate::locale::UiMessage::GoalUnset)
         )?;
     } else {
-        writeln!(out, "goal: {}", cfg.goal)?;
+        writeln!(
+            out,
+            "{}: {}",
+            text(locale, "goal", "目标", "目標"),
+            cfg.goal
+        )?;
     }
     if !missing.is_empty() {
-        writeln!(out, "warn: missing files: {}", missing.join(", "))?;
+        writeln!(
+            out,
+            "{}: {}: {}",
+            text(locale, "warn", "警告", "警告"),
+            crate::locale::ui_message(locale, crate::locale::UiMessage::MissingFiles),
+            missing.join(", ")
+        )?;
     }
     if legacy_exists {
         writeln!(
             out,
-            "note: legacy {} exists (ignored when rdsh.json has context)",
-            legacy_path()
+            "{}: {} {} ({})",
+            text(locale, "note", "提示", "注"),
+            legacy_path(),
+            text(locale, "exists", "存在", "が存在"),
+            text(
+                locale,
+                "ignored when rdsh.json has context",
+                "rdsh.json 包含 context 时忽略",
+                "rdsh.json に context がある場合は無視されます"
+            )
         )?;
     }
     out.flush()?;
@@ -2360,7 +2464,7 @@ pub struct BuildOptions {
     pub json: bool,
 }
 
-pub fn cmd_build(opts: BuildOptions) -> anyhow::Result<()> {
+pub fn cmd_build(opts: BuildOptions, locale: crate::locale::Locale) -> anyhow::Result<()> {
     let mut cfg = load_config();
     if let Some(n) = opts.sessions {
         cfg.max_sessions = n.clamp(0, 100);
@@ -2368,9 +2472,15 @@ pub fn cmd_build(opts: BuildOptions) -> anyhow::Result<()> {
     let q = opts.query.unwrap_or_default();
     let budget = opts.budget.unwrap_or(cfg.token_budget).clamp(500, 200_000);
     let as_json = opts.json;
+    // JSON output stays stable English; human output follows the locale.
+    let content_locale = if as_json {
+        crate::locale::Locale::English
+    } else {
+        locale
+    };
     // `--sessions N` lands in cfg.max_sessions; assemble() hardcodes 0, so the
     // carryover count has to be passed through explicitly.
-    let assembled = assemble_at(&q, &cfg, None, cfg.max_sessions);
+    let assembled = assemble_at(&q, &cfg, None, cfg.max_sessions, content_locale);
     let snapshot = assembled.snapshot;
     let sections = assembled.sections;
     let full = render(&sections);
@@ -2418,77 +2528,137 @@ pub fn cmd_build(opts: BuildOptions) -> anyhow::Result<()> {
         out.write_all(b"\n")?;
     }
     out.flush()?;
-    eprintln!("[rdsh context build] {before}->{after} tokens (budget {budget})");
+    eprintln!(
+        "[rdsh {}] {before}->{after} {} ({} {budget})",
+        crate::locale::ui_message(locale, crate::locale::UiMessage::ContextBuild),
+        text(locale, "tokens", "令牌", "トークン"),
+        text(locale, "budget", "预算", "予算")
+    );
     if opts.require_stable && !snapshot.stable {
         std::process::exit(3);
     }
     Ok(())
 }
 
-pub fn cmd_search(query: String, max: usize) -> anyhow::Result<()> {
+pub fn cmd_search(query: String, max: usize, locale: crate::locale::Locale) -> anyhow::Result<()> {
     let max = max.clamp(1, 100);
     let stdout = std::io::stdout();
     let mut out = std::io::BufWriter::new(stdout.lock());
     let code = code_hits(&query, max);
-    writeln!(out, "# code ({})", code.len())?;
+    writeln!(
+        out,
+        "# {} ({})",
+        text(locale, "code", "代码", "コード"),
+        code.len()
+    )?;
     if code.is_empty() {
-        writeln!(out, "(no hits)")?;
+        writeln!(
+            out,
+            "({})",
+            crate::locale::ui_message(locale, crate::locale::UiMessage::NoHits)
+        )?;
     }
     for (i, h) in code.iter().enumerate() {
         writeln!(out, "{}: {h}", i + 1)?;
     }
     let sess = recent_sessions(&query, max.min(20));
-    writeln!(out, "# sessions ({})", sess.len())?;
+    writeln!(
+        out,
+        "# {} ({})",
+        text(locale, "sessions", "会话", "セッション"),
+        sess.len()
+    )?;
     if sess.is_empty() {
-        writeln!(out, "(no hits)")?;
+        writeln!(
+            out,
+            "({})",
+            crate::locale::ui_message(locale, crate::locale::UiMessage::NoHits)
+        )?;
     }
     for (i, s) in sess.iter().enumerate() {
         writeln!(out, "{}: {s}", i + 1)?;
     }
     out.flush()?;
     eprintln!(
-        "[rdsh context search] query={query:?} terms={:?}",
+        "[rdsh {}] {}={query:?} {}={:?}",
+        crate::locale::ui_message(locale, crate::locale::UiMessage::ContextSearch),
+        text(locale, "query", "查询", "クエリ"),
+        text(locale, "terms", "词项", "語句"),
         query_terms(&query)
     );
     Ok(())
 }
 
-pub fn cmd_explain(query: Option<String>, budget: Option<usize>) -> anyhow::Result<()> {
+pub fn cmd_explain(
+    query: Option<String>,
+    budget: Option<usize>,
+    locale: crate::locale::Locale,
+) -> anyhow::Result<()> {
     let cfg = load_config();
     let q = query.unwrap_or_default();
     let budget = budget.unwrap_or(cfg.token_budget).clamp(500, 200_000);
-    let assembled = assemble(&q, &cfg);
+    let assembled = assemble(&q, &cfg, locale);
     let sections = assembled.sections;
     let stdout = std::io::stdout();
     let mut out = std::io::BufWriter::new(stdout.lock());
-    writeln!(out, "[rdsh context explain: v{SCHEMA}]")?;
-    writeln!(out, "priority: {}", priority_order().join(" > "))?;
-    writeln!(out, "budget: {budget} tokens")?;
     writeln!(
         out,
-        "limits: code_hits={} sessions={} git_diff={}",
+        "[rdsh {}: v{SCHEMA}]",
+        crate::locale::ui_message(locale, crate::locale::UiMessage::ContextExplain)
+    )?;
+    writeln!(
+        out,
+        "{}: {}",
+        text(locale, "priority", "优先级", "優先順位"),
+        priority_order().join(" > ")
+    )?;
+    writeln!(
+        out,
+        "{}: {budget} {}",
+        text(locale, "budget", "预算", "予算"),
+        text(locale, "tokens", "令牌", "トークン")
+    )?;
+    writeln!(
+        out,
+        "{}: {}={} {}={} {}={}",
+        text(locale, "limits", "限制", "上限"),
+        text(locale, "code_hits", "代码命中", "コード一致"),
         cfg.max_code_hits,
+        text(locale, "sessions", "会话", "セッション"),
         cfg.max_sessions,
+        text(locale, "git_diff", "git 差异", "git 差分"),
         if cfg.include_git_diff { "on" } else { "off" }
     )?;
     if !q.trim().is_empty() {
-        writeln!(out, "terms: {:?}", query_terms(&q))?;
+        writeln!(
+            out,
+            "{}: {:?}",
+            text(locale, "terms", "词项", "語句"),
+            query_terms(&q)
+        )?;
     }
     for s in &sections {
         let t = estimate(&s.body);
         let why = match s.name {
-            "goal" => "always first: settings win; latest active [mem] goal is fallback (never dropped)",
-            "constraints" => "must-not-break rules; active [mem] constraints follow settings (kept until the end)",
-            "related_files" => "working set from settings (missing files warn)",
-            "git_diff" => "branch + status + diff stat (fresh, not from memory)",
-            "decisions" => "reused past decisions; active [mem] decisions follow settings",
-            "open_tasks" => "unresolved work only; active [mem] tasks appended after settings",
-            "memory" => "active [mem] notes/files only; superseded history is excluded",
-            "sessions" => "recent matching user utterances from the current project, capped at 400 tokens",
-            "retrieved" => "scored hits: coverage + boundary + filename bonus, CJK bigram recall, per-file top3, ranked (first to trim)",
+            "goal" => text(locale, "always first: settings win; latest active [mem] goal is fallback (never dropped)", "始终优先：设置优先，最新的活动 [mem] 目标作为回退（永不丢弃）", "常に最優先: 設定が優先、最新のアクティブな [mem] goal をフォールバック（削除しません）"),
+            "constraints" => text(locale, "must-not-break rules; active [mem] constraints follow settings (kept until the end)", "不得破坏的规则；活动 [mem] 约束跟随设置（保留到最后）", "破ってはいけない規則。アクティブな [mem] 制約は設定に続きます（最後まで保持）"),
+            "related_files" => text(locale, "working set from settings (missing files warn)", "来自设置的工作集合（缺失文件会警告）", "設定からの作業セット（見つからないファイルは警告）"),
+            "git_diff" => text(locale, "branch + status + diff stat (fresh, not from memory)", "分支 + 状态 + 差异统计（最新数据，不来自记忆）", "ブランチ + 状態 + 差分統計（メモリではなく最新）"),
+            "decisions" => text(locale, "reused past decisions; active [mem] decisions follow settings", "复用过去的决策；活动 [mem] 决策跟随设置", "過去の判断を再利用。アクティブな [mem] 判断は設定に続きます"),
+            "open_tasks" => text(locale, "unresolved work only; active [mem] tasks appended after settings", "仅包含未解决工作；活动 [mem] 任务追加在设置之后", "未解決の作業のみ。アクティブな [mem] タスクは設定の後に追加されます"),
+            "memory" => text(locale, "active [mem] notes/files only; superseded history is excluded", "仅活动 [mem] 备注/文件；被取代的历史已排除", "アクティブな [mem] メモ/ファイルのみ。置き換えられた履歴は除外されます"),
+            "sessions" => text(locale, "recent matching user utterances from the current project, capped at 400 tokens", "当前项目中最近匹配的用户发言，上限 400 令牌", "現在のプロジェクトの最近の一致するユーザー発話、400 トークンまで"),
+            "retrieved" => text(locale, "scored hits: coverage + boundary + filename bonus, CJK bigram recall, per-file top3, ranked (first to trim)", "评分结果：覆盖度 + 边界 + 文件名加分、CJK 双字召回、每文件前3、按排名（最先裁剪）", "スコア付き一致: カバレッジ + 境界 + ファイル名加点、CJK バイグラム再現、ファイルごと上位3、順位順（最初に削減）"),
             _ => "",
         };
-        writeln!(out, "- {}: ~{} tokens - {}", s.name, t, why)?;
+        writeln!(
+            out,
+            "- {}: ~{} {} - {}",
+            s.name,
+            t,
+            text(locale, "tokens", "令牌", "トークン"),
+            why
+        )?;
     }
     writeln!(
         out,
@@ -2512,16 +2682,39 @@ pub fn cmd_explain(query: Option<String>, budget: Option<usize>) -> anyhow::Resu
         }
     )?;
     if !cfg.enable_verifier {
-        writeln!(out, "note: verifier is OFF (summaries are trusted as-is)")?;
+        writeln!(
+            out,
+            "{}: {}",
+            text(locale, "note", "提示", "注"),
+            text(
+                locale,
+                "verifier is OFF (summaries are trusted as-is)",
+                "验证器处于关闭状态（按原样信任摘要）",
+                "検証器はOFFです（要約をそのまま信頼します）"
+            )
+        )?;
     } else {
         writeln!(
             out,
-            "note: verifier is ON - re-open source file/git/session before acting"
+            "{}: {}",
+            text(locale, "note", "提示", "注"),
+            text(
+                locale,
+                "verifier is ON - re-open source file/git/session before acting",
+                "验证器处于开启状态：执行前请重新打开源文件/git/会话",
+                "検証器はONです。実行前にソースファイル/git/セッションを開き直してください"
+            )
         )?;
     }
     let missing = missing_files(&cfg);
     if !missing.is_empty() {
-        writeln!(out, "warn: missing files: {}", missing.join(", "))?;
+        writeln!(
+            out,
+            "{}: {}: {}",
+            text(locale, "warn", "警告", "警告"),
+            crate::locale::ui_message(locale, crate::locale::UiMessage::MissingFiles),
+            missing.join(", ")
+        )?;
     }
     out.flush()?;
     Ok(())
@@ -2542,7 +2735,10 @@ impl MemoryLock {
         std::fs::create_dir_all(parent)?;
         let target = parent.join(".rdsh-context-memory");
         Ok(Self {
-            _lock: crate::file_lock::FileLock::exclusive_for(&target)?,
+            _lock: crate::file_lock::FileLock::exclusive_for(
+                &target,
+                crate::locale::Locale::English,
+            )?,
         })
     }
 }
@@ -2633,10 +2829,11 @@ fn inject_context(
     sessions: usize,
     deadline: Instant,
     json: bool,
+    locale: crate::locale::Locale,
 ) -> anyhow::Result<Option<serde_json::Value>> {
     // An unreadable memory store is reported as a section and the injection
     // continues with settings only; it must never silence the whole hook.
-    let mut assembled = assemble_at(query, cfg, Some(deadline), sessions);
+    let mut assembled = assemble_at(query, cfg, Some(deadline), sessions, locale);
     let mut pinned = Vec::new();
     for section in &mut assembled.sections {
         if matches!(section.name, "goal" | "constraints" | "memory") {
@@ -2717,6 +2914,7 @@ pub fn cmd_inject(
 ) -> anyhow::Result<()> {
     let result = (|| -> anyhow::Result<Option<serde_json::Value>> {
         let settings = crate::rdsh_config::try_load()?;
+        let locale = crate::locale::current(None, &settings.general.language);
         if !crate::rdsh_config::feature_enabled(&settings, "context_engine") {
             return Ok(None);
         }
@@ -2739,7 +2937,7 @@ pub fn cmd_inject(
             } else {
                 0
             });
-        inject_context(event, q, &cfg, count, deadline, json)
+        inject_context(event, q, &cfg, count, deadline, json, locale)
     })();
     if let Some(line) = silent_hook_line(result) {
         let _ = writeln!(std::io::stdout().lock(), "{line}");
@@ -3367,10 +3565,12 @@ mod v3_tests {
         };
         match action.as_str() {
             "build-index" => crate::deps::cmd_build(None, false, true).unwrap(),
-            "status" => {
-                cmd_status(std::env::var("RDSH_CONTEXT_TEST_JSON").unwrap() == "true").unwrap()
-            }
-            "explain" => cmd_explain(None, None).unwrap(),
+            "status" => cmd_status(
+                std::env::var("RDSH_CONTEXT_TEST_JSON").unwrap() == "true",
+                crate::locale::Locale::English,
+            )
+            .unwrap(),
+            "explain" => cmd_explain(None, None, crate::locale::Locale::English).unwrap(),
             "inject" | "inject-sessions" => cmd_inject(
                 "user-prompt-submit",
                 None,
@@ -4166,14 +4366,28 @@ mod v3_tests {
             decisions: vec!["configured decision".to_string()],
             ..ContextConfig::default()
         };
-        let text = render(&assemble_sections("", &cfg, &memory, &mut tracker(), None));
+        let text = render(&assemble_sections(
+            "",
+            &cfg,
+            &memory,
+            &mut tracker(),
+            None,
+            crate::locale::Locale::English,
+        ));
         assert!(text.contains("[mem] memory goal"));
         assert!(text.contains("configured decision\n[mem] active decision"));
         assert!(text.contains("[mem] active constraint"));
         assert!(text.contains("[mem] active task"));
         assert!(!text.contains("old decision"));
         cfg.goal = "configured goal".to_string();
-        let text = render(&assemble_sections("", &cfg, &memory, &mut tracker(), None));
+        let text = render(&assemble_sections(
+            "",
+            &cfg,
+            &memory,
+            &mut tracker(),
+            None,
+            crate::locale::Locale::English,
+        ));
         assert!(text.contains("configured goal"));
         assert!(!text.contains("memory goal"));
     }
@@ -4197,6 +4411,7 @@ mod v3_tests {
             &memory,
             &mut tracker(),
             Some(Instant::now()),
+            crate::locale::Locale::English,
         );
         let text = render(&sections);
         assert!(text.contains("keep this goal"));

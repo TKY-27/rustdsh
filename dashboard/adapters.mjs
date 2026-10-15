@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 import { realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { spawnOwnedProcess } from "./process-scope.mjs";
+import { ScopeError, spawnOwnedProcess } from "./process-scope.mjs";
 import {
   nativeSelection,
   selected,

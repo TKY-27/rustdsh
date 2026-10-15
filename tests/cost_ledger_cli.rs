@@ -1,6 +1,6 @@
 //! `rdsh cost-ledger` integration: the Rust module ports
 //! `dashboard/cost-ledger.mjs`, so the CLI contract is checked on the real
-//! binary — compact JSON on stdout, the JS error message on stderr, exit 1,
+//! binary — compact JSON on stdout, canonical English or localized stderr, exit 1,
 //! byte-identical output across runs, and no dependency on settings.
 use std::path::PathBuf;
 use std::process::{Command, Output};
@@ -561,21 +561,161 @@ fn commands_require_the_input_file_option() {
 
 #[test]
 fn commands_ignore_unrelated_corrupt_settings_without_replacing_them() {
-    // The pure validator must not fail closed on an unreadable settings file.
     let fixture = Fixture::new();
-    fixture.write("request.json", &fixture.recorded_document());
+    let declared = fixture.declared_ledger();
+    let report: serde_json::Value = serde_json::from_str(&fixture.recorded_document()).unwrap();
+    let public: serde_json::Value = serde_json::from_str(&fixture.public_document()).unwrap();
+    let documents = [
+        (
+            "declare",
+            serde_json::json!({"operation":"declare", "state":{"schema":1,"project":{"id":"project-1"}}, "input":serde_json::from_str::<serde_json::Value>(SCOPE).unwrap()}),
+        ),
+        ("report", report),
+        (
+            "validate",
+            serde_json::json!({"operation":"validate", "state":{"schema":1,"project":{"id":"project-1"},"cost_ledger":declared}}),
+        ),
+        ("public", public),
+        (
+            "schema",
+            serde_json::json!({"operation":"schema", "state":{}}),
+        ),
+    ];
     fixture.write("dsh/rdsh.json", "{broken");
-    let output = fixture.run(&[
-        "cost-ledger",
-        "report",
-        "--input-file",
-        &fixture.path("request.json"),
-    ]);
-    assert!(output.status.success(), "{}", public_output(&output));
+    for (action, document) in documents {
+        fixture.write("要求_日本語.json", &document.to_string());
+        let mut expected = None;
+        for language in ["en", "zh-CN", "ja"] {
+            let output = fixture.run(&[
+                "--language",
+                language,
+                "cost-ledger",
+                action,
+                "--input-file",
+                &fixture.path("要求_日本語.json"),
+            ]);
+            assert!(
+                output.status.success(),
+                "{action}/{language}: {}",
+                public_output(&output)
+            );
+            assert!(output.stderr.is_empty());
+            let actual = normalise_stamps(&stdout(&output));
+            if let Some(expected) = &expected {
+                assert_eq!(&actual, expected, "{action}/{language}");
+            } else {
+                expected = Some(actual);
+            }
+        }
+    }
     assert_eq!(
         std::fs::read_to_string(fixture.path("dsh/rdsh.json")).unwrap(),
         "{broken"
     );
+    let ordinary = fixture.run(&["--language", "ja", "settings", "show"]);
+    assert!(!ordinary.status.success());
+    assert!(ordinary.stdout.is_empty());
+    assert!(public_output(&ordinary).contains("無効な設定ファイル"));
+}
+
+#[test]
+fn human_diagnostics_are_localized_without_changing_input_or_raw_paths() {
+    let fixture = Fixture::new();
+    let report: serde_json::Value = serde_json::from_str(&fixture.recorded_document()).unwrap();
+    for (language, invalid, mismatch, unknown, amount, immutable, read) in [
+        (
+            "en",
+            "Input JSON is invalid",
+            "Input JSON operation does not match the requested action",
+            "unknown cost-ledger action",
+            "amount must be a nonnegative decimal string with at most 9 fractional digits",
+            "scope identity is immutable",
+            "cannot read JSON",
+        ),
+        (
+            "zh-CN",
+            "输入 JSON 无效",
+            "输入 JSON 的 operation 与请求的操作不匹配",
+            "未知的 cost-ledger 操作",
+            "amount 必须为非负十进制字符串，且小数位不超过 9 位",
+            "scope 标识不可更改",
+            "无法读取 JSON",
+        ),
+        (
+            "ja",
+            "入力JSONが無効です",
+            "入力JSONのoperationが要求した操作と一致しません",
+            "不明なcost-ledger操作",
+            "amountは小数点以下9桁以内の非負の10進文字列で指定してください",
+            "scopeの識別情報は変更できません",
+            "JSONを読み取れません",
+        ),
+    ] {
+        let mut bad_report = report.clone();
+        bad_report["input"]["amount"] = serde_json::json!("-1");
+        let mut changed_scope: serde_json::Value = serde_json::from_str(SCOPE).unwrap();
+        changed_scope["membership_complete"] = serde_json::json!(false);
+        let conflict = serde_json::json!({"operation":"declare", "state":report["state"], "input":changed_scope});
+        for (action, document, detail) in [
+            ("validate", "{broken".to_string(), invalid),
+            (
+                "validate",
+                r#"{"operation":"schema","state":{}}"#.to_string(),
+                mismatch,
+            ),
+            (
+                "future-action",
+                r#"{"operation":"future-action","state":{}}"#.to_string(),
+                unknown,
+            ),
+            ("report", bad_report.to_string(), amount),
+            ("declare", conflict.to_string(), immutable),
+        ] {
+            fixture.write("要求_日本語.json", &document);
+            let output = fixture.run(&[
+                "--language",
+                language,
+                "cost-ledger",
+                action,
+                "--input-file",
+                &fixture.path("要求_日本語.json"),
+            ]);
+            assert_eq!(output.status.code(), Some(1));
+            assert!(output.stdout.is_empty());
+            assert!(
+                public_output(&output).contains(detail),
+                "{language}/{action}: {}",
+                public_output(&output)
+            );
+            if action == "future-action" {
+                assert!(public_output(&output).contains(action));
+            }
+            assert_eq!(
+                std::fs::read_to_string(fixture.path("要求_日本語.json")).unwrap(),
+                document
+            );
+        }
+        let missing = fixture.path("未取得 日本語.json");
+        let output = fixture.run(&[
+            "--language",
+            language,
+            "cost-ledger",
+            "schema",
+            "--input-file",
+            &missing,
+        ]);
+        assert_eq!(output.status.code(), Some(1));
+        assert!(output.stdout.is_empty());
+        assert!(public_output(&output).contains(read));
+        assert!(public_output(&output).contains(&missing));
+        let help = fixture.run(&["--language", language, "cost-ledger", "--help"]);
+        assert!(help.status.success(), "{}", public_output(&help));
+        assert!(stdout(&help).contains("cost-ledger"));
+        assert!(stdout(&help).contains("--input-file"));
+        for action in ["declare", "report", "validate", "public", "schema"] {
+            assert!(stdout(&help).contains(action));
+        }
+    }
 }
 
 /// Replace each `"<key>":"<iso timestamp>"` value with a placeholder, so the
@@ -674,6 +814,7 @@ impl Fixture {
             .env("XDG_DATA_HOME", self.root.join("data"))
             .env("XDG_CONFIG_HOME", self.root.join("config"))
             .env("DSH_HOME", self.root.join("dsh"))
+            .env("RDSH_LANG", "en")
             .env_remove("RDSH_ORIG_BIN")
             .env_remove("RDSH_PASSTHROUGH")
             .env_remove("RDSH_DRY_RUN")

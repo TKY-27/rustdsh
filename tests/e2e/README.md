@@ -9,8 +9,8 @@ It does not replace native testing or reimplement the DSH agent loop.
 
 ```sh
 cargo build --release
-npm ci --prefix dashboard
-npm ci --prefix tests/e2e
+(cd dashboard && npm ci)
+(cd tests/e2e && npm ci)
 (cd tests/e2e && npx playwright install chromium)
 RDSH_E2E_BIN=./target/release/rdsh npm test --prefix tests/e2e
 ```
@@ -37,7 +37,12 @@ This uses no provider, model, credentials, or external network. The screenshot i
 an actual browser capture of the local dashboard, not a mockup; it does not prove
 that DSH exposes the unavailable task/API/GPU telemetry.
 
-The default command also runs `update-banner.mjs` with the real React component
+The default command repeats native setup, native Web and project-dashboard flows
+in `en`, `zh-CN`, and `ja`, including original Japanese task/question text that
+must not be translated. Each display language also checks Japanese, Chinese and
+English palette queries, one-key Escape/focus recovery, and a browser-generated
+cancellation reason persisted through the authenticated HTTP API. Individual `browser.mjs` runs use
+`RDSH_E2E_LANGUAGE` (default `ja`). It also runs `update-banner.mjs` with the real React component
 and two independent authenticated plugin hosts. Dummy HOME and loopback ports
 cover live update push, cross-tab/port close events, dismiss finality across
 polls, remount, reload and later hours, notification of a newer target or update
@@ -79,7 +84,8 @@ RDSH_HARNESS_BIN=/path/to/original/dsh npm run test:harness --prefix tests/e2e
 ```
 
 This installs the local rdsh settings plugin into a temporary DSH Web profile and
-tests save/readback/reload/corruption/retry in its actual UI. It uses no credentials
+tests save/readback/reload/corruption/retry and live en/zh-CN/ja language
+switching in its actual UI. It uses no credentials
 or model calls, and does not start the Electron Desktop GUI. DSH must already be
 installed; the optional test is not part of CI. The report separates
 `functional_result` from `mobile_accepted` and `mobile_readability`; command success
@@ -172,3 +178,25 @@ Add `--extras` to publish a temporary project link alongside the bundled icon.
 The live report includes acknowledged assets, buttons, status display type and
 timestamps. Button acknowledgement does not mean it will appear on your own profile;
 Discord displays Rich Presence buttons to other users.
+
+## CLI terminal prompts
+
+On POSIX systems, `RDSH_E2E_BIN=./target/release/rdsh python3 tests/e2e/cli-tty.py`
+opens real private pseudo-terminals for English, Chinese and Japanese setup. It
+observes both the pasted-key prompt and environment-key confirmation, skips or
+refuses both, and verifies no credential is written. Only a synthetic placeholder
+is placed in the child environment; no secret is entered and no provider is called.
+The existing native CI matrix runs this test on Linux and macOS.
+
+The outcome language flow runs actual synthetic acceptance checks through the local server in English, Simplified Chinese and Japanese. It checks initial unverified state, verified criteria, original Japanese task values, and desktop/mobile layout without provider calls.
+
+On native Windows, `powershell -NoProfile -File tests/e2e/cli-tty-windows.ps1` checks all six interactive setup cases through ConPTY using isolated homes and no provider requests. `RDSH_E2E_BIN` selects a built `.exe`. POSIX hosts use `python3 tests/e2e/cli-tty.py`. These tests do not exercise a physical keyboard or the Windows OS IME.
+
+Set `RDSH_OUTCOME_RECORD_FLOW=1` when running `node tests/e2e/outcome-languages.mjs`
+to capture real Chromium video and initial/unmet/verified PNG checkpoints for each
+language. `RDSH_OUTCOME_LANGUAGES_OUTPUT` selects the private output directory.
+The recording includes actual local criterion execution and browser clicks; it
+contains no model or account call. Convert the resulting WebM to a GIF with an
+existing video tool if a review attachment needs that format. Setup browser flows
+also render a deliberately corrupt private sharing policy, verify the localized
+warning and unchanged canonical API reason, then repair the private file.

@@ -9,10 +9,15 @@ import { fileURLToPath } from "node:url";
 const cli = fileURLToPath(new URL("../cli.mjs", import.meta.url));
 
 function run(args, env = {}) {
-  return spawnSync(process.execPath, [cli, ...args], {
-    encoding: "utf8",
-    env: { ...process.env, ...env },
-  });
+  const settings = fs.mkdtempSync(path.join(os.tmpdir(), "rdsh-contract-bridge-settings-"));
+  try {
+    return spawnSync(process.execPath, [cli, "--language", "en", ...args], {
+      encoding: "utf8",
+      env: { ...process.env, ...env, DSH_HOME: settings },
+    });
+  } finally {
+    fs.rmSync(settings, { recursive: true, force: true });
+  }
 }
 
 function fakeRdsh(t, body) {

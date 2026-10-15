@@ -909,7 +909,11 @@ impl Fixture {
             .env_remove("RDSH_PASSTHROUGH")
             .env_remove("RDSH_DRY_RUN")
             .env_remove("RDSH_DEFAULT_PROFILE");
-        command.args(args).output().unwrap()
+        command
+            .args(["--language", "en"])
+            .args(args)
+            .output()
+            .unwrap()
     }
 }
 

@@ -337,6 +337,7 @@ impl Fixture {
         let document = json!({"operation":operation,"state":state,"input":input,"now":NOW});
         std::fs::write(&file, document.to_string()).unwrap();
         Command::new(env!("CARGO_BIN_EXE_rdsh"))
+            .args(["--language", "en"])
             .args(["budget-admission", action, "--input-file"])
             .arg(&file)
             .env("HOME", self.root.join("home"))

@@ -1,0 +1,167 @@
+{
+  "scope": "rustdsh PR #500 only; Harness distribution/IME acceptance has its own evidence",
+  "rows": [
+    {
+      "id": "three-product-languages",
+      "status": "verified",
+      "scope": "en/zh-CN/ja CLI, setup/native/project/outcome UI and owned settings/Muse/Discord copy",
+      "evidence": [
+        "macos-native.json",
+        "windows-native.json",
+        "plugins.json",
+        "targeted-runs.json",
+        "outcome-languages.json"
+      ]
+    },
+    {
+      "id": "native-terminal-prompts",
+      "status": "verified",
+      "scope": "actual POSIX PTY and native Windows ConPTY, three languages and two prompt paths each",
+      "limits": "programmatic terminal input; no physical-keyboard/IME claim; no real credential entered or persisted",
+      "evidence": [
+        "posix-tty.json",
+        "windows-conpty.json"
+      ]
+    },
+    {
+      "id": "darwin-process-identity",
+      "status": "verified",
+      "scope": "read-only native identity independent of managed ownership; positives execute on Darwin",
+      "evidence": [
+        "dashboard-platforms.json"
+      ]
+    },
+    {
+      "id": "darwin-managed-process-scopes",
+      "status": "unsupported-existing-capability",
+      "scope": "82 kernel ownership positive tests explicitly excluded on macOS; supported Windows backend tested separately",
+      "behavior": "refuse managed launch with ownership_unavailable; no PID-only fallback",
+      "evidence": [
+        "platform-ledger.md"
+      ]
+    },
+    {
+      "id": "local-linux-owned-process-matrix",
+      "status": "native-linux-verified-at-recorded-source",
+      "scope": "Final a2 source: native Linux release Rust484/14targets0ignore; Dashboard357/374pass17platformskips; current normal shipping executable additionally passes guarded3/3 and settings16/16.",
+      "limits": "WSL2 Ubuntu kernel with existing delegated user manager; no physical-keyboard/IME or production claim.",
+      "evidence": [
+        "linux-cgroup-native.json",
+        "linux-cc019-native.json",
+        "linux-cc019-source.json",
+        "linux-a2-validation.json",
+        "linux-a2-source.json"
+      ]
+    },
+    {
+      "id": "live-muse-runtime-catalog",
+      "status": "verified-logged-out-readonly-catalog",
+      "scope": "Official signed CLI 1.4.8-R6256.1 plus SDK 1.4.8: exact schema, initialize/model-list/clean shutdown, empty bundledCatalog preserved.",
+      "available_evidence": "Exact alpha.1/alpha.3 official profiles, signed CLI/SDK1.4.8 schema, read-only empty catalog and owned plugin checks.",
+      "prerequisites": "Authenticated nonempty catalog and real model response remain unverified; no credential read or model request performed.",
+      "evidence": [
+        "muse-readonly-catalog.json",
+        "muse-feasibility.json",
+        "plugins-exact-matrix-owner.json"
+      ]
+    },
+    {
+      "id": "external-discord-publication",
+      "status": "not-verified",
+      "scope": "actual publication to a live Discord client/account",
+      "available_evidence": "real local IPC framing and synthetic RPC acknowledgements; browser/server locale reflection regression fixtures",
+      "evidence": [
+        "plugins.json"
+      ]
+    },
+    {
+      "id": "provider-model-calls",
+      "status": "not-performed",
+      "scope": "no paid or live provider/model request; local loopback discovery/error fixtures only",
+      "evidence": [
+        "macos-native.json",
+        "windows-native.json"
+      ]
+    },
+    {
+      "id": "raw-data-language",
+      "status": "intentional-preservation",
+      "scope": "user/model text, filenames, IDs, wire JSON values, generated YAML/config, raw OS/library diagnostics and genuine upstream response text",
+      "behavior": "retain original bytes; localize surrounding rdsh-owned display text"
+    },
+    {
+      "id": "loaded-performance-tail",
+      "status": "observed-shared-host-measurement-limit",
+      "scope": "Earlier 8ee/2db loaded streaming-zstd p95 ratio 2.267 is retained. Later cc019 comparison has 13 identical stdout values, median ratios 0.921–1.034 and maximum p95 ratio 1.160. Different baseline/load prevents causal attribution. Final latest-main29 candidate retains all13 identical stdout values, median ratios0.955–1.068 and maxp95ratio1.375; maintained10% median regression gate passes. Historical a2 test-stage p95max4.691 is retained. Final a2 normal release:13identicalstdout,medianratios0.921–1.015,maxp95ratio2.133; unchanged10%median gate passes. Final exact9bf comparison preserves13equalstdout, first median range0.894–1.142/maxp95ratio1.367; four maintained headline cases pass default10%gate. Targeted31sample sessions confirmation median1.026/p951.014; first samples retained. Final778 exactupstream comparison preserves13equalstdout, median0.944–1.036/maxp951.860; default fourheadline10%gate passes. Earlier outliers remain historical.",
+      "next_gate": "isolated reproducibility and causal attribution before a speedup/regression claim",
+      "evidence": [
+        "performance.md",
+        "performance-summary.json",
+        "performance-cc019-summary.json",
+        "performance-main29-summary.json",
+        "performance-a2-summary.json",
+        "performance-main9-summary.json",
+        "performance-main9-sessions-confirmation.json",
+        "performance-main778-summary.json",
+        "performance-main778-regression.json"
+      ]
+    },
+    {
+      "id": "new-head-ci-review-and-release",
+      "status": "separate-gates",
+      "scope": "Latest778 integration local proof: macOS638Rust/22targets, Dashboard323/422(99OSskips), normalartifact109CLI comparisons,3languages actualAgentLoop/4scenarios each,115plugin checks. Historical Linux/Windows receipts retain their own source/binary identities. Current-head CI, human approval, merge and release remain separate.",
+      "historical_evidence": "https://github.com/jimoto-no-llm/rustdsh/actions/runs/38675592833/attempts/2",
+      "evidence": [
+        "macos-a2-validation.json",
+        "linux-a2-validation.json",
+        "linux-serial-fixture-repair.json",
+        "windows-a2-validation.json",
+        "integration-096-validation.json",
+        "integration-main9-validation.json",
+        "integration-main778-validation.json"
+      ]
+    },
+    {
+      "id": "before-image-source-binding",
+      "status": "capture-source-not-recorded-in-bundle",
+      "scope": "the two real earlier PNGs have no companion commit receipt; after PNGs are bound to four recorded UI source files",
+      "behavior": "do not attribute the before PNGs to a specific commit without the original capture record",
+      "evidence": [
+        "captures.json"
+      ]
+    },
+    {
+      "id": "windows-protected-request-product",
+      "status": "verified-on-final-normal-release-artifact",
+      "scope": "Final a2 native normal release c65b88...: actual worker30 plus ledger75outercommands57Rustinvocations30ACLobservations, en/zh-CN/ja; no user ACL changes.",
+      "evidence": [
+        "windows-private-request-focused.json",
+        "windows-product-cost-ledger.json",
+        "windows-a2-validation.json",
+        "windows-a2-cost-ledger.json",
+        "windows-a2-worker-scope.json"
+      ],
+      "limits": "one native Windows x64 administrator-token context and NTFS; no separate standard-account session or other filesystem claim"
+    },
+    {
+      "id": "protected-official-runtime-matrix",
+      "status": "verified-on-final-normal-release-artifact",
+      "scope": "Linuxx86_64 actual Rust launcher/official profile/embedded preload/kernel3versions;32ordinarysecurity22MCP6Rust checks,zero skips",
+      "limits": "Final normal a2 Linux x86_64 release SHA5e1b83... passes actual3required official profiles/kernel with zero skips. Earlier security32/MCP22/Rust6 remain exact unchanged-source proof, explicitly historical.",
+      "evidence": [
+        "linux-guarded-launcher.json",
+        "linux-a2-validation.json",
+        "linux-a2-source.json"
+      ]
+    },
+    {
+      "id": "frozen-legacy-workflow-board-full-build",
+      "status": "preexisting-errors-reproduced-on-exact-unpatched-baseline",
+      "scope": "Optional workflow-board compatibility on historical upstream f97c0438fb1608bbc4c08c88a27344249795ea22 only; full tsc -b remains failed with three identical diagnostics in untouched oh-my-dsh sources. Current alpha.3 application gates are separate.",
+      "evidence": [
+        "legacy-workflow-board-baseline.json"
+      ],
+      "limits": "49 owner tests and bundle pass do not imply a passing historical full build. No compiler/type safety rule weakened."
+    }
+  ]
+}

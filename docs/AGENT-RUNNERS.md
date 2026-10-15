@@ -45,6 +45,10 @@ shims are not run directly. Real Windows CLIs are untested. `list --probe`
 takes no entrypoint, so a Windows CLI that needs one is reported as not found
 or without a version there; `submit` is unaffected.
 
+## Display language and UTF-8 input
+
+Use `--language en|zh-CN|ja` before or after `agents` to select human-facing help and diagnostics. The dashboard language precedence also applies here. JSON keys, canonical job states and error codes, agent output, paths and caller text remain unchanged. Prompt files are UTF-8; Japanese filenames and instruction text are supported. Unknown external errors retain their original message. Locale tests run local fake agents and never submit paid provider requests. Real CLI authentication, provider behavior and billing require separate acceptance.
+
 ## Job states and error codes
 
 States: `queued`, `running`, `succeeded`, `failed`, `cancelled`. A failed job

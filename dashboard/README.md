@@ -69,6 +69,54 @@ before stopping the live owned Harness run.
 
 `rdsh-dashboard` provides two separate entry points:
 
+External-agent `agents` help and CLI diagnostics use the same three languages. Its machine JSON, canonical states/codes and returned agent text stay unchanged; UTF-8 prompt files may contain Japanese filenames and instructions. [Agent runner commands and permission limits](../docs/AGENT-RUNNERS.md).
+
+The browser chrome follows the effective rdsh language (`en`, `zh-CN`, or
+`ja`). It localizes dashboard-owned labels, dates, numbers, and status text;
+task titles, questions, answers, model output, paths, identifiers, API fields,
+and server error details are shown exactly as received.
+Choose a single invocation with `rdsh-dashboard --language ja project ...`;
+selection uses `--language`, nonblank `RDSH_LANG`, `general.language`, then the
+first nonblank `LC_ALL`/`LC_MESSAGES`/`LANG`, finally English. A malformed saved
+language stops startup without rewriting its file. The native JSON bridges
+`subagents plan`, `task-outcomes apply|validate|schema`, and
+`cost-ledger validate|public|schema`, `budget-admission apply|validate|public`,
+`question-contracts apply|validate|public`, `answer-applications apply|validate|public|schema`,
+and `instruction-queue validate|context|submit|resolve|control` do not read settings;
+they resolve display language from the explicit flag or environment and preserve
+native request/output data and exit status even if `rdsh.json` is corrupt.
+The cost-ledger bridge serializes its validated input into an exclusive request
+file. POSIX uses mode `0600`. Windows creates a protected DACL allowing only the
+current user, SYSTEM and Administrators, verifies that ACL before writing any
+payload, and holds its creator handle until the native process exits. Windows
+sharing rejects write, rename and parent-directory replacement while held;
+delete-on-close removes the owned object without unlinking a reused pathname.
+ACL/API failure stops dispatch, and a name collision never changes or removes
+an existing file. Parent directory ACLs remain unchanged. Success and failure
+both dispose the owned request.
+Its pure actions take no project or dashboard connection. Existing
+`cost-ledger declare|report|inspect` commands keep their project store path and
+still refuse corrupt settings. Native cost-ledger help and diagnostics follow
+the selected language; machine JSON, amounts, source text and canonical
+in-process validation reasons keep their original values.
+The DSH settings plugin has its own live selector; its `auto` follows the browser language.
+The setup page translates known credential-sharing policy failures for display;
+the status API retains canonical reasons, and unknown external details stay unchanged.
+The command palette searches all three translated labels regardless of the
+current display language; Escape closes it and returns focus. Known observed
+CLI states and newly generated cancellation reasons use the selected language.
+Received cancellation reasons and future status labels remain original values.
+
+Programmatic callers can pass `port: 0` to `startDashboard` to reserve a loopback
+port atomically. The returned port, URLs and persisted runtime/MCP metadata use
+the listening socket's assigned port. Omitting the port keeps the usual default.
+
+Display-only `--language` options are removed when re-executing an immutable
+captured CLI, so older captures need no new option grammar. Other argument bytes,
+option terminators, locale environment variables and captured files are preserved.
+`preflight` validates the original arguments after removing its command token and
+display-language options, including unexpected positionals.
+
 | Mode      | Purpose                                                    | Data source                                      |
 | --------- | ---------------------------------------------------------- | ------------------------------------------------ |
 | `project` | Project metrics, tasks, questions, human answers, progress | 19 project-scoped MCP tools                      |

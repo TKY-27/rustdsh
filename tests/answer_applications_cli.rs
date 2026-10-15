@@ -22,6 +22,7 @@ impl Fixture {
         let input = self.root.join("request.json");
         std::fs::write(&input, request).unwrap();
         Command::new(env!("CARGO_BIN_EXE_rdsh"))
+            .args(["--language", "en"])
             .args([
                 "answer-applications",
                 action,

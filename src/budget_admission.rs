@@ -2057,29 +2057,56 @@ pub fn public_budget_admission(state: &Value, live_jobs: &Value, now: &str) -> B
 }
 
 /// Read one JSON request document, refusing anything over 128 MiB.
-fn read_json(input_file: &str) -> Result<Value> {
+fn read_json(input_file: &str, locale: crate::locale::Locale) -> Result<Value> {
     const MAX_INPUT_BYTES: usize = 128 * 1024 * 1024;
-    let file =
-        open_json_input(input_file).with_context(|| format!("cannot read JSON {input_file}"))?;
-    let metadata = file
-        .metadata()
-        .with_context(|| format!("cannot read JSON {input_file}"))?;
+    let file = open_json_input(input_file).with_context(|| {
+        localized_format!(
+            locale,
+            "cannot read JSON {}",
+            "无法读取 JSON {}",
+            "JSONを読み取れません {}",
+            input_file
+        )
+    })?;
+    let metadata = file.metadata().with_context(|| {
+        localized_format!(
+            locale,
+            "cannot read JSON {}",
+            "无法读取 JSON {}",
+            "JSONを読み取れません {}",
+            input_file
+        )
+    })?;
     if !metadata.is_file() || metadata.len() > MAX_INPUT_BYTES as u64 {
-        bail!("Input JSON must be a regular file of at most 128 MiB");
+        bail!(crate::locale::diagnostic(
+            locale,
+            "Input JSON must be a regular file of at most 128 MiB"
+        )
+        .to_string());
     }
     let mut bytes = Vec::with_capacity(metadata.len() as usize);
     file.take((MAX_INPUT_BYTES + 1) as u64)
         .read_to_end(&mut bytes)
-        .with_context(|| format!("cannot read JSON {input_file}"))?;
+        .with_context(|| {
+            localized_format!(
+                locale,
+                "cannot read JSON {}",
+                "无法读取 JSON {}",
+                "JSONを読み取れません {}",
+                input_file
+            )
+        })?;
     if bytes.len() > MAX_INPUT_BYTES {
-        bail!("Input JSON exceeds 128 MiB");
+        bail!(crate::locale::diagnostic(locale, "Input JSON exceeds 128 MiB").to_string());
     }
     let Ok(text) = std::str::from_utf8(&bytes) else {
-        bail!("Input JSON is invalid");
+        bail!(crate::locale::diagnostic(locale, "Input JSON is invalid").to_string());
     };
     // TextDecoder("utf-8") in the dashboard CLI removed a leading BOM.
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
-    serde_json::from_str(text).map_err(|_| anyhow!("Input JSON is invalid"))
+    serde_json::from_str(text).map_err(|_| {
+        anyhow!(crate::locale::diagnostic(locale, "Input JSON is invalid").to_string())
+    })
 }
 
 #[cfg(unix)]
@@ -2101,13 +2128,16 @@ fn open_json_input(input_file: &str) -> std::io::Result<std::fs::File> {
 
 /// The document shape every action accepts: `{ operation, state, input, now,
 /// live_jobs }`. Only `operation` and `state` are always required.
-fn read_request(document: &Value) -> Result<(String, Value, Value, String, Value)> {
-    let object = document
-        .as_object()
-        .ok_or_else(|| anyhow!("Input JSON is invalid"))?;
+fn read_request(
+    document: &Value,
+    locale: crate::locale::Locale,
+) -> Result<(String, Value, Value, String, Value)> {
+    let object = document.as_object().ok_or_else(|| {
+        anyhow!(crate::locale::diagnostic(locale, "Input JSON is invalid").to_string())
+    })?;
     const CLI_KEYS: [&str; 5] = ["operation", "state", "input", "now", "live_jobs"];
     if object.keys().any(|key| !CLI_KEYS.contains(&key.as_str())) {
-        bail!("Input JSON is invalid");
+        bail!(crate::locale::diagnostic(locale, "Input JSON is invalid").to_string());
     }
     let operation = object
         .get("operation")
@@ -2118,7 +2148,9 @@ fn read_request(document: &Value) -> Result<(String, Value, Value, String, Value
         .get("state")
         .filter(|value| value.is_object())
         .cloned()
-        .ok_or_else(|| anyhow!("Input JSON is invalid"))?;
+        .ok_or_else(|| {
+            anyhow!(crate::locale::diagnostic(locale, "Input JSON is invalid").to_string())
+        })?;
     let input = object.get("input").cloned().unwrap_or(Value::Null);
     let now = object
         .get("now")
@@ -2146,9 +2178,33 @@ const ALL_OPERATIONS: [&str; 7] = ["policy", "job", "ready", "close", "call", "f
 /// `state` is the project state document and `now` is the timestamp the JS
 /// caller would have read from the clock. `validate` and `public` read `state`
 /// alone and accept a missing `input`; `public` may carry `live_jobs`.
-pub fn cmd_budget_admission(action: &str, input_file: &str) -> Result<()> {
-    let document = read_json(input_file)?;
-    let (operation, mut state, input, now, live_jobs) = read_request(&document)?;
+pub fn cmd_budget_admission(
+    action: &str,
+    input_file: &str,
+    locale: crate::locale::Locale,
+) -> Result<()> {
+    cmd_budget_admission_inner(action, input_file, locale).map_err(|error| {
+        if let Some(reason) = error.downcast_ref::<BudgetError>() {
+            anyhow!(localized_format!(
+                locale,
+                "Budget admission: {}",
+                "预算准入：{}",
+                "予算受付: {}",
+                reason.message
+            ))
+        } else {
+            error
+        }
+    })
+}
+
+fn cmd_budget_admission_inner(
+    action: &str,
+    input_file: &str,
+    locale: crate::locale::Locale,
+) -> Result<()> {
+    let document = read_json(input_file, locale)?;
+    let (operation, mut state, input, now, live_jobs) = read_request(&document, locale)?;
     // `public` derives the period status and `next_call_fits` by comparing `now`
     // against the policy boundaries, and `apply`/`validate` stamp it into audit
     // entries. JS normalizes it once with `time(now)` — which rejects a
@@ -2164,10 +2220,14 @@ pub fn cmd_budget_admission(action: &str, input_file: &str) -> Result<()> {
             // The document's operation selects the admission operation, so the
             // action name is not repeated in it.
             if !ALL_OPERATIONS.contains(&operation.as_str()) {
-                bail!("Input JSON operation does not match the requested action");
+                bail!(crate::locale::diagnostic(
+                    locale,
+                    "Input JSON operation does not match the requested action"
+                )
+                .to_string());
             }
             if !input.is_object() {
-                bail!("Input JSON is invalid");
+                bail!(crate::locale::diagnostic(locale, "Input JSON is invalid").to_string());
             }
             output.insert("operation".into(), json!(operation));
             let result = apply_budget_operation(&mut state, &operation, &input, &now)?;
@@ -2184,7 +2244,11 @@ pub fn cmd_budget_admission(action: &str, input_file: &str) -> Result<()> {
             // These read the state alone; the operation field is advisory and
             // must not name a write the action does not perform.
             if operation != action {
-                bail!("Input JSON operation does not match the requested action");
+                bail!(crate::locale::diagnostic(
+                    locale,
+                    "Input JSON operation does not match the requested action"
+                )
+                .to_string());
             }
             output.insert("operation".into(), json!(action));
             if action == "validate" {
@@ -2197,14 +2261,21 @@ pub fn cmd_budget_admission(action: &str, input_file: &str) -> Result<()> {
                 );
             }
         }
-        other => bail!("unknown budget-admission action {other}"),
+        other => bail!(localized_format!(
+            locale,
+            "unknown budget-admission action {}",
+            "未知的 budget-admission 操作 {}",
+            "不明なbudget-admission操作 {}",
+            other
+        )),
     }
     // Canonicalize before serializing: this reproduces JS own-property order for
     // the dynamic-key maps (`policies`, `jobs`, `calls`, `receipts` — integer-like
     // keys first, ascending) and JS double formatting for integral numbers
     // (`1.0` → `1`), so the emitted bytes match `JSON.stringify` exactly.
     let canonical = js_canonical(&Value::Object(output));
-    let text = serde_json::to_string(&canonical).context("serialize budget admission")?;
+    let text = serde_json::to_string(&canonical)
+        .context(crate::locale::diagnostic(locale, "serialize budget admission").to_string())?;
     let stdout = std::io::stdout();
     let mut handle = stdout.lock();
     writeln!(handle, "{text}")?;

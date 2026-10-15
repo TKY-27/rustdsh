@@ -121,12 +121,13 @@ fn preset(id: &str) -> Option<&'static Preset> {
     PRESETS.iter().find(|p| p.id == id)
 }
 
-fn t(ja: &str, en: &str) -> String {
-    if auth::is_japanese() {
-        ja.to_string()
-    } else {
-        en.to_string()
+fn t(locale: crate::locale::Locale, ja: &str, en: &str, zh: &str) -> String {
+    match locale {
+        crate::locale::Locale::Japanese => ja,
+        crate::locale::Locale::English => en,
+        crate::locale::Locale::Chinese => zh,
     }
+    .to_string()
 }
 
 // --- model and route -----------------------------------------------------------
@@ -154,7 +155,11 @@ struct Route {
 /// Apply a preset's built-in knowledge to the merged models: fill the fields
 /// of its known ids and clamp `maxTokens` to its cap. Returns a note for each
 /// id the preset does not know.
-fn apply_preset_models(preset: &Preset, models: &mut [Model]) -> Vec<String> {
+fn apply_preset_models(
+    preset: &Preset,
+    models: &mut [Model],
+    locale: crate::locale::Locale,
+) -> Vec<String> {
     let mut notes = Vec::new();
     if preset.default_models.is_empty() && preset.max_tokens_cap.is_none() {
         return notes;
@@ -169,8 +174,7 @@ fn apply_preset_models(preset: &Preset, models: &mut [Model]) -> Vec<String> {
                     model.input = vec!["text".to_string()];
                 }
             }
-            None if !preset.default_models.is_empty() => notes.push(format!(
-                "{}: {} is not one of the documented chat models ({}); contextWindow is left to dsh's default",
+            None if !preset.default_models.is_empty() => notes.push(localized_format!(locale, "{}: {} is not one of the documented chat models ({}); contextWindow is left to dsh's default", "{}：{} 不在已记录的聊天模型中（{}）；contextWindow 使用 dsh 默认值", "{}: {} は記載されたチャットモデル（{}）に含まれません。contextWindowはdshの既定値を使用します",
                 preset.id,
                 model.id,
                 preset
@@ -435,7 +439,10 @@ fn strip_comment(value: &str) -> &str {
 }
 
 /// Decode the inside of a single-line YAML 1.2 double-quoted scalar.
-fn decode_double(inner: &str) -> std::result::Result<String, String> {
+fn decode_double(
+    inner: &str,
+    locale: crate::locale::Locale,
+) -> std::result::Result<String, String> {
     let mut out = String::new();
     let mut chars = inner.chars();
     while let Some(c) = chars.next() {
@@ -444,7 +451,11 @@ fn decode_double(inner: &str) -> std::result::Result<String, String> {
             continue;
         }
         let Some(e) = chars.next() else {
-            return Err("a double-quoted scalar continues on the next line".to_string());
+            return Err(crate::locale::diagnostic(
+                locale,
+                "a double-quoted scalar continues on the next line",
+            )
+            .to_string());
         };
         let hex = |chars: &mut std::str::Chars<'_>, n: usize| -> Option<char> {
             let digits: String = chars.by_ref().take(n).collect();
@@ -479,8 +490,11 @@ fn decode_double(inner: &str) -> std::result::Result<String, String> {
         match decoded {
             Some(d) => out.push(d),
             None => {
-                return Err(format!(
-                    "an invalid escape `\\{e}` in a double-quoted scalar"
+                return Err(localized_format!(
+                    locale,
+                    "an invalid escape `\\{e}` in a double-quoted scalar",
+                    "双引号标量中的转义 `\\{e}` 无效",
+                    "二重引用符の値のエスケープ `\\{e}` が無効です"
                 ))
             }
         }
@@ -490,36 +504,44 @@ fn decode_double(inner: &str) -> std::result::Result<String, String> {
 
 /// A whole scalar value (comment already removed) read as YAML. `Err` when it
 /// is quoted but not exactly one readable quoted scalar.
-fn try_unquote(value: &str) -> std::result::Result<String, String> {
+fn try_unquote(value: &str, locale: crate::locale::Locale) -> std::result::Result<String, String> {
     let v = trim_yaml(value);
     if v.starts_with('"') {
         return match double_end(v) {
-            Some(end) if end == v.len() - 1 => decode_double(&v[1..end]),
-            _ => Err("a double-quoted scalar is not closed cleanly".to_string()),
+            Some(end) if end == v.len() - 1 => decode_double(&v[1..end], locale),
+            _ => Err(crate::locale::diagnostic(
+                locale,
+                "a double-quoted scalar is not closed cleanly",
+            )
+            .to_string()),
         };
     }
     if v.starts_with('\'') {
         return match single_end(v) {
             Some(end) if end == v.len() - 1 => Ok(v[1..end].replace("''", "'")),
-            _ => Err("a single-quoted scalar is not closed cleanly".to_string()),
+            _ => Err(crate::locale::diagnostic(
+                locale,
+                "a single-quoted scalar is not closed cleanly",
+            )
+            .to_string()),
         };
     }
     Ok(v.to_string())
 }
 
 /// `try_unquote`, falling back to the raw text (display only).
-fn unquote(value: &str) -> String {
-    try_unquote(value).unwrap_or_else(|_| trim_yaml(value).to_string())
+fn unquote(value: &str, locale: crate::locale::Locale) -> String {
+    try_unquote(value, locale).unwrap_or_else(|_| trim_yaml(value).to_string())
 }
 
 /// For a line that opens with `key:` (plain or quoted, escapes decoded), the
 /// value after the colon without a trailing comment; `Some("")` for a block or
 /// empty value.
-fn key_rest<'a>(line: &'a str, key: &str) -> Option<&'a str> {
+fn key_rest<'a>(line: &'a str, key: &str, locale: crate::locale::Locale) -> Option<&'a str> {
     let trimmed = line.trim_start_matches([' ', '\t']);
     let rest = if trimmed.starts_with('"') {
         let end = double_end(trimmed)?;
-        (decode_double(&trimmed[1..end]).ok()? == key).then_some(&trimmed[end + 1..])?
+        (decode_double(&trimmed[1..end], locale).ok()? == key).then_some(&trimmed[end + 1..])?
     } else if trimmed.starts_with('\'') {
         let end = single_end(trimmed)?;
         (trimmed[1..end].replace("''", "'") == key).then_some(&trimmed[end + 1..])?
@@ -619,14 +641,25 @@ fn structural_lines(lines: &[String]) -> Vec<String> {
 }
 
 /// A config/providers value must contain mapping keys, never sequence items.
-fn mapping_child_indent(lines: &[String], parent: usize, end: usize) -> Result<Option<usize>> {
+fn mapping_child_indent(
+    lines: &[String],
+    parent: usize,
+    end: usize,
+    locale: crate::locale::Locale,
+) -> Result<Option<usize>> {
     let structure = structural_lines(lines);
     let next = (parent + 1..structure.len()).find(|i| !skippable(&structure[*i]));
     if next.is_some_and(|i| {
         indent_of(&structure[i]) == indent_of(&structure[parent])
             && structure[i].trim_start_matches(' ').starts_with("- ")
     }) {
-        bail!("config/providers must be a block mapping, not a sequence");
+        bail!(
+            "{}",
+            crate::locale::diagnostic(
+                locale,
+                "config/providers must be a block mapping, not a sequence"
+            )
+        );
     }
     let Some(child) = child_indent(&structure, parent, end) else {
         return Ok(None);
@@ -640,21 +673,45 @@ fn mapping_child_indent(lines: &[String], parent: usize, end: usize) -> Result<O
         let trimmed = line.trim_start_matches(' ');
         if trimmed.starts_with("- ") {
             if !block_value {
-                bail!("config/providers must be a simple block mapping");
+                bail!(
+                    "{}",
+                    crate::locale::diagnostic(
+                        locale,
+                        "config/providers must be a simple block mapping"
+                    )
+                );
             }
             // An indentless sequence belongs to the preceding key's value;
             // its items are not additional keys of this mapping.
             continue;
         }
         if trimmed.starts_with(['?', '&', '*', '!']) {
-            bail!("config/providers must be a simple block mapping");
+            bail!(
+                "{}",
+                crate::locale::diagnostic(
+                    locale,
+                    "config/providers must be a simple block mapping"
+                )
+            );
         }
         let Some((key, value)) = mapping_parts(trimmed) else {
-            bail!("config/providers must be a simple block mapping");
+            bail!(
+                "{}",
+                crate::locale::diagnostic(
+                    locale,
+                    "config/providers must be a simple block mapping"
+                )
+            );
         };
-        let key = unquote(key);
+        let key = unquote(key, locale);
         if keys.contains(&key) {
-            bail!("config/providers contains duplicate mapping keys");
+            bail!(
+                "{}",
+                crate::locale::diagnostic(
+                    locale,
+                    "config/providers contains duplicate mapping keys"
+                )
+            );
         }
         keys.push(key);
         block_value = value.is_empty();
@@ -697,9 +754,16 @@ fn child_indent(lines: &[String], parent: usize, end: usize) -> Option<usize> {
 }
 
 /// The `key:` line among the direct children (`indent` columns) of a block.
-fn find_at(lines: &[String], from: usize, until: usize, indent: usize, key: &str) -> Option<usize> {
+fn find_at(
+    lines: &[String],
+    from: usize,
+    until: usize,
+    indent: usize,
+    key: &str,
+    locale: crate::locale::Locale,
+) -> Option<usize> {
     (from..until.min(lines.len()))
-        .find(|i| indent_of(&lines[*i]) == indent && key_rest(&lines[*i], key).is_some())
+        .find(|i| indent_of(&lines[*i]) == indent && key_rest(&lines[*i], key, locale).is_some())
 }
 
 const PI_AI_ID: &str = "llm-pi-ai";
@@ -708,33 +772,48 @@ const PI_AI_NAME: &str = "@deepseek-ai/dsh-llm-pi-ai";
 /// The value of `key` on one entry line, read as a YAML scalar (comment
 /// stripped, quotes removed). `Ok(None)` when the line is another key,
 /// `Err` when the value is in a form this module will not interpret.
-fn scalar_key(line: &str, key: &str) -> std::result::Result<Option<String>, String> {
-    let Some(rest) = key_rest(line, key) else {
+fn scalar_key(
+    line: &str,
+    key: &str,
+    locale: crate::locale::Locale,
+) -> std::result::Result<Option<String>, String> {
+    let Some(rest) = key_rest(line, key, locale) else {
         return Ok(None);
     };
     let unsafe_start =
         rest.is_empty() || rest.starts_with(['|', '>', '[', '{', '&', '*', '!', '?']);
     if unsafe_start {
-        return Err(format!(
-            "a top-level `{key}:` value is written in a form rdsh will not interpret"
+        return Err(localized_format!(
+            locale,
+            "a top-level `{key}:` value is written in a form rdsh will not interpret",
+            "顶层 `{key}:` 值采用 rdsh 不解析的形式",
+            "最上位の `{key}:` 値はrdshが解析しない形式です"
         ));
     }
-    try_unquote(rest)
-        .map(Some)
-        .map_err(|why| format!("a top-level `{key}:` value cannot be read: {why}"))
+    try_unquote(rest, locale).map(Some).map_err(|why| {
+        localized_format!(
+            locale,
+            "a top-level `{key}:` value cannot be read: {why}",
+            "无法读取顶层 `{key}:` 值：{why}",
+            "最上位の `{key}:` 値を読み取れません: {why}"
+        )
+    })
 }
 
 /// The `- id: llm-pi-ai` patch entry (by `id`, or by the plugin `name`). Only
 /// keys of the entry itself count: a nested `id:` (inside `insert`, say) does
 /// not. `Err` when an entry cannot be read safely or the plugin is declared
 /// twice (a later entry replaces the whole config in Cordis).
-pub(crate) fn llm_pi_ai_entry(lines: &[String]) -> std::result::Result<Option<usize>, String> {
-    inspect_patch_entries(lines, false).map_err(|error| error.to_string())
+pub(crate) fn llm_pi_ai_entry(
+    lines: &[String],
+    locale: crate::locale::Locale,
+) -> std::result::Result<Option<usize>, String> {
+    inspect_patch_entries(lines, false, locale).map_err(|error| error.to_string())
 }
 
 /// Check block-mapping keys in one structural view, including existing
 /// provider/model mappings. Sequence items open separate mapping scopes.
-fn inspect_mapping_keys(lines: &[String]) -> Result<()> {
+fn inspect_mapping_keys(lines: &[String], locale: crate::locale::Locale) -> Result<()> {
     let mut scopes: Vec<(usize, Vec<String>)> = Vec::new();
     for line in lines.iter().filter(|line| !skippable(line)) {
         let mut node = line.trim_start_matches(' ');
@@ -754,41 +833,69 @@ fn inspect_mapping_keys(lines: &[String]) -> Result<()> {
             }
         });
         if node.starts_with("? ") || node.starts_with(": ") {
-            bail!("complex YAML mapping keys cannot be inspected safely");
+            bail!(
+                "{}",
+                crate::locale::diagnostic(
+                    locale,
+                    "complex YAML mapping keys cannot be inspected safely"
+                )
+            );
         }
         let Some((key, _)) = mapping_parts(node) else {
             continue;
         };
         if key.chars().next().is_some_and(char::is_whitespace) {
-            bail!("a plain YAML key starting with Unicode whitespace cannot be inspected safely");
+            bail!(
+                "{}",
+                crate::locale::diagnostic(
+                    locale,
+                    "a plain YAML key starting with Unicode whitespace cannot be inspected safely"
+                )
+            );
         }
         if key.starts_with(['!', '&', '*']) {
-            bail!("tagged, anchored or aliased YAML keys cannot be inspected safely");
+            bail!(
+                "{}",
+                crate::locale::diagnostic(
+                    locale,
+                    "tagged, anchored or aliased YAML keys cannot be inspected safely"
+                )
+            );
         }
         if scopes.last().is_none_or(|(depth, _)| *depth != column) {
             scopes.push((column, Vec::new()));
         }
         let keys = &mut scopes.last_mut().expect("scope inserted above").1;
-        let key = try_unquote(key).map_err(anyhow::Error::msg)?;
+        let key = try_unquote(key, locale).map_err(anyhow::Error::msg)?;
         if key == "<<" {
-            bail!("YAML merge keys cannot be inspected safely");
+            bail!(
+                "{}",
+                crate::locale::diagnostic(locale, "YAML merge keys cannot be inspected safely")
+            );
         }
         if keys.contains(&key) {
-            bail!("the profile contains duplicate mapping keys");
+            bail!(
+                "{}",
+                crate::locale::diagnostic(locale, "the profile contains duplicate mapping keys")
+            );
         }
         keys.push(key);
     }
     Ok(())
 }
 
-fn inspect_patch_entries(lines: &[String], for_write: bool) -> Result<Option<usize>> {
+fn inspect_patch_entries(
+    lines: &[String],
+    for_write: bool,
+    locale: crate::locale::Locale,
+) -> Result<Option<usize>> {
     let structure = structural_lines(lines);
     let lines = &structure;
     // 一覧では他pluginの設定を編集可能かどうかに依存せず既存routeを読む。
     // 書込時はdocument全体の安全性を検査してから変更する。
     if for_write {
-        check_document(lines).map_err(anyhow::Error::msg)?;
-        inspect_mapping_keys(lines)?;
+        check_document(lines, locale).map_err(anyhow::Error::msg)?;
+        inspect_mapping_keys(lines, locale)?;
     }
     if lines
         .iter()
@@ -799,7 +906,10 @@ fn inspect_patch_entries(lines: &[String], for_write: bool) -> Result<Option<usi
             .filter(|line| !skippable(line) && indent_of(line) == 0)
             .any(|line| !line.starts_with("- "))
     {
-        bail!("the file is not a plain sequence of patch entries");
+        bail!(
+            "{}",
+            crate::locale::diagnostic(locale, "the file is not a plain sequence of patch entries")
+        );
     }
     let starts: Vec<usize> = (0..lines.len())
         .filter(|i| indent_of(&lines[*i]) == 0 && lines[*i].starts_with("- "))
@@ -810,10 +920,22 @@ fn inspect_patch_entries(lines: &[String], for_write: bool) -> Result<Option<usi
         let col = dash_key_col(&lines[*start]);
         let head = trim_yaml(&lines[*start][col..]);
         if head.starts_with(['{', '[', '*', '&', '!']) {
-            bail!("the patch entry uses an unsupported inline or aliased mapping");
+            bail!(
+                "{}",
+                crate::locale::diagnostic(
+                    locale,
+                    "the patch entry uses an unsupported inline or aliased mapping"
+                )
+            );
         }
         if mapping_parts(head).is_none() {
-            bail!("the patch entry must be a block mapping, not a scalar");
+            bail!(
+                "{}",
+                crate::locale::diagnostic(
+                    locale,
+                    "the patch entry must be a block mapping, not a scalar"
+                )
+            );
         }
         let direct: Vec<usize> = std::iter::once(*start)
             .chain((start + 1..end).filter(|i| indent_of(&lines[*i]) == col))
@@ -831,47 +953,90 @@ fn inspect_patch_entries(lines: &[String], for_write: bool) -> Result<Option<usi
                 continue;
             }
             if mapping_parts(key_line).is_none() {
-                bail!("the patch entry must contain simple mapping keys");
+                bail!(
+                    "{}",
+                    crate::locale::diagnostic(
+                        locale,
+                        "the patch entry must contain simple mapping keys"
+                    )
+                );
             }
             if mapping_parts(key_line).is_some_and(|(key, _)| key == "<<")
                 || key_line.starts_with("? ")
                 || key_line.starts_with(": ")
             {
-                bail!("YAML merge or complex mapping keys cannot be inspected safely");
+                bail!(
+                    "{}",
+                    crate::locale::diagnostic(
+                        locale,
+                        "YAML merge or complex mapping keys cannot be inspected safely"
+                    )
+                );
             }
             if let Some((key, _)) = mapping_parts(key_line) {
-                let key = try_unquote(key).map_err(anyhow::Error::msg)?;
+                let key = try_unquote(key, locale).map_err(anyhow::Error::msg)?;
                 if keys.contains(&key) {
-                    bail!("the patch entry contains duplicate mapping keys");
+                    bail!(
+                        "{}",
+                        crate::locale::diagnostic(
+                            locale,
+                            "the patch entry contains duplicate mapping keys"
+                        )
+                    );
                 }
                 keys.push(key);
             }
-            identifies |= scalar_key(key_line, "id")
+            identifies |= scalar_key(key_line, "id", locale)
                 .map_err(anyhow::Error::msg)?
                 .is_some_and(|value| value == PI_AI_ID)
-                || scalar_key(key_line, "name")
+                || scalar_key(key_line, "name", locale)
                     .map_err(anyhow::Error::msg)?
                     .is_some_and(|value| value == PI_AI_NAME);
-            if (key_rest(key_line, "id").is_some() || key_rest(key_line, "name").is_some())
+            if (key_rest(key_line, "id", locale).is_some()
+                || key_rest(key_line, "name", locale).is_some())
                 && (i + 1..end)
                     .find(|j| !skippable(&lines[*j]))
                     .is_some_and(|j| indent_of(&lines[j]) > col)
             {
-                bail!("the patch entry identifier uses a multiline YAML scalar");
+                bail!(
+                    "{}",
+                    crate::locale::diagnostic(
+                        locale,
+                        "the patch entry identifier uses a multiline YAML scalar"
+                    )
+                );
             }
-            if let Some(value) = key_rest(key_line, "insert") {
+            if let Some(value) = key_rest(key_line, "insert", locale) {
                 if !value.is_empty() {
-                    bail!("insert is written inline and cannot be inspected safely");
+                    bail!(
+                        "{}",
+                        crate::locale::diagnostic(
+                            locale,
+                            "insert is written inline and cannot be inspected safely"
+                        )
+                    );
                 }
                 insert = Some(i);
             }
         }
-        if identifies && key_rest(head, "config").is_some() {
-            bail!("the llm-pi-ai config shares the sequence marker; edit it by hand");
+        if identifies && key_rest(head, "config", locale).is_some() {
+            bail!(
+                "{}",
+                crate::locale::diagnostic(
+                    locale,
+                    "the llm-pi-ai config shares the sequence marker; edit it by hand"
+                )
+            );
         }
         if let Some(insert) = insert {
             if identifies {
-                bail!("the llm-pi-ai entry uses insert; its outer config is not applied");
+                bail!(
+                    "{}",
+                    crate::locale::diagnostic(
+                        locale,
+                        "the llm-pi-ai entry uses insert; its outer config is not applied"
+                    )
+                );
             }
             // Inspect the inserted plugin entries as a sequence of mappings,
             // using the same direct-key rules. Descendants such as model ids
@@ -898,17 +1063,36 @@ fn inspect_patch_entries(lines: &[String], for_write: bool) -> Result<Option<usi
                         }
                     })
                     .collect();
-                let target = inspect_patch_entries(&nested, for_write).map_err(|error| {
-                    anyhow::anyhow!("insert entries cannot be inspected safely: {error}")
-                })?;
+                let target =
+                    inspect_patch_entries(&nested, for_write, locale).map_err(|error| {
+                        anyhow::anyhow!(
+                            "{}: {error}",
+                            crate::locale::diagnostic(
+                                locale,
+                                "insert entries cannot be inspected safely"
+                            )
+                        )
+                    })?;
                 if target.is_some() {
-                    bail!("llm-pi-ai is inside insert; edit its providers by hand");
+                    bail!(
+                        "{}",
+                        crate::locale::diagnostic(
+                            locale,
+                            "llm-pi-ai is inside insert; edit its providers by hand"
+                        )
+                    );
                 }
             }
         }
         if identifies {
             if found.is_some() {
-                bail!("multiple llm-pi-ai patch entries cannot be edited safely");
+                bail!(
+                    "{}",
+                    crate::locale::diagnostic(
+                        locale,
+                        "multiple llm-pi-ai patch entries cannot be edited safely"
+                    )
+                );
             }
             found = Some(*start);
         }
@@ -920,7 +1104,10 @@ fn inspect_patch_entries(lines: &[String], for_write: bool) -> Result<Option<usi
 /// continues on another line, an invalid escape, anchors, aliases, tags and
 /// flow collections (any of which can carry or rename an `id`). Comments and
 /// block scalar bodies are not looked at.
-fn check_document(lines: &[String]) -> std::result::Result<(), String> {
+fn check_document(
+    lines: &[String],
+    locale: crate::locale::Locale,
+) -> std::result::Result<(), String> {
     let mut block: Option<usize> = None;
     for line in lines {
         if let Some(depth) = block {
@@ -934,13 +1121,17 @@ fn check_document(lines: &[String]) -> std::result::Result<(), String> {
         }
         let scan = scan_line(line);
         if scan.open {
-            return Err("a quoted scalar continues on the next line".to_string());
+            return Err(crate::locale::diagnostic(
+                locale,
+                "a quoted scalar continues on the next line",
+            )
+            .to_string());
         }
         let mut flat = String::new();
         for piece in &scan.pieces {
             match piece.kind {
                 Kind::Double => {
-                    decode_double(piece.text)?;
+                    decode_double(piece.text, locale)?;
                     flat.push('Q');
                 }
                 Kind::Single => flat.push('Q'),
@@ -953,12 +1144,20 @@ fn check_document(lines: &[String]) -> std::result::Result<(), String> {
             let next = chars.get(i + 1).copied();
             match c {
                 '&' | '*' | '!' if starts(i) && next.is_some_and(|n| !n.is_whitespace()) => {
-                    return Err("the file uses YAML anchors, aliases or tags".to_string());
+                    return Err(crate::locale::diagnostic(
+                        locale,
+                        "the file uses YAML anchors, aliases or tags",
+                    )
+                    .to_string());
                 }
                 '{' if starts(i) => {
                     let inside: String = chars[i + 1..].iter().collect();
                     if !inside.trim_start_matches([' ', '\t']).starts_with('}') {
-                        return Err("the file uses a flow mapping".to_string());
+                        return Err(crate::locale::diagnostic(
+                            locale,
+                            "the file uses a flow mapping",
+                        )
+                        .to_string());
                     }
                 }
                 '[' if starts(i) => {
@@ -971,7 +1170,11 @@ fn check_document(lines: &[String]) -> std::result::Result<(), String> {
                                     .is_none_or(|n| n.is_whitespace() || *n == 'Q'))
                     });
                     if !tail.contains(&']') || carries {
-                        return Err("the file uses a flow sequence that may hold keys".to_string());
+                        return Err(crate::locale::diagnostic(
+                            locale,
+                            "the file uses a flow sequence that may hold keys",
+                        )
+                        .to_string());
                     }
                 }
                 _ => {}
@@ -1003,8 +1206,11 @@ fn check_document(lines: &[String]) -> std::result::Result<(), String> {
 
 /// The structural inspection also checks inserted entries and duplicate
 /// identities; mentions in model ids or prompt text do not define plugins.
-fn sole_pi_ai_entry(lines: &[String]) -> std::result::Result<Option<usize>, String> {
-    inspect_patch_entries(lines, true).map_err(|error| error.to_string())
+fn sole_pi_ai_entry(
+    lines: &[String],
+    locale: crate::locale::Locale,
+) -> std::result::Result<Option<usize>, String> {
+    inspect_patch_entries(lines, true, locale).map_err(|error| error.to_string())
 }
 
 /// Column of the first key on a `- key: v` line.
@@ -1023,33 +1229,42 @@ struct Providers {
 /// Locate `llm-pi-ai` -> `config` -> `providers` without changing anything.
 /// `Ok(None)` when any level is absent, `Err` when a level is written in a
 /// form this module will not edit.
-fn locate_providers(lines: &[String]) -> Result<Option<Providers>> {
+fn locate_providers(lines: &[String], locale: crate::locale::Locale) -> Result<Option<Providers>> {
     let structure = structural_lines(lines);
     let lines = &structure;
-    let Some(entry) = llm_pi_ai_entry(lines).map_err(anyhow::Error::msg)? else {
+    let Some(entry) = llm_pi_ai_entry(lines, locale).map_err(anyhow::Error::msg)? else {
         return Ok(None);
     };
     let col = dash_key_col(&lines[entry]);
     let entry_end = block_end(lines, entry);
-    let Some(config) = find_at(lines, entry + 1, entry_end, col, "config") else {
+    let Some(config) = find_at(lines, entry + 1, entry_end, col, "config", locale) else {
         return Ok(None);
     };
-    if !key_rest(&lines[config], "config").is_some_and(str::is_empty) {
-        bail!("the llm-pi-ai config is written inline on one line");
+    if !key_rest(&lines[config], "config", locale).is_some_and(str::is_empty) {
+        bail!(
+            "{}",
+            crate::locale::diagnostic(locale, "the llm-pi-ai config is written inline on one line")
+        );
     }
     let config_end = block_end(lines, config);
-    let Some(ci) = mapping_child_indent(lines, config, config_end)? else {
+    let Some(ci) = mapping_child_indent(lines, config, config_end, locale)? else {
         return Ok(None);
     };
-    let Some(providers) = find_at(lines, config + 1, config_end, ci, "providers") else {
+    let Some(providers) = find_at(lines, config + 1, config_end, ci, "providers", locale) else {
         return Ok(None);
     };
-    if !key_rest(&lines[providers], "providers").is_some_and(str::is_empty) {
-        bail!("providers is written inline (for example `providers: {{}}`)");
+    if !key_rest(&lines[providers], "providers", locale).is_some_and(str::is_empty) {
+        bail!(
+            "{}",
+            crate::locale::diagnostic(
+                locale,
+                "providers is written inline (for example `providers: {}`)"
+            )
+        );
     }
     let end = block_end(lines, providers);
-    let child =
-        mapping_child_indent(lines, providers, end)?.unwrap_or(indent_of(&lines[providers]) + 2);
+    let child = mapping_child_indent(lines, providers, end, locale)?
+        .unwrap_or(indent_of(&lines[providers]) + 2);
     Ok(Some(Providers {
         line: providers,
         end,
@@ -1070,9 +1285,9 @@ fn split_lines(text: &str) -> Vec<String> {
     text.split('\n').map(str::to_string).collect()
 }
 
-fn routes_in(text: &str) -> Vec<RouteInfo> {
+fn routes_in(text: &str, locale: crate::locale::Locale) -> Vec<RouteInfo> {
     let lines = structural_lines(&split_lines(text));
-    let Ok(Some(p)) = locate_providers(&lines) else {
+    let Ok(Some(p)) = locate_providers(&lines, locale) else {
         return Vec::new();
     };
     let mut out = Vec::new();
@@ -1084,17 +1299,17 @@ fn routes_in(text: &str) -> Vec<RouteInfo> {
         let Some(colon) = trimmed.find(':') else {
             continue;
         };
-        let id = unquote(&trimmed[..colon]);
+        let id = unquote(&trimmed[..colon], locale);
         let end = block_end(&lines, i);
         let inner = child_indent(&lines, i, end);
         let scalar = |key: &str| -> Option<String> {
             let indent = inner?;
-            let at = find_at(&lines, i + 1, end, indent, key)?;
-            let value = key_rest(&lines[at], key)?;
-            (!value.is_empty()).then(|| unquote(value))
+            let at = find_at(&lines, i + 1, end, indent, key, locale)?;
+            let value = key_rest(&lines[at], key, locale)?;
+            (!value.is_empty()).then(|| unquote(value, locale))
         };
         let models = inner
-            .and_then(|indent| find_at(&lines, i + 1, end, indent, "models"))
+            .and_then(|indent| find_at(&lines, i + 1, end, indent, "models", locale))
             .map(|m| {
                 let mend = block_end(&lines, m);
                 let item = (m + 1..mend)
@@ -1152,12 +1367,11 @@ struct Applied {
     change: Change,
 }
 
-fn refuse(reason: &str, route: &Route) -> anyhow::Error {
-    anyhow::anyhow!(
-        "cannot place providers.{} safely: {reason}\nadd this under llm-pi-ai config providers by hand:\n{}",
+fn refuse(reason: &str, route: &Route, locale: crate::locale::Locale) -> anyhow::Error {
+    anyhow::anyhow!("{}", localized_format!(locale, "cannot place providers.{} safely: {reason}\nadd this under llm-pi-ai config providers by hand:\n{}", "无法安全地写入 providers.{}：{reason}\n请手动将以下内容添加到 llm-pi-ai config providers 下：\n{}", "providers.{} を安全に配置できません: {reason}\nllm-pi-ai config providers の下に次の内容を手動で追加してください:\n{}",
         route.id,
         manual_snippet(route)
-    )
+    ))
 }
 
 /// Read the edited text back: the llm-pi-ai entry is still unique, every
@@ -1168,20 +1382,34 @@ fn verify_written(
     before: &[RouteInfo],
     after: &str,
     route: &Route,
+    locale: crate::locale::Locale,
 ) -> std::result::Result<(), String> {
     let lines = split_lines(after);
-    sole_pi_ai_entry(&lines)?.ok_or("the llm-pi-ai entry is not found after the edit")?;
-    let provs = locate_providers(&lines)
+    sole_pi_ai_entry(&lines, locale)?.ok_or(crate::locale::diagnostic(
+        locale,
+        "the llm-pi-ai entry is not found after the edit",
+    ))?;
+    let provs = locate_providers(&lines, locale)
         .map_err(|e| e.to_string())?
-        .ok_or("the providers block is not found after the edit")?;
-    let found = routes_in(after);
+        .ok_or(crate::locale::diagnostic(
+            locale,
+            "the providers block is not found after the edit",
+        ))?;
+    let found = routes_in(after, locale);
     if found.iter().filter(|r| r.id == route.id).count() != 1 {
-        return Err("the written route is not found exactly once on read-back".to_string());
+        return Err(crate::locale::diagnostic(
+            locale,
+            "the written route is not found exactly once on read-back",
+        )
+        .to_string());
     }
     for old in before.iter().filter(|r| r.id != route.id) {
         if !found.contains(old) {
-            return Err(format!(
+            return Err(localized_format!(
+                locale,
                 "the existing route `{}` did not survive the edit",
+                "编辑后现有路由 `{}` 丢失",
+                "編集後に既存の経路 `{}` が失われています",
                 old.id
             ));
         }
@@ -1194,16 +1422,27 @@ fn verify_written(
         || new.base_url.as_deref() != Some(route.base_url.as_str())
         || new.api_key_env.as_deref() != Some(route.api_key_env.as_str())
     {
-        return Err("the written route differs from the requested one on read-back".to_string());
+        return Err(crate::locale::diagnostic(
+            locale,
+            "the written route differs from the requested one on read-back",
+        )
+        .to_string());
     }
     // Layout: required keys share one column and model keys follow `- id`.
     let start = (provs.line + 1..provs.end.min(lines.len()))
         .find(|i| {
-            indent_of(&lines[*i]) == provs.child_indent && key_rest(&lines[*i], &route.id).is_some()
+            indent_of(&lines[*i]) == provs.child_indent
+                && key_rest(&lines[*i], &route.id, locale).is_some()
         })
-        .ok_or("the written route is not at the providers child column")?;
+        .ok_or(crate::locale::diagnostic(
+            locale,
+            "the written route is not at the providers child column",
+        ))?;
     let end = block_end(&lines, start);
-    let inner = child_indent(&lines, start, end).ok_or("the written route has no body")?;
+    let inner = child_indent(&lines, start, end).ok_or(crate::locale::diagnostic(
+        locale,
+        "the written route has no body",
+    ))?;
     let mut models_at = None;
     for (i, line) in lines.iter().enumerate().take(end).skip(start + 1) {
         if skippable(line) || indent_of(line) != inner {
@@ -1218,15 +1457,22 @@ fn verify_written(
             "models",
         ]
         .iter()
-        .any(|k| key_rest(line, k).is_some());
+        .any(|k| key_rest(line, k, locale).is_some());
         if !known {
-            return Err("an unexpected key sits at the route's column".to_string());
+            return Err(crate::locale::diagnostic(
+                locale,
+                "an unexpected key sits at the route's column",
+            )
+            .to_string());
         }
-        if key_rest(line, "models").is_some() {
+        if key_rest(line, "models", locale).is_some() {
             models_at = Some(i);
         }
     }
-    let models_at = models_at.ok_or("the written route has no models key")?;
+    let models_at = models_at.ok_or(crate::locale::diagnostic(
+        locale,
+        "the written route has no models key",
+    ))?;
     let mend = block_end(&lines, models_at);
     let mut item_col = None;
     let mut items = 0;
@@ -1237,15 +1483,27 @@ fn verify_written(
         let col = indent_of(line);
         if line.trim_start_matches(' ').starts_with("- ") {
             if *item_col.get_or_insert(col) != col {
-                return Err("model items are at different columns".to_string());
+                return Err(crate::locale::diagnostic(
+                    locale,
+                    "model items are at different columns",
+                )
+                .to_string());
             }
             items += 1;
         } else if item_col.is_none_or(|c| col != c + 2) {
-            return Err("a model key is not aligned with its `- id`".to_string());
+            return Err(crate::locale::diagnostic(
+                locale,
+                "a model key is not aligned with its `- id`",
+            )
+            .to_string());
         }
     }
     if items != route.models.len() {
-        return Err("the written models do not match the requested count".to_string());
+        return Err(crate::locale::diagnostic(
+            locale,
+            "the written models do not match the requested count",
+        )
+        .to_string());
     }
     Ok(())
 }
@@ -1257,6 +1515,7 @@ fn splice_route_checked(
     range: std::ops::Range<usize>,
     block: Vec<String>,
     route: &Route,
+    locale: crate::locale::Locale,
 ) -> Result<()> {
     if range.start == range.end && range.start == lines.len() {
         let payload = scalar_payloads(lines);
@@ -1289,8 +1548,12 @@ fn splice_route_checked(
                 !style.contains('-') && (style.contains('+') || last_has_content);
             if adds_scalar_newline {
                 return Err(refuse(
-                    "appending a block would change the final block scalar value",
+                    crate::locale::diagnostic(
+                        locale,
+                        "appending a block would change the final block scalar value",
+                    ),
                     route,
+                    locale,
                 ));
             }
         }
@@ -1300,18 +1563,24 @@ fn splice_route_checked(
 }
 
 /// Insert (or with `replace`, rewrite) `route` in the profile patch text.
-fn apply_route(text: &str, route: &Route, replace: bool) -> Result<Applied> {
+fn apply_route(
+    text: &str,
+    route: &Route,
+    replace: bool,
+    locale: crate::locale::Locale,
+) -> Result<Applied> {
     let crlf = text.contains("\r\n");
     let eol = if crlf { "\r" } else { "" };
     let mut lines = split_lines(text);
-    let before = routes_in(text);
+    let before = routes_in(text, locale);
     let finish = |lines: Vec<String>, change: Change| -> Result<Applied> {
         let out = Applied {
             text: lines.join("\n"),
             change,
         };
         if change.writes() {
-            verify_written(&before, &out.text, route).map_err(|why| refuse(&why, route))?;
+            verify_written(&before, &out.text, route, locale)
+                .map_err(|why| refuse(&why, route, locale))?;
         }
         Ok(out)
     };
@@ -1328,9 +1597,9 @@ fn apply_route(text: &str, route: &Route, replace: bool) -> Result<Applied> {
     };
 
     // Validate every editable container before profile or credential writes.
-    locate_providers(&lines).map_err(|error| refuse(&error.to_string(), route))?;
+    locate_providers(&lines, locale).map_err(|error| refuse(&error.to_string(), route, locale))?;
     let has_content = lines.iter().any(|l| !skippable(l));
-    let entry = sole_pi_ai_entry(&lines).map_err(|e| refuse(&e, route))?;
+    let entry = sole_pi_ai_entry(&lines, locale).map_err(|e| refuse(&e, route, locale))?;
     let Some(entry) = entry else {
         if has_content {
             let top_ok = lines
@@ -1343,8 +1612,12 @@ fn apply_route(text: &str, route: &Route, replace: bool) -> Result<Applied> {
                 .is_some_and(|l| indent_of(l) == 0);
             if !top_ok || !first_ok {
                 return Err(refuse(
-                    "the file is not a plain sequence of patch entries",
+                    crate::locale::diagnostic(
+                        locale,
+                        "the file is not a plain sequence of patch entries",
+                    ),
                     route,
+                    locale,
                 ));
             }
         }
@@ -1360,7 +1633,7 @@ fn apply_route(text: &str, route: &Route, replace: bool) -> Result<Applied> {
             tail_trim(&lines)
         };
         let at_end = at >= tail_trim(&lines);
-        splice_route_checked(&mut lines, at..at, with_eol(block), route)?;
+        splice_route_checked(&mut lines, at..at, with_eol(block), route, locale)?;
         if at_end && !lines.last().is_some_and(|l| l.is_empty()) {
             lines.push(String::new());
         }
@@ -1369,7 +1642,7 @@ fn apply_route(text: &str, route: &Route, replace: bool) -> Result<Applied> {
 
     let col = dash_key_col(&lines[entry]);
     let entry_end = block_end(&lines, entry);
-    let Some(config) = find_at(&lines, entry + 1, entry_end, col, "config") else {
+    let Some(config) = find_at(&lines, entry + 1, entry_end, col, "config", locale) else {
         // エントリに中身があるのに `- ` 直下のカラムにキーが1つも無いレイアウトは
         // 解釈できない。ここで追記すると同じエントリに2つ目の `config:` を作り、
         // YAML の重複マッピングキーになって既存の providers が無言で消える。
@@ -1378,8 +1651,12 @@ fn apply_route(text: &str, route: &Route, replace: bool) -> Result<Applied> {
         let has_col_key = body.iter().any(|l| !skippable(l) && indent_of(l) == col);
         if has_body && !has_col_key {
             return Err(refuse(
-                "the llm-pi-ai entry is indented in a form this module will not edit",
+                crate::locale::diagnostic(
+                    locale,
+                    "the llm-pi-ai entry is indented in a form this module will not edit",
+                ),
                 route,
+                locale,
             ));
         }
         let at = content_end(&lines, entry, entry_end);
@@ -1388,13 +1665,14 @@ fn apply_route(text: &str, route: &Route, replace: bool) -> Result<Applied> {
             format!("{}providers:", " ".repeat(col + 2)),
         ];
         block.extend(render_route(route, col + 4, 2));
-        splice_route_checked(&mut lines, at..at, with_eol(block), route)?;
+        splice_route_checked(&mut lines, at..at, with_eol(block), route, locale)?;
         return finish(lines, Change::Added);
     };
-    if !key_rest(&lines[config], "config").is_some_and(str::is_empty) {
+    if !key_rest(&lines[config], "config", locale).is_some_and(str::is_empty) {
         return Err(refuse(
-            "the llm-pi-ai config is written inline on one line",
+            crate::locale::diagnostic(locale, "the llm-pi-ai config is written inline on one line"),
             route,
+            locale,
         ));
     }
     let config_end = block_end(&lines, config);
@@ -1403,28 +1681,39 @@ fn apply_route(text: &str, route: &Route, replace: bool) -> Result<Applied> {
         let at = config + 1;
         let mut block = vec![format!("{}providers:", " ".repeat(config_indent + 2))];
         block.extend(render_route(route, config_indent + 4, 2));
-        splice_route_checked(&mut lines, at..at, with_eol(block), route)?;
+        splice_route_checked(&mut lines, at..at, with_eol(block), route, locale)?;
         return finish(lines, Change::Added);
     };
-    let Some(providers) = find_at(&lines, config + 1, config_end, ci, "providers") else {
+    let Some(providers) = find_at(&lines, config + 1, config_end, ci, "providers", locale) else {
         let at = content_end(&lines, config, config_end);
         let mut block = vec![format!("{}providers:", " ".repeat(ci))];
         let step = (ci - config_indent).max(1);
         block.extend(render_route(route, ci + step, step));
-        splice_route_checked(&mut lines, at..at, with_eol(block), route)?;
+        splice_route_checked(&mut lines, at..at, with_eol(block), route, locale)?;
         return finish(lines, Change::Added);
     };
-    if !key_rest(&lines[providers], "providers").is_some_and(str::is_empty) {
+    if !key_rest(&lines[providers], "providers", locale).is_some_and(str::is_empty) {
         return Err(refuse(
-            "providers is written inline (for example `providers: {}`)",
+            crate::locale::diagnostic(
+                locale,
+                "providers is written inline (for example `providers: {}`)",
+            ),
             route,
+            locale,
         ));
     }
     let providers_end = block_end(&lines, providers);
     let providers_indent = indent_of(&lines[providers]);
     let child = child_indent(&lines, providers, providers_end).unwrap_or(providers_indent + 2);
     let step = child - providers_indent;
-    match find_at(&lines, providers + 1, providers_end, child, &route.id) {
+    match find_at(
+        &lines,
+        providers + 1,
+        providers_end,
+        child,
+        &route.id,
+        locale,
+    ) {
         Some(existing) => {
             if !replace {
                 return finish(lines, Change::Exists);
@@ -1434,7 +1723,7 @@ fn apply_route(text: &str, route: &Route, replace: bool) -> Result<Applied> {
             if lines[existing..end] == block[..] {
                 return finish(lines, Change::Identical);
             }
-            splice_route_checked(&mut lines, existing..end, block, route)?;
+            splice_route_checked(&mut lines, existing..end, block, route, locale)?;
             finish(lines, Change::Replaced)
         }
         None => {
@@ -1444,6 +1733,7 @@ fn apply_route(text: &str, route: &Route, replace: bool) -> Result<Applied> {
                 at..at,
                 with_eol(render_route(route, child, step)),
                 route,
+                locale,
             )?;
             finish(lines, Change::Added)
         }
@@ -1464,25 +1754,57 @@ struct Base {
     url: String,
 }
 
-fn parse_base_url(raw: &str) -> Result<Base> {
+fn parse_base_url(raw: &str, locale: crate::locale::Locale) -> Result<Base> {
     if raw.is_empty() {
-        bail!("base URL is empty");
+        bail!(
+            "{}",
+            localized_format!(
+                locale,
+                "base URL is empty",
+                "基础 URL 为空",
+                "ベースURLが空です"
+            )
+        );
     }
     if raw
         .chars()
         .any(|c| c.is_control() || c.is_whitespace() || c == '\\')
     {
-        bail!("base URL contains whitespace or a control character");
+        bail!(
+            "{}",
+            localized_format!(
+                locale,
+                "base URL contains whitespace or a control character",
+                "基础 URL 包含空白或控制字符",
+                "ベースURLに空白または制御文字が含まれています"
+            )
+        );
     }
     let (https, rest) = if let Some(r) = raw.strip_prefix("https://") {
         (true, r)
     } else if let Some(r) = raw.strip_prefix("http://") {
         (false, r)
     } else {
-        bail!("base URL must start with http:// or https://");
+        bail!(
+            "{}",
+            localized_format!(
+                locale,
+                "base URL must start with http:// or https://",
+                "基础 URL 必须以 http:// 或 https:// 开头",
+                "ベースURLは http:// または https:// で始めてください"
+            )
+        );
     };
     if rest.contains(['?', '#']) {
-        bail!("base URL must not carry a query or fragment");
+        bail!(
+            "{}",
+            localized_format!(
+                locale,
+                "base URL must not carry a query or fragment",
+                "基础 URL 不能包含查询或片段",
+                "ベースURLにクエリやフラグメントは指定できません"
+            )
+        );
     }
     let (authority, path) = match rest.find('/') {
         Some(i) => (&rest[..i], &rest[i..]),
@@ -1494,12 +1816,30 @@ fn parse_base_url(raw: &str) -> Result<Base> {
         );
     }
     let (host, port_text) = if authority.starts_with('[') {
-        let end = authority
-            .find(']')
-            .ok_or_else(|| anyhow::anyhow!("invalid IPv6 host in base URL"))?;
+        let end = authority.find(']').ok_or_else(|| {
+            anyhow::anyhow!(
+                "{}",
+                localized_format!(
+                    locale,
+                    "invalid IPv6 host in base URL",
+                    "基础 URL 中的 IPv6 主机无效",
+                    "ベースURLのIPv6ホストが無効です"
+                )
+            )
+        })?;
         authority[1..end]
             .parse::<std::net::Ipv6Addr>()
-            .map_err(|_| anyhow::anyhow!("invalid IPv6 host in base URL"))?;
+            .map_err(|_| {
+                anyhow::anyhow!(
+                    "{}",
+                    localized_format!(
+                        locale,
+                        "invalid IPv6 host in base URL",
+                        "基础 URL 中的 IPv6 主机无效",
+                        "ベースURLのIPv6ホストが無効です"
+                    )
+                )
+            })?;
         (&authority[..=end], &authority[end + 1..])
     } else {
         let end = authority.find(':').unwrap_or(authority.len());
@@ -1509,7 +1849,15 @@ fn parse_base_url(raw: &str) -> Result<Base> {
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || b".-_".contains(&b))
         {
-            bail!("invalid host in base URL");
+            bail!(
+                "{}",
+                localized_format!(
+                    locale,
+                    "invalid host in base URL",
+                    "基础 URL 中的主机无效",
+                    "ベースURLのホストが無効です"
+                )
+            );
         }
         (host, &authority[end..])
     };
@@ -1524,13 +1872,31 @@ fn parse_base_url(raw: &str) -> Result<Base> {
             .strip_prefix(':')
             .and_then(|p| p.parse::<u16>().ok())
             .filter(|p| *p != 0)
-            .ok_or_else(|| anyhow::anyhow!("invalid port in base URL"))?
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "{}",
+                    localized_format!(
+                        locale,
+                        "invalid port in base URL",
+                        "基础 URL 中的端口无效",
+                        "ベースURLのポートが無効です"
+                    )
+                )
+            })?
     };
     if !path
         .bytes()
         .all(|b| b.is_ascii_alphanumeric() || b"/._~%:+-".contains(&b))
     {
-        bail!("base URL path contains an unsupported character");
+        bail!(
+            "{}",
+            localized_format!(
+                locale,
+                "base URL path contains an unsupported character",
+                "基础 URL 路径包含不支持的字符",
+                "ベースURLのパスに未対応の文字が含まれています"
+            )
+        );
     }
     let path = path.trim_end_matches('/').to_string();
     let url = format!(
@@ -1654,32 +2020,74 @@ fn opencode_paths() -> Vec<PathBuf> {
 
 /// `provider.<id>` from the opencode config. Only `options.baseURL` and the
 /// model metadata are read; `options.apiKey` is never touched.
-fn read_opencode(id: &str) -> Result<OpencodeProvider> {
+fn read_opencode(id: &str, locale: crate::locale::Locale) -> Result<OpencodeProvider> {
     let paths = opencode_paths();
     let Some(path) = paths.iter().find(|p| p.is_file()) else {
         bail!(
-            "no opencode config found (looked for {})",
-            paths
-                .iter()
-                .map(|p| p.display().to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
+            "{}",
+            localized_format!(
+                locale,
+                "no opencode config found (looked for {})",
+                "未找到 OpenCode 配置（已检查 {}）",
+                "OpenCodeの設定が見つかりません（確認先: {}）",
+                paths
+                    .iter()
+                    .map(|p| p.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
         );
     };
     let meta = std::fs::metadata(path)?;
     if meta.len() as usize > MAX_BODY_BYTES {
-        bail!("{} is too large", path.display());
+        bail!(
+            "{}",
+            localized_format!(
+                locale,
+                "{} is too large",
+                "{} 过大",
+                "{} が大きすぎます",
+                path.display()
+            )
+        );
     }
-    let raw =
-        std::fs::read_to_string(path).with_context(|| format!("cannot read {}", path.display()))?;
-    let doc: Value = serde_json::from_str(&strip_jsonc(&raw))
-        .with_context(|| format!("{} is not valid JSON/JSONC", path.display()))?;
-    parse_opencode_provider(&doc, id).with_context(|| format!("in {}", path.display()))
+    let raw = std::fs::read_to_string(path).with_context(|| {
+        localized_format!(
+            locale,
+            "cannot read {}",
+            "无法读取 {}",
+            "{} を読み取れません",
+            path.display()
+        )
+    })?;
+    let doc: Value = serde_json::from_str(&strip_jsonc(&raw)).with_context(|| {
+        localized_format!(
+            locale,
+            "{} is not valid JSON/JSONC",
+            "{} 不是有效的 JSON/JSONC",
+            "{} が有効なJSON/JSONCではありません",
+            path.display()
+        )
+    })?;
+    parse_opencode_provider(&doc, id, locale)
+        .with_context(|| localized_format!(locale, "in {}", "在 {} 中", "{} 内", path.display()))
 }
 
-fn parse_opencode_provider(doc: &Value, id: &str) -> Result<OpencodeProvider> {
+fn parse_opencode_provider(
+    doc: &Value,
+    id: &str,
+    locale: crate::locale::Locale,
+) -> Result<OpencodeProvider> {
     let Some(provider) = doc.get("provider").and_then(|p| p.get(id)) else {
-        bail!("opencode config has no provider.{id}");
+        bail!(
+            "{}",
+            localized_format!(
+                locale,
+                "opencode config has no provider.{id}",
+                "OpenCode 配置中没有 provider.{id}",
+                "OpenCodeの設定にprovider.{id}がありません"
+            )
+        );
     };
     let base_url = provider
         .get("options")
@@ -1732,8 +2140,11 @@ fn parse_opencode_provider(doc: &Value, id: &str) -> Result<OpencodeProvider> {
 // --- discovery -----------------------------------------------------------------
 
 /// `data[].id` (OpenAI) or `models[].name|model` (Ollama-style).
-fn parse_listing(body: &str) -> Result<Vec<Model>> {
-    let doc: Value = serde_json::from_str(body).context("the model listing is not JSON")?;
+fn parse_listing(body: &str, locale: crate::locale::Locale) -> Result<Vec<Model>> {
+    let doc: Value = serde_json::from_str(body).context(crate::locale::diagnostic(
+        locale,
+        "the model listing is not JSON",
+    ))?;
     let mut ids: Vec<String> = Vec::new();
     if let Some(data) = doc.get("data").and_then(Value::as_array) {
         ids.extend(
@@ -1753,7 +2164,15 @@ fn parse_listing(body: &str) -> Result<Vec<Model>> {
                 .map(str::to_string),
         );
     } else {
-        bail!("the model listing has neither data[] nor models[]");
+        bail!(
+            "{}",
+            localized_format!(
+                locale,
+                "the model listing has neither data[] nor models[]",
+                "模型清单中没有 data[] 或 models[]",
+                "モデル一覧にdata[]もmodels[]もありません"
+            )
+        );
     }
     Ok(ids
         .into_iter()
@@ -1769,7 +2188,12 @@ fn auth_value_ok(key: &str) -> bool {
     !key.is_empty() && !key.chars().any(|c| c.is_control() || c.is_whitespace())
 }
 
-fn http_get(base: &Base, path: &str, key: Option<&str>) -> Result<String> {
+fn http_get(
+    base: &Base,
+    path: &str,
+    key: Option<&str>,
+    locale: crate::locale::Locale,
+) -> Result<String> {
     let deadline = Instant::now() + Duration::from_secs(HTTP_TIMEOUT_SECONDS);
     let bare_host = base.host.trim_matches(['[', ']']);
     let mut stream = None;
@@ -1783,7 +2207,18 @@ fn http_get(base: &Base, path: &str, key: Option<&str>) -> Result<String> {
             break;
         }
     }
-    let mut stream = stream.ok_or_else(|| anyhow::anyhow!("cannot reach {}", base.url))?;
+    let mut stream = stream.ok_or_else(|| {
+        anyhow::anyhow!(
+            "{}",
+            localized_format!(
+                locale,
+                "cannot reach {}",
+                "无法连接 {}",
+                "{} に接続できません",
+                base.url
+            )
+        )
+    })?;
     let host_header = if base.port == 80 {
         base.host.clone()
     } else {
@@ -1804,7 +2239,16 @@ fn http_get(base: &Base, path: &str, key: Option<&str>) -> Result<String> {
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
-            bail!("{} timed out", base.url);
+            bail!(
+                "{}",
+                localized_format!(
+                    locale,
+                    "{} timed out",
+                    "{} 超时",
+                    "{} がタイムアウトしました",
+                    base.url
+                )
+            );
         }
         stream.set_read_timeout(Some(remaining))?;
         let n = stream.read(&mut chunk)?;
@@ -1813,20 +2257,36 @@ fn http_get(base: &Base, path: &str, key: Option<&str>) -> Result<String> {
         }
         if raw.len() + n > MAX_BODY_BYTES {
             bail!(
-                "{} answered with more than {MAX_BODY_BYTES} bytes",
-                base.url
+                "{}",
+                localized_format!(
+                    locale,
+                    "{} answered with more than {MAX_BODY_BYTES} bytes",
+                    "{} 返回内容超过 {MAX_BODY_BYTES} 字节",
+                    "{} の応答が {MAX_BODY_BYTES} バイトを超えています",
+                    base.url
+                )
             );
         }
         raw.extend_from_slice(&chunk[..n]);
     }
-    parse_http_response(&raw, &base.url)
+    parse_http_response(&raw, &base.url, locale)
 }
 
-fn parse_http_response(raw: &[u8], url: &str) -> Result<String> {
+fn parse_http_response(raw: &[u8], url: &str, locale: crate::locale::Locale) -> Result<String> {
     let split = raw
         .windows(4)
         .position(|w| w == b"\r\n\r\n")
-        .ok_or_else(|| anyhow::anyhow!("bad HTTP response from {url}"))?;
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "{}",
+                localized_format!(
+                    locale,
+                    "bad HTTP response from {url}",
+                    "来自 {url} 的 HTTP 响应无效",
+                    "{url} のHTTP応答が不正です"
+                )
+            )
+        })?;
     let head = String::from_utf8_lossy(&raw[..split]).into_owned();
     let body = &raw[split + 4..];
     let mut head_lines = head.lines();
@@ -1834,20 +2294,55 @@ fn parse_http_response(raw: &[u8], url: &str) -> Result<String> {
         .next()
         .and_then(|l| l.split_whitespace().nth(1))
         .and_then(|s| s.parse::<u16>().ok())
-        .ok_or_else(|| anyhow::anyhow!("bad HTTP response from {url}"))?;
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "{}",
+                localized_format!(
+                    locale,
+                    "bad HTTP response from {url}",
+                    "来自 {url} 的 HTTP 响应无效",
+                    "{url} のHTTP応答が不正です"
+                )
+            )
+        })?;
     if !(200..300).contains(&status) {
-        bail!("{url} answered HTTP {status}");
+        bail!(
+            "{}",
+            localized_format!(
+                locale,
+                "{url} answered HTTP {status}",
+                "{url} 返回 HTTP {status}",
+                "{url} がHTTP {status}を返しました"
+            )
+        );
     }
     let chunked = head_lines.any(|l| {
         let lower = l.to_ascii_lowercase();
         lower.starts_with("transfer-encoding:") && lower.contains("chunked")
     });
     let bytes = if chunked {
-        decode_chunked(body).ok_or_else(|| anyhow::anyhow!("bad chunked body from {url}"))?
+        decode_chunked(body).ok_or_else(|| {
+            anyhow::anyhow!(
+                "{}",
+                localized_format!(
+                    locale,
+                    "bad chunked body from {url}",
+                    "来自 {url} 的分块正文无效",
+                    "{url} のチャンク形式の本文が不正です"
+                )
+            )
+        })?
     } else {
         body.to_vec()
     };
-    String::from_utf8(bytes).with_context(|| format!("{url} did not answer with UTF-8"))
+    String::from_utf8(bytes).with_context(|| {
+        localized_format!(
+            locale,
+            "{url} did not answer with UTF-8",
+            "{url} 未返回 UTF-8 内容",
+            "{url} の応答がUTF-8ではありません"
+        )
+    })
 }
 
 fn decode_chunked(mut body: &[u8]) -> Option<Vec<u8>> {
@@ -1890,7 +2385,7 @@ fn curl_config(url: &str, key: Option<&str>) -> String {
     config
 }
 
-fn curl_get(url: &str, key: Option<&str>) -> Result<String> {
+fn curl_get(url: &str, key: Option<&str>, locale: crate::locale::Locale) -> Result<String> {
     let config = curl_config(url, key);
     let mut child = Command::new("curl")
         .args(["-q", "--config", "-"])
@@ -1898,25 +2393,40 @@ fn curl_get(url: &str, key: Option<&str>) -> Result<String> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .context("could not run curl; install it, or pass --model instead of --discover")?;
+        .context(crate::locale::diagnostic(
+            locale,
+            "could not run curl; install it, or pass --model instead of --discover",
+        ))?;
     if let Some(mut stdin) = child.stdin.take() {
         stdin
             .write_all(config.as_bytes())
-            .context("could not send the request to curl")?;
+            .context(crate::locale::diagnostic(
+                locale,
+                "could not send the request to curl",
+            ))?;
     }
     let mut body = Vec::new();
     if let Some(mut stdout) = child.stdout.take() {
         let mut buffer = [0u8; 8192];
         loop {
-            let read = stdout
-                .read(&mut buffer)
-                .context("could not read curl's output")?;
+            let read = stdout.read(&mut buffer).context(crate::locale::diagnostic(
+                locale,
+                "could not read curl's output",
+            ))?;
             if read == 0 {
                 break;
             }
             if body.len() + read > MAX_BODY_BYTES {
                 let _ = child.kill();
-                bail!("{url} answered with more than {MAX_BODY_BYTES} bytes");
+                bail!(
+                    "{}",
+                    localized_format!(
+                        locale,
+                        "{url} answered with more than {MAX_BODY_BYTES} bytes",
+                        "{url} 返回内容超过 {MAX_BODY_BYTES} 字节",
+                        "{url} の応答が {MAX_BODY_BYTES} バイトを超えています"
+                    )
+                );
             }
             body.extend_from_slice(&buffer[..read]);
         }
@@ -1931,23 +2441,46 @@ fn curl_get(url: &str, key: Option<&str>) -> Result<String> {
         if let Some(key) = key {
             message = message.replace(key, "<redacted>");
         }
-        bail!("curl failed for {url} ({status}): {message}");
+        bail!(
+            "{}",
+            localized_format!(
+                locale,
+                "curl failed for {url} ({status}): {message}",
+                "curl 请求 {url} 失败（{status}）：{message}",
+                "{url} へのcurl要求が失敗しました ({status}): {message}"
+            )
+        );
     }
-    String::from_utf8(body).with_context(|| format!("{url} did not answer with UTF-8"))
+    String::from_utf8(body).with_context(|| {
+        localized_format!(
+            locale,
+            "{url} did not answer with UTF-8",
+            "{url} 未返回 UTF-8 内容",
+            "{url} の応答がUTF-8ではありません"
+        )
+    })
 }
 
-fn discover(base: &Base, key: Option<&str>) -> Result<Vec<Model>> {
+fn discover(base: &Base, key: Option<&str>, locale: crate::locale::Locale) -> Result<Vec<Model>> {
     if let Some(key) = key {
         if !auth_value_ok(key) {
-            bail!("the API key contains whitespace or a control character");
+            bail!(
+                "{}",
+                localized_format!(
+                    locale,
+                    "the API key contains whitespace or a control character",
+                    "API 密钥包含空白或控制字符",
+                    "APIキーに空白または制御文字が含まれています"
+                )
+            );
         }
     }
     let body = if base.https {
-        curl_get(&format!("{}/models", base.url), key)?
+        curl_get(&format!("{}/models", base.url), key, locale)?
     } else {
-        http_get(base, &format!("{}/models", base.path), key)?
+        http_get(base, &format!("{}/models", base.path), key, locale)?
     };
-    parse_listing(&body)
+    parse_listing(&body, locale)
 }
 
 /// A rendered profile patch, for tests of the credential detection in `auth`.
@@ -1964,7 +2497,9 @@ pub(crate) fn sample_patch_for_tests(id: &str, default_model: &str) -> String {
             ..Model::default()
         }],
     };
-    let mut text = apply_route("", &r, false).unwrap().text;
+    let mut text = apply_route("", &r, false, crate::locale::Locale::English)
+        .unwrap()
+        .text;
     text.push_str(&format!(
         "- id: agent-default-model\n  config:\n    provider: {id}\n    model: {default_model}\n"
     ));
@@ -1997,25 +2532,44 @@ fn valid_profile_name(name: &str) -> bool {
         && !name.chars().any(|c| c.is_control())
 }
 
-fn read_stdin_key() -> Result<String> {
+fn read_stdin_key(locale: crate::locale::Locale) -> Result<String> {
     let mut line = String::new();
     std::io::stdin()
         .lock()
         .take(1024)
         .read_line(&mut line)
-        .context("could not read the API key from stdin")?;
+        .context(crate::locale::diagnostic(
+            locale,
+            "could not read the API key from stdin",
+        ))?;
     let key = line.trim().to_string();
     if key.is_empty() {
-        bail!("--key-stdin: no key on stdin");
+        bail!(
+            "{}",
+            localized_format!(
+                locale,
+                "--key-stdin: no key on stdin",
+                "--key-stdin：标准输入中没有密钥",
+                "--key-stdin: 標準入力にキーがありません"
+            )
+        );
     }
     if !auth_value_ok(&key) || key.len() > 512 {
-        bail!("--key-stdin: the key is empty, oversized or contains whitespace");
+        bail!(
+            "{}",
+            localized_format!(
+                locale,
+                "--key-stdin: the key is empty, oversized or contains whitespace",
+                "--key-stdin：密钥为空、过大或包含空白",
+                "--key-stdin: キーが空・大きすぎる・空白を含む、のいずれかです"
+            )
+        );
     }
     Ok(key)
 }
 
 /// Write `text` next to `path` and rename it over, keeping the permissions.
-fn write_atomic(path: &Path, text: &str) -> Result<()> {
+fn write_atomic(path: &Path, text: &str, locale: crate::locale::Locale) -> Result<()> {
     let name = path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -2031,7 +2585,15 @@ fn write_atomic(path: &Path, text: &str) -> Result<()> {
         file.sync_all()?;
         drop(file);
         if std::fs::read(&tmp)? != text.as_bytes() {
-            bail!("the temporary file does not hold what was written");
+            bail!(
+                "{}",
+                localized_format!(
+                    locale,
+                    "the temporary file does not hold what was written",
+                    "临时文件内容与写入内容不同",
+                    "一時ファイルの内容が書き込んだ内容と異なります"
+                )
+            );
         }
         if let Some(perms) = perms {
             std::fs::set_permissions(&tmp, perms)?;
@@ -2045,35 +2607,52 @@ fn write_atomic(path: &Path, text: &str) -> Result<()> {
     result
 }
 
-fn read_patch(path: &Path) -> Result<String> {
+fn read_patch(path: &Path, locale: crate::locale::Locale) -> Result<String> {
     match std::fs::read_to_string(path) {
         Ok(t) => Ok(t),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
-        Err(e) => Err(e).with_context(|| format!("cannot read {}", path.display())),
+        Err(e) => Err(e).with_context(|| {
+            localized_format!(
+                locale,
+                "cannot read {}",
+                "无法读取 {}",
+                "{} を読み取れません",
+                path.display()
+            )
+        }),
     }
 }
 
 /// `rdsh provider add <preset>`.
-pub(crate) fn cmd_add(args: AddArgs, configured_default_profile: &str) -> Result<()> {
+pub(crate) fn cmd_add(
+    args: AddArgs,
+    configured_default_profile: &str,
+    locale: crate::locale::Locale,
+) -> Result<()> {
     let preset = preset(&args.preset).ok_or_else(|| {
         anyhow::anyhow!(
-            "unknown provider preset {:?}; available: {}",
-            args.preset,
-            PRESETS.iter().map(|p| p.id).collect::<Vec<_>>().join(", ")
+            "{}",
+            localized_format!(
+                locale,
+                "unknown provider preset {:?}; available: {}",
+                "未知的提供方预设 {:?}；可用预设：{}",
+                "不明なプロバイダープリセット {:?}。利用可能: {}",
+                args.preset,
+                PRESETS.iter().map(|p| p.id).collect::<Vec<_>>().join(", ")
+            )
         )
     })?;
     // Presets with a fixed endpoint are a fixed route: only local-openai is
     // free-form.
     if preset.base_url.is_some() && (args.id.is_some() || args.name.is_some() || args.no_key) {
-        bail!(
-            "--id, --name and --no-key are for local-openai; {} has a fixed route and needs a key",
+        bail!("{}", localized_format!(locale, "--id, --name and --no-key are for local-openai; {} has a fixed route and needs a key", "--id、--name 和 --no-key 仅适用于 local-openai；{} 使用固定路由且需要密钥", "--id・--name・--no-key は local-openai 専用です。{} は固定経路でキーが必要です",
             preset.id
-        );
+        ));
     }
     if args.discover && !preset.supports_discovery {
         bail!(
             "{}",
-            t(
+            t(locale,
                 &format!(
                     "{} には GET /models がない（404）ため --discover は使えません。--model <id> を指定するか、省略して既定のモデルを使ってください",
                     preset.id
@@ -2081,28 +2660,63 @@ pub(crate) fn cmd_add(args: AddArgs, configured_default_profile: &str) -> Result
                 &format!(
                     "--discover is not supported for {}: its API has no GET /models (it answers 404). Pass --model <id>, or omit it to use the built-in models",
                     preset.id
-                )
-            )
+                ), &format!("{} 的 API 没有 GET /models（返回 404），不能使用 --discover。请传入 --model <id>，或省略以使用内置模型", preset.id))
         );
     }
     if args.key_stdin && args.no_key {
-        bail!("--key-stdin and --no-key cannot be combined");
+        bail!(
+            "{}",
+            localized_format!(
+                locale,
+                "--key-stdin and --no-key cannot be combined",
+                "--key-stdin 与 --no-key 不能同时使用",
+                "--key-stdin と --no-key は併用できません"
+            )
+        );
     }
     let id = args.id.clone().unwrap_or_else(|| preset.id.to_string());
     if !auth::is_record_id(&id) {
-        bail!("route id {id:?} must be lowercase letters, digits and '-', starting with a letter");
+        bail!(
+            "{}",
+            localized_format!(
+                locale,
+                "route id {id:?} must be lowercase letters, digits and '-', starting with a letter",
+                "路由标识 {id:?} 必须以小写字母开头，仅含小写字母、数字和 '-'",
+                "経路ID {id:?} は小文字で始まり、小文字・数字・'-' のみ使用できます"
+            )
+        );
     }
     let key_env = route_key_env(&id);
     if let Some(name) = &args.name {
         if name.trim().is_empty() || name.chars().any(|c| c.is_control()) {
-            bail!("--name is empty or contains a control character");
+            bail!(
+                "{}",
+                localized_format!(
+                    locale,
+                    "--name is empty or contains a control character",
+                    "--name 为空或包含控制字符",
+                    "--name が空か制御文字を含んでいます"
+                )
+            );
         }
     }
-    let explicit_base = args.base_url.as_deref().map(parse_base_url).transpose()?;
+    let explicit_base = args
+        .base_url
+        .as_deref()
+        .map(|value| parse_base_url(value, locale))
+        .transpose()?;
     let mut explicit_models = Vec::new();
     for m in &args.models {
         if !valid_model_id(m) {
-            bail!("invalid --model id {m:?}");
+            bail!(
+                "{}",
+                localized_format!(
+                    locale,
+                    "invalid --model id {m:?}",
+                    "--model 标识 {m:?} 无效",
+                    "--model ID {m:?} が無効です"
+                )
+            );
         }
         explicit_models.push(Model {
             id: m.clone(),
@@ -2111,21 +2725,36 @@ pub(crate) fn cmd_add(args: AddArgs, configured_default_profile: &str) -> Result
     }
 
     // Everything above is checked before the profile or the network is touched.
-    let profile = crate::profile_or_default(args.profile.clone(), configured_default_profile)?;
+    let profile =
+        crate::profile_or_default(args.profile.clone(), configured_default_profile, locale)?;
     if !valid_profile_name(&profile) {
-        bail!("invalid profile name {profile:?}");
+        bail!(
+            "{}",
+            localized_format!(
+                locale,
+                "invalid profile name {profile:?}",
+                "配置文件名 {profile:?} 无效",
+                "プロファイル名 {profile:?} が無効です"
+            )
+        );
     }
     let profile_dir = PathBuf::from(dsh_home()).join("profiles").join(&profile);
     if !profile_dir.is_dir() {
         bail!(
-            "no profile {profile} under {} (see `rdsh profiles`)",
-            profile_dir.parent().unwrap_or(&profile_dir).display()
+            "{}",
+            localized_format!(
+                locale,
+                "no profile {profile} under {} (see `rdsh profiles`)",
+                "{} 下没有配置文件 {profile}（参见 `rdsh profiles`）",
+                "{} にプロファイル {profile} がありません（`rdsh profiles` を参照）",
+                profile_dir.parent().unwrap_or(&profile_dir).display()
+            )
         );
     }
     let patch_path = profile_dir.join("cordis.patch.yml");
 
     let opencode = if args.from_opencode {
-        Some(read_opencode(&id)?)
+        Some(read_opencode(&id, locale)?)
     } else {
         None
     };
@@ -2135,16 +2764,24 @@ pub(crate) fn cmd_add(args: AddArgs, configured_default_profile: &str) -> Result
         preset.base_url,
     ) {
         (Some(b), _, _) => b.clone(),
-        (None, Some(url), _) => parse_base_url(url).context("opencode baseURL")?,
-        (None, None, Some(url)) => parse_base_url(url)?,
+        (None, Some(url), _) => parse_base_url(url, locale).context("opencode baseURL")?,
+        (None, None, Some(url)) => parse_base_url(url, locale)?,
         (None, None, None) => {
-            bail!("local-openai needs --base-url (for example http://host:8080/v1)")
+            bail!(
+                "{}",
+                localized_format!(
+                    locale,
+                    "local-openai needs --base-url (for example http://host:8080/v1)",
+                    "local-openai 需要 --base-url（例如 http://host:8080/v1）",
+                    "local-openai には --base-url が必要です（例: http://host:8080/v1）"
+                )
+            )
         }
     };
 
     // Key input. The value only ever lives in these locals.
     let stdin_key = if args.key_stdin {
-        Some(read_stdin_key()?)
+        Some(read_stdin_key(locale)?)
     } else {
         None
     };
@@ -2168,17 +2805,18 @@ pub(crate) fn cmd_add(args: AddArgs, configured_default_profile: &str) -> Result
     };
 
     // A block that already exists is a no-op: skip discovery (a network call).
-    let current = read_patch(&patch_path)?;
-    let already = locate_providers(&split_lines(&current))
+    let current = read_patch(&patch_path, locale)?;
+    let already = locate_providers(&split_lines(&current), locale)
         .ok()
         .flatten()
         .is_some_and(|p| {
             let lines = split_lines(&current);
-            find_at(&lines, p.line + 1, p.end, p.child_indent, &id).is_some()
+            find_at(&lines, p.line + 1, p.end, p.child_indent, &id, locale).is_some()
         });
 
     let skip_existing = already && !args.replace;
     let mut notes: Vec<String> = Vec::new();
+    let mut human_notes: Vec<String> = Vec::new();
     let mut groups = vec![explicit_models];
     if let Some(o) = &opencode {
         groups.push(o.models.clone());
@@ -2189,9 +2827,15 @@ pub(crate) fn cmd_add(args: AddArgs, configured_default_profile: &str) -> Result
             .or_else(|| env_key.clone())
             .or_else(|| refs.get(&key_env).cloned())
             .filter(|k| k != PLACEHOLDER_KEY);
-        let mut found = discover(&base, key.as_deref())?;
+        let mut found = discover(&base, key.as_deref(), locale)?;
         if found.len() > MAX_MODELS {
             notes.push(format!("model listing truncated to {MAX_MODELS} entries"));
+            human_notes.push(localized_format!(
+                locale,
+                "model listing truncated to {MAX_MODELS} entries",
+                "模型清单已截断为 {MAX_MODELS} 条",
+                "モデル一覧を {MAX_MODELS} 件に切り詰めました"
+            ));
             found.truncate(MAX_MODELS);
         }
         groups.push(found);
@@ -2207,22 +2851,27 @@ pub(crate) fn cmd_add(args: AddArgs, configured_default_profile: &str) -> Result
             })
             .collect();
     }
-    notes.extend(apply_preset_models(preset, &mut models));
+    notes.extend(apply_preset_models(
+        preset,
+        &mut models,
+        crate::locale::Locale::English,
+    ));
+    human_notes.extend(apply_preset_models(preset, &mut models, locale));
     if models.is_empty() && !skip_existing {
-        bail!("no models: pass --model <id>, or use --from-opencode / --discover");
+        bail!("{}", localized_format!(locale, "no models: pass --model <id>, or use --from-opencode / --discover", "没有模型：请传入 --model <id>，或使用 --from-opencode / --discover", "モデルがありません。--model <id> または --from-opencode / --discover を指定してください"));
     }
     let route = route_for(models);
 
     // Route first, under the profile lock; the document is read inside it.
     let (change, written) = if args.dry_run {
-        let applied = apply_route(&current, &route, args.replace)?;
+        let applied = apply_route(&current, &route, args.replace, locale)?;
         (applied.change, false)
     } else {
-        let _lock = CredentialFileLock::exclusive_for(&patch_path)?;
-        let text = read_patch(&patch_path)?;
-        let applied = apply_route(&text, &route, args.replace)?;
+        let _lock = CredentialFileLock::exclusive_for(&patch_path, locale)?;
+        let text = read_patch(&patch_path, locale)?;
+        let applied = apply_route(&text, &route, args.replace, locale)?;
         if applied.change.writes() {
-            write_atomic(&patch_path, &applied.text)?;
+            write_atomic(&patch_path, &applied.text, locale)?;
             (applied.change, true)
         } else {
             (applied.change, false)
@@ -2233,7 +2882,7 @@ pub(crate) fn cmd_add(args: AddArgs, configured_default_profile: &str) -> Result
     let key_state = if let Some(key) = &stdin_key {
         if args.dry_run {
             "would-store"
-        } else if auth::store_ref(&key_env, key)? {
+        } else if auth::store_ref(&key_env, key, locale)? {
             "stored"
         } else {
             "present"
@@ -2241,7 +2890,7 @@ pub(crate) fn cmd_add(args: AddArgs, configured_default_profile: &str) -> Result
     } else if let Some(key) = env_key.as_ref().filter(|_| !has_ref) {
         if args.dry_run {
             "would-store"
-        } else if auth::store_ref(&key_env, key)? {
+        } else if auth::store_ref(&key_env, key, locale)? {
             "stored"
         } else {
             "present"
@@ -2252,7 +2901,7 @@ pub(crate) fn cmd_add(args: AddArgs, configured_default_profile: &str) -> Result
         if args.dry_run {
             "would-store-placeholder"
         } else {
-            auth::store_ref(&key_env, PLACEHOLDER_KEY)?;
+            auth::store_ref(&key_env, PLACEHOLDER_KEY, locale)?;
             "placeholder"
         }
     } else {
@@ -2283,71 +2932,99 @@ pub(crate) fn cmd_add(args: AddArgs, configured_default_profile: &str) -> Result
     }
     let file = patch_path.display();
     let verb = match change {
-        Change::Added => t("追加しました", "added"),
-        Change::Replaced => t("置き換えました", "replaced"),
+        Change::Added => t(locale, "追加しました", "added", "已添加"),
+        Change::Replaced => t(locale, "置き換えました", "replaced", "已替换"),
         Change::Exists => t(
+            locale,
             "既に設定済みです（変更なし。置き換えるには --replace）",
             "already configured, nothing changed (use --replace to rewrite it)",
+            "已配置，未作更改（使用 --replace 重写）",
         ),
         Change::Identical => t(
+            locale,
             "既に同じ内容です（変更なし）",
             "already identical, nothing changed",
+            "内容已相同，未作更改",
         ),
     };
     let dry = if args.dry_run {
-        t("[dry-run・書き込みなし] ", "[dry-run, nothing written] ")
+        t(
+            locale,
+            "[dry-run・書き込みなし] ",
+            "[dry-run, nothing written] ",
+            "[试运行，未写入] ",
+        )
     } else {
         String::new()
     };
     println!("[rdsh provider] {dry}{} {}: {verb}", profile, route.id);
-    println!("[rdsh provider] file: {file}");
     println!(
-        "[rdsh provider] {} ({API}), models: {}",
-        route.base_url,
-        model_ids.join(", ")
+        "{}",
+        localized_format!(
+            locale,
+            "[rdsh provider] file: {file}",
+            "[rdsh provider] 文件：{file}",
+            "[rdsh provider] ファイル: {file}"
+        )
+    );
+    println!(
+        "{}",
+        localized_format!(
+            locale,
+            "[rdsh provider] {} ({API}), models: {}",
+            "[rdsh provider] {} ({API})，模型：{}",
+            "[rdsh provider] {} ({API})、モデル: {}",
+            route.base_url,
+            model_ids.join(", ")
+        )
     );
     if args.dry_run && change.writes() {
         println!("{}", manual_snippet(&route));
     }
-    for note in &notes {
-        println!("[rdsh provider] note: {note}");
+    for note in &human_notes {
+        println!(
+            "{}",
+            localized_format!(
+                locale,
+                "[rdsh provider] note: {note}",
+                "[rdsh provider] 提示：{note}",
+                "[rdsh provider] 注記: {note}"
+            )
+        );
     }
     match key_state {
         "stored" => println!(
             "[rdsh provider] {}",
-            t(
+            t(locale,
                 &format!("鍵を {key_env} として保存しました"),
-                &format!("key saved as {key_env}")
-            )
+                &format!("key saved as {key_env}"), &format!("密钥已保存为 {key_env}"))
         ),
         "would-store" => println!(
             "[rdsh provider] {}",
-            t(&format!("{key_env} を保存します"), &format!("would save {key_env}"))
+            t(locale, &format!("{key_env} を保存します"), &format!("would save {key_env}"), &format!("将保存 {key_env}"))
         ),
         "placeholder" | "would-store-placeholder" => println!(
             "[rdsh provider] {}",
-            t(
+            t(locale,
                 &format!("鍵なしのため {key_env} にダミー値を保存します"),
-                &format!("no key: stores a placeholder for {key_env}")
-            )
+                &format!("no key: stores a placeholder for {key_env}"), &format!("无需密钥：将为 {key_env} 保存占位值"))
         ),
         "present" => println!(
             "[rdsh provider] {}",
-            t(&format!("{key_env}: 設定済み"), &format!("{key_env}: present"))
+            t(locale, &format!("{key_env}: 設定済み"), &format!("{key_env}: present"), &format!("{key_env}：已存在"))
         ),
         _ => println!(
             "[rdsh provider] {}",
-            t(
+            t(locale,
                 &format!("{key_env} が未設定です。{key_env}=... を付けて再実行するか、--key-stdin で渡してください"),
-                &format!("{key_env} is missing: re-run with {key_env}=... set, or pipe it with --key-stdin")
-            )
+                &format!("{key_env} is missing: re-run with {key_env}=... set, or pipe it with --key-stdin"), &format!("缺少 {key_env}：请设置 {key_env}=... 后重试，或通过 --key-stdin 传入"))
         ),
     }
     Ok(())
 }
 
 /// `rdsh provider list [--json]`.
-pub(crate) fn cmd_list(json: bool) -> Result<()> {
+pub(crate) fn cmd_list(json: bool, locale: crate::locale::Locale) -> Result<()> {
     let root = PathBuf::from(dsh_home()).join("profiles");
     let mut names: Vec<String> = std::fs::read_dir(&root)
         .map(|rd| {
@@ -2370,7 +3047,7 @@ pub(crate) fn cmd_list(json: bool) -> Result<()> {
     for name in &names {
         let text =
             std::fs::read_to_string(root.join(name).join("cordis.patch.yml")).unwrap_or_default();
-        let found = routes_in(&text);
+        let found = routes_in(&text, locale);
         let mut routes = Vec::new();
         for p in PRESETS {
             let hit = found.iter().find(|r| r.id == p.id);
@@ -2426,36 +3103,84 @@ pub(crate) fn cmd_list(json: bool) -> Result<()> {
         );
         return Ok(());
     }
-    println!("[rdsh provider] presets:");
+    println!(
+        "{}",
+        localized_format!(
+            locale,
+            "[rdsh provider] presets:",
+            "[rdsh provider] 预设：",
+            "[rdsh provider] プリセット:"
+        )
+    );
     for p in PRESETS {
         println!(
-            "  {:<13} {} ({}, key {})",
-            p.id,
-            p.base_url.unwrap_or("--base-url required"),
-            API,
-            route_key_env(p.id)
+            "{}",
+            localized_format!(
+                locale,
+                "  {:<13} {} ({}, key {})",
+                "  {:<13} {} ({}, 密钥 {})",
+                "  {:<13} {} ({}, キー {})",
+                p.id,
+                p.base_url.unwrap_or(match locale {
+                    crate::locale::Locale::English => "--base-url required",
+                    crate::locale::Locale::Chinese => "需要 --base-url",
+                    crate::locale::Locale::Japanese => "--base-url が必要です",
+                }),
+                API,
+                route_key_env(p.id)
+            )
         );
     }
     if profiles.is_empty() {
-        println!("[rdsh provider] no profiles under {}", root.display());
+        println!(
+            "{}",
+            localized_format!(
+                locale,
+                "[rdsh provider] no profiles under {}",
+                "[rdsh provider] {} 下没有配置文件",
+                "[rdsh provider] {} にプロファイルがありません",
+                root.display()
+            )
+        );
     }
     for p in &profiles {
         println!(
-            "[rdsh provider] profile {}:",
-            p["profile"].as_str().unwrap_or("")
+            "{}",
+            localized_format!(
+                locale,
+                "[rdsh provider] profile {}:",
+                "[rdsh provider] 配置文件 {}：",
+                "[rdsh provider] プロファイル {}:",
+                p["profile"].as_str().unwrap_or("")
+            )
         );
         for r in p["routes"].as_array().into_iter().flatten() {
             let configured = r["configured"].as_bool().unwrap_or(false);
             if configured {
                 println!(
-                    "  {:<13} configured, {} models, {} {}",
-                    r["id"].as_str().unwrap_or(""),
-                    r["models"],
-                    r["apiKeyEnv"].as_str().unwrap_or(""),
-                    r["key"].as_str().unwrap_or("")
+                    "{}",
+                    localized_format!(
+                        locale,
+                        "  {:<13} configured, {} models, {} {}",
+                        "  {:<13} 已配置，{} 个模型，{} {}",
+                        "  {:<13} 設定済み、モデル{}件、{} {}",
+                        r["id"].as_str().unwrap_or(""),
+                        r["models"],
+                        r["apiKeyEnv"].as_str().unwrap_or(""),
+                        crate::locale::diagnostic(locale, r["key"].as_str().unwrap_or(""))
+                    )
                 );
             } else {
-                println!("  {:<13} not configured", r["id"].as_str().unwrap_or(""));
+                println!(
+                    "{}",
+                    localized_format!(
+                        locale,
+                        "  {:<13} not configured",
+                        "  {:<13} 未配置",
+                        "  {:<13} 未設定",
+                        r["id"].as_str().unwrap_or("")
+                    )
+                );
             }
         }
     }
@@ -2520,7 +3245,7 @@ mod tests {
   }
 }"#;
         let doc: Value = serde_json::from_str(&strip_jsonc(src)).unwrap();
-        let p = parse_opencode_provider(&doc, "hai").unwrap();
+        let p = parse_opencode_provider(&doc, "hai", crate::locale::Locale::English).unwrap();
         assert_eq!(p.base_url.as_deref(), Some("https://hai.test/v1"));
         assert_eq!(p.models.len(), 2);
         let m1 = &p.models[0];
@@ -2528,30 +3253,41 @@ mod tests {
         assert_eq!(m1.context_window, Some(1000));
         assert_eq!(m1.max_tokens, Some(200));
         assert_eq!(m1.input, vec!["text", "image"]);
-        assert!(parse_opencode_provider(&doc, "nope").is_err());
+        assert!(parse_opencode_provider(&doc, "nope", crate::locale::Locale::English).is_err());
         let rendered = render_route(&route("hai", &["m1"]), 0, 2).join("\n");
         assert!(!rendered.contains("sk-secret"));
     }
 
     #[test]
     fn listings_in_openai_and_ollama_shapes() {
-        let a = parse_listing(r#"{"data":[{"id":"m1"},{"id":"m2"},{"id":""}]}"#).unwrap();
+        let a = parse_listing(
+            r#"{"data":[{"id":"m1"},{"id":"m2"},{"id":""}]}"#,
+            crate::locale::Locale::English,
+        )
+        .unwrap();
         assert_eq!(
             a.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
             ["m1", "m2"]
         );
-        let b = parse_listing(r#"{"models":[{"name":"llama3:latest"},{"model":"qwen"}]}"#).unwrap();
+        let b = parse_listing(
+            r#"{"models":[{"name":"llama3:latest"},{"model":"qwen"}]}"#,
+            crate::locale::Locale::English,
+        )
+        .unwrap();
         assert_eq!(b.len(), 2);
-        assert!(parse_listing("{}").is_err());
-        assert!(parse_listing("nope").is_err());
+        assert!(parse_listing("{}", crate::locale::Locale::English).is_err());
+        assert!(parse_listing("nope", crate::locale::Locale::English).is_err());
     }
 
     #[test]
     fn chunked_bodies_decode() {
         let raw = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n6;x=1\r\n world\r\n0\r\n\r\n";
-        assert_eq!(parse_http_response(raw, "u").unwrap(), "hello world");
+        assert_eq!(
+            parse_http_response(raw, "u", crate::locale::Locale::English).unwrap(),
+            "hello world"
+        );
         let raw = b"HTTP/1.1 404 Not Found\r\n\r\n";
-        assert!(parse_http_response(raw, "u").is_err());
+        assert!(parse_http_response(raw, "u", crate::locale::Locale::English).is_err());
     }
 
     #[test]
@@ -2560,7 +3296,9 @@ mod tests {
             let body = format!("{size:X}\r\nxx");
             assert_eq!(decode_chunked(body.as_bytes()), None);
             let raw = format!("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n{body}");
-            assert!(parse_http_response(raw.as_bytes(), "u").is_err());
+            assert!(
+                parse_http_response(raw.as_bytes(), "u", crate::locale::Locale::English).is_err()
+            );
         }
     }
 
@@ -2596,11 +3334,21 @@ mod tests {
 
     #[test]
     fn base_urls_are_validated() {
-        let b = parse_base_url("http://127.0.0.1:18080/v1/").unwrap();
+        let b =
+            parse_base_url("http://127.0.0.1:18080/v1/", crate::locale::Locale::English).unwrap();
         assert_eq!((b.https, b.port, b.path.as_str()), (false, 18080, "/v1"));
         assert_eq!(b.url, "http://127.0.0.1:18080/v1");
-        assert!(parse_base_url("https://[::1]:8443/v1").unwrap().https);
-        assert_eq!(parse_base_url("https://hai.test").unwrap().port, 443);
+        assert!(
+            parse_base_url("https://[::1]:8443/v1", crate::locale::Locale::English)
+                .unwrap()
+                .https
+        );
+        assert_eq!(
+            parse_base_url("https://hai.test", crate::locale::Locale::English)
+                .unwrap()
+                .port,
+            443
+        );
         for bad in [
             "",
             "hai.test/v1",
@@ -2617,7 +3365,10 @@ mod tests {
             "http://host/v1\\x",
             "http://[zz]/v1",
         ] {
-            assert!(parse_base_url(bad).is_err(), "{bad:?} should be refused");
+            assert!(
+                parse_base_url(bad, crate::locale::Locale::English).is_err(),
+                "{bad:?} should be refused"
+            );
         }
     }
 
@@ -2642,7 +3393,7 @@ mod tests {
     #[test]
     fn adding_keeps_every_other_byte() {
         let r = route("hai", &["deepseek-v4-flash"]);
-        let out = apply_route(WITH_OTHER, &r, false).unwrap();
+        let out = apply_route(WITH_OTHER, &r, false, crate::locale::Locale::English).unwrap();
         assert_eq!(out.change, Change::Added);
         let block = render_route(&r, 6, 2).join("\n");
         let want = WITH_OTHER.replacen(
@@ -2654,7 +3405,7 @@ mod tests {
         assert!(out
             .text
             .contains("      # between\n- id: agent-default-model"));
-        let found = routes_in(&out.text);
+        let found = routes_in(&out.text, crate::locale::Locale::English);
         assert_eq!(found.len(), 2);
         assert_eq!(found[1].id, "hai");
         assert_eq!(found[1].api_key_env.as_deref(), Some("HAI_API_KEY"));
@@ -2664,16 +3415,21 @@ mod tests {
     #[test]
     fn adding_twice_is_a_no_op_and_replace_rewrites_only_the_block() {
         let r = route("hai", &["m1"]);
-        let once = apply_route(WITH_OTHER, &r, false).unwrap().text;
-        let again = apply_route(&once, &r, false).unwrap();
+        let once = apply_route(WITH_OTHER, &r, false, crate::locale::Locale::English)
+            .unwrap()
+            .text;
+        let again = apply_route(&once, &r, false, crate::locale::Locale::English).unwrap();
         assert_eq!(again.change, Change::Exists);
         assert_eq!(again.text, once);
-        let same = apply_route(&once, &r, true).unwrap();
+        let same = apply_route(&once, &r, true, crate::locale::Locale::English).unwrap();
         assert_eq!(same.change, Change::Identical);
         let r2 = route("hai", &["m1", "m2"]);
-        let replaced = apply_route(&once, &r2, true).unwrap();
+        let replaced = apply_route(&once, &r2, true, crate::locale::Locale::English).unwrap();
         assert_eq!(replaced.change, Change::Replaced);
-        assert_eq!(routes_in(&replaced.text)[1].models, 2);
+        assert_eq!(
+            routes_in(&replaced.text, crate::locale::Locale::English)[1].models,
+            2
+        );
         assert_eq!(replaced.text.matches("hai:").count(), 1);
         assert!(replaced.text.starts_with("# top comment\n"));
         assert!(replaced.text.ends_with("    model: x\n"));
@@ -2682,13 +3438,26 @@ mod tests {
 
     #[test]
     fn a_second_route_does_not_disturb_the_first() {
-        let a = apply_route(WITH_OTHER, &route("hai", &["m1"]), false)
-            .unwrap()
-            .text;
-        let b = apply_route(&a, &route("home-gpu", &["m9"]), false)
-            .unwrap()
-            .text;
-        let ids: Vec<String> = routes_in(&b).into_iter().map(|r| r.id).collect();
+        let a = apply_route(
+            WITH_OTHER,
+            &route("hai", &["m1"]),
+            false,
+            crate::locale::Locale::English,
+        )
+        .unwrap()
+        .text;
+        let b = apply_route(
+            &a,
+            &route("home-gpu", &["m9"]),
+            false,
+            crate::locale::Locale::English,
+        )
+        .unwrap()
+        .text;
+        let ids: Vec<String> = routes_in(&b, crate::locale::Locale::English)
+            .into_iter()
+            .map(|r| r.id)
+            .collect();
         assert_eq!(ids, ["other", "hai", "home-gpu"]);
         assert!(b.contains("HOME_GPU_API_KEY"));
         assert!(b.starts_with(&a[..a.find("      # between").unwrap()]));
@@ -2697,17 +3466,26 @@ mod tests {
     #[test]
     fn a_missing_entry_is_created() {
         let r = route("hai", &["m1"]);
-        let fresh = apply_route("", &r, false).unwrap().text;
+        let fresh = apply_route("", &r, false, crate::locale::Locale::English)
+            .unwrap()
+            .text;
         assert!(fresh.starts_with("- id: llm-pi-ai\n  config:\n    providers:\n      hai:\n"));
         assert!(fresh.ends_with('\n'));
         let existing = "- id: agent-default-model\n  config:\n    provider: hai\n    model: m1\n";
-        let out = apply_route(existing, &r, false).unwrap().text;
+        let out = apply_route(existing, &r, false, crate::locale::Locale::English)
+            .unwrap()
+            .text;
         assert!(out.starts_with(existing));
-        assert_eq!(routes_in(&out).len(), 1);
-        let comments_only = apply_route("# nothing yet\n", &r, false).unwrap().text;
+        assert_eq!(routes_in(&out, crate::locale::Locale::English).len(), 1);
+        let comments_only =
+            apply_route("# nothing yet\n", &r, false, crate::locale::Locale::English)
+                .unwrap()
+                .text;
         assert!(comments_only.starts_with("# nothing yet\n- id: llm-pi-ai"));
         // No final newline: one is added only after the appended entry.
-        let no_nl = apply_route("- id: a\n  x: 1", &r, false).unwrap().text;
+        let no_nl = apply_route("- id: a\n  x: 1", &r, false, crate::locale::Locale::English)
+            .unwrap()
+            .text;
         assert!(no_nl.starts_with("- id: a\n  x: 1\n- id: llm-pi-ai"));
         assert!(no_nl.ends_with('\n'));
     }
@@ -2716,53 +3494,75 @@ mod tests {
     fn missing_levels_are_filled_in() {
         let r = route("hai", &["m1"]);
         let no_config = "- id: llm-pi-ai\n- id: next\n";
-        let out = apply_route(no_config, &r, false).unwrap().text;
+        let out = apply_route(no_config, &r, false, crate::locale::Locale::English)
+            .unwrap()
+            .text;
         assert!(out.starts_with("- id: llm-pi-ai\n  config:\n    providers:\n      hai:\n"));
         assert!(out.ends_with("- id: next\n"));
         let no_providers = "- id: llm-pi-ai\n  config:\n    other: 1\n- id: next\n";
-        let out = apply_route(no_providers, &r, false).unwrap().text;
+        let out = apply_route(no_providers, &r, false, crate::locale::Locale::English)
+            .unwrap()
+            .text;
         assert!(out.contains("    other: 1\n    providers:\n      hai:\n"));
-        assert_eq!(routes_in(&out)[0].id, "hai");
+        assert_eq!(routes_in(&out, crate::locale::Locale::English)[0].id, "hai");
         let named = "- name: \"@deepseek-ai/dsh-llm-pi-ai\"\n  config:\n    providers:\n      a:\n        baseURL: http://x\n";
-        let out = apply_route(named, &r, false).unwrap().text;
-        assert_eq!(routes_in(&out).len(), 2);
+        let out = apply_route(named, &r, false, crate::locale::Locale::English)
+            .unwrap()
+            .text;
+        assert_eq!(routes_in(&out, crate::locale::Locale::English).len(), 2);
     }
 
     #[test]
     fn crlf_files_keep_their_line_endings() {
         let text = WITH_OTHER.replace('\n', "\r\n");
-        let out = apply_route(&text, &route("hai", &["m1"]), false)
-            .unwrap()
-            .text;
+        let out = apply_route(
+            &text,
+            &route("hai", &["m1"]),
+            false,
+            crate::locale::Locale::English,
+        )
+        .unwrap()
+        .text;
         assert!(!out.replace("\r\n", "").contains('\n'));
-        assert_eq!(routes_in(&out).len(), 2);
+        assert_eq!(routes_in(&out, crate::locale::Locale::English).len(), 2);
     }
 
-    /// 不正なインデントの入力は、重複した config を追記する前に拒否する。
-    /// これは有効な YAML が破壊されることの証明ではなく、不正入力の保護を確かめる。
+    /// `config:` が `id:` より深い（有効な YAML だが `- ` 直下のキーではない）レイアウトは
+    /// 解釈できないので refuse する。以前は同じエントリに2つ目の `config:` を追記し、
+    /// YAML の重複マッピングキーを作って既存の providers を無言で無効化していた。
     #[test]
     fn deeper_config_indent_is_refused_instead_of_duplicated() {
         let text =
             "- id: llm-pi-ai\n   config:\n      providers:\n         r0:\n            baseURL: http://old\n";
-        let err = apply_route(text, &route("hai", &["m1"]), false)
-            .unwrap_err()
-            .to_string();
+        let err = apply_route(
+            text,
+            &route("hai", &["m1"]),
+            false,
+            crate::locale::Locale::English,
+        )
+        .unwrap_err()
+        .to_string();
         assert!(err.contains("by hand"), "{err}");
         assert!(err.contains("- id: llm-pi-ai"), "{err}");
     }
 
-    /// 期待カラムの兄弟キーがあるエントリには config を追加できる。
+    /// 期待カラムのキーがあるエントリには、これまでどおり config を足せる。
     #[test]
     fn sibling_keys_at_the_expected_column_still_get_config() {
         let text = "- id: llm-pi-ai\n  enabled: true\n- id: next\n";
-        let out = apply_route(text, &route("hai", &["m1"]), false)
-            .unwrap()
-            .text;
+        let out = apply_route(
+            text,
+            &route("hai", &["m1"]),
+            false,
+            crate::locale::Locale::English,
+        )
+        .unwrap()
+        .text;
         assert!(
             out.contains("  enabled: true\n  config:\n    providers:\n      hai:\n"),
             "{out}"
         );
-        assert_eq!(routes_in(&out).len(), 1);
+        assert_eq!(routes_in(&out, crate::locale::Locale::English).len(), 1);
     }
 
     #[test]
@@ -2776,7 +3576,9 @@ mod tests {
             "  - id: indented\n",
             "---\n- id: a\n",
         ] {
-            let err = apply_route(text, &r, false).unwrap_err().to_string();
+            let err = apply_route(text, &r, false, crate::locale::Locale::English)
+                .unwrap_err()
+                .to_string();
             assert!(err.contains("by hand"), "{text:?}: {err}");
             assert!(err.contains("- id: llm-pi-ai"), "{err}");
             assert!(
@@ -2814,7 +3616,14 @@ mod tests {
     fn model_keys_align_with_id_for_every_indent_width() {
         for w in [1, 2, 3, 4] {
             let text = with_width(w);
-            let out = apply_route(&text, &detailed_route(), false).unwrap().text;
+            let out = apply_route(
+                &text,
+                &detailed_route(),
+                false,
+                crate::locale::Locale::English,
+            )
+            .unwrap()
+            .text;
             let lines: Vec<&str> = out.lines().collect();
             let mut checked = 0;
             for (i, line) in lines.iter().enumerate() {
@@ -2834,13 +3643,18 @@ mod tests {
             }
             assert_eq!(checked, 5, "width {w}\n{out}");
             // Previous route and the new one are both found; the file is unchanged before.
-            let ids: Vec<String> = routes_in(&out).into_iter().map(|r| r.id).collect();
+            let ids: Vec<String> = routes_in(&out, crate::locale::Locale::English)
+                .into_iter()
+                .map(|r| r.id)
+                .collect();
             assert_eq!(ids, ["other", "hai"], "width {w}");
             assert!(out.ends_with("- id: next\n"));
             // Compat is beside models, in the same step.
             let mut sarashina = detailed_route();
             sarashina.compat = vec!["supportsStore: false".to_string()];
-            let out = apply_route(&text, &sarashina, false).unwrap().text;
+            let out = apply_route(&text, &sarashina, false, crate::locale::Locale::English)
+                .unwrap()
+                .text;
             let compat = out.lines().find(|l| l.trim() == "compat:").unwrap();
             let models = out.lines().rev().find(|l| l.trim() == "models:").unwrap();
             assert_eq!(
@@ -2860,17 +3674,31 @@ mod tests {
             "- id: llm-pi-ai   # c",
         ] {
             let text = format!("{head}\n  config:\n    providers:\n      other:\n        apiKeyEnv: O\n        models:\n          - id: x\n");
-            let out = apply_route(&text, &route("hai", &["m1"]), false)
-                .unwrap()
-                .text;
+            let out = apply_route(
+                &text,
+                &route("hai", &["m1"]),
+                false,
+                crate::locale::Locale::English,
+            )
+            .unwrap()
+            .text;
             assert!(out.starts_with(head), "{head}");
             assert_eq!(out.matches("llm-pi-ai").count(), 1, "{head}\n{out}");
-            let ids: Vec<String> = routes_in(&out).into_iter().map(|r| r.id).collect();
+            let ids: Vec<String> = routes_in(&out, crate::locale::Locale::English)
+                .into_iter()
+                .map(|r| r.id)
+                .collect();
             assert_eq!(ids, ["other", "hai"], "{head}");
         }
         // The entry may also be named by the plugin and keep id elsewhere.
         let named = "- config:\n    providers: {}\n  name: '@deepseek-ai/dsh-llm-pi-ai' # x\n";
-        assert!(apply_route(named, &route("hai", &["m1"]), false).is_err());
+        assert!(apply_route(
+            named,
+            &route("hai", &["m1"]),
+            false,
+            crate::locale::Locale::English
+        )
+        .is_err());
     }
 
     #[test]
@@ -2885,7 +3713,7 @@ mod tests {
             "- id: llm-pi-ai\n  config:\n    providers:\n      a:\n        baseURL: http://x\n- id: llm-pi-ai\n  config:\n    providers:\n      b:\n        baseURL: http://y\n",
             "- id: [broken\n- id: llm-pi-ai\n",
         ] {
-            let err = apply_route(text, &r, false).unwrap_err().to_string();
+            let err = apply_route(text, &r, false, crate::locale::Locale::English).unwrap_err().to_string();
             assert!(err.contains("by hand"), "{text:?}: {err}");
         }
     }
@@ -2893,13 +3721,26 @@ mod tests {
     #[test]
     fn other_providers_survive_every_add() {
         let text = "- id: llm-pi-ai # keep\n  config:\n    providers:\n      a:\n        baseURL: http://a\n        models:\n          - id: a1\n      b:\n        baseURL: http://b\n- id: z\n";
-        let once = apply_route(text, &route("hai", &["m1"]), false)
-            .unwrap()
-            .text;
-        let twice = apply_route(&once, &route("home", &["m2"]), false)
-            .unwrap()
-            .text;
-        let ids: Vec<String> = routes_in(&twice).into_iter().map(|r| r.id).collect();
+        let once = apply_route(
+            text,
+            &route("hai", &["m1"]),
+            false,
+            crate::locale::Locale::English,
+        )
+        .unwrap()
+        .text;
+        let twice = apply_route(
+            &once,
+            &route("home", &["m2"]),
+            false,
+            crate::locale::Locale::English,
+        )
+        .unwrap()
+        .text;
+        let ids: Vec<String> = routes_in(&twice, crate::locale::Locale::English)
+            .into_iter()
+            .map(|r| r.id)
+            .collect();
         assert_eq!(ids, ["a", "b", "hai", "home"]);
         assert_eq!(twice.matches("llm-pi-ai").count(), 1);
     }
@@ -2912,20 +3753,39 @@ mod tests {
         let deeper = "- id: llm-pi-ai\n  config:\n    providers:\n      a:\n        baseURL: http://a\n    note: llm-pi-ai\n";
         let other_entry = "- id: x\n  config:\n    use: llm-pi-ai\n";
         for text in [nested, with_entry] {
-            let err = apply_route(text, &route("hai", &["m1"]), false)
-                .unwrap_err()
-                .to_string();
+            let err = apply_route(
+                text,
+                &route("hai", &["m1"]),
+                false,
+                crate::locale::Locale::English,
+            )
+            .unwrap_err()
+            .to_string();
             assert!(err.contains("by hand"), "{text:?}: {err}");
         }
         // Direct plugin identities determine the target; these are scalar values.
         for text in [deeper, other_entry] {
-            let out = apply_route(text, &route("hai", &["m1"]), false).unwrap();
+            let out = apply_route(
+                text,
+                &route("hai", &["m1"]),
+                false,
+                crate::locale::Locale::English,
+            )
+            .unwrap();
             assert!(out.text.contains("note: llm-pi-ai") || out.text.contains("use: llm-pi-ai"));
-            assert!(routes_in(&out.text).iter().any(|item| item.id == "hai"));
+            assert!(routes_in(&out.text, crate::locale::Locale::English)
+                .iter()
+                .any(|item| item.id == "hai"));
         }
         // Comments do not count as a mention.
         let commented = "# llm-pi-ai goes here\n- id: x\n";
-        assert!(apply_route(commented, &route("hai", &["m1"]), false).is_ok());
+        assert!(apply_route(
+            commented,
+            &route("hai", &["m1"]),
+            false,
+            crate::locale::Locale::English
+        )
+        .is_ok());
     }
 
     #[test]
@@ -2941,7 +3801,9 @@ mod tests {
             let text = format!(
                 "- insert:\n    - id: {id}\n      config:\n        providers:\n          other:\n            baseURL: http://o\n  config:\n    unrelated: 1\n"
             );
-            let err = apply_route(&text, &route, false).unwrap_err().to_string();
+            let err = apply_route(&text, &route, false, crate::locale::Locale::English)
+                .unwrap_err()
+                .to_string();
             assert!(err.contains("by hand"), "{id}: {err}");
         }
     }
@@ -2957,7 +3819,9 @@ mod tests {
             let text = format!(
                 "- id: {id}\n  config:\n    providers:\n      other:\n        baseURL: http://o\n"
             );
-            let out = apply_route(&text, &route, false).unwrap().text;
+            let out = apply_route(&text, &route, false, crate::locale::Locale::English)
+                .unwrap()
+                .text;
             assert!(
                 out.contains("other:") && out.contains("hai:"),
                 "{id}\n{out}"
@@ -2969,7 +3833,9 @@ mod tests {
             );
         }
         let escaped_key = "- \"i\\x64\": llm-pi-ai\n  config:\n    providers:\n      other:\n        baseURL: http://o\n";
-        let out = apply_route(escaped_key, &route, false).unwrap().text;
+        let out = apply_route(escaped_key, &route, false, crate::locale::Locale::English)
+            .unwrap()
+            .text;
         assert!(out.contains("other:") && out.contains("hai:"), "{out}");
         assert_eq!(out.matches("llm-pi-ai").count(), 1, "{out}");
     }
@@ -2987,13 +3853,13 @@ mod tests {
             "- id: x\n  items: [a: b]\n",
             "- id: x\n  items: [a,\n    b]\n",
         ] {
-            let err = apply_route(text, &route, false).unwrap_err().to_string();
+            let err = apply_route(text, &route, false, crate::locale::Locale::English).unwrap_err().to_string();
             assert!(err.contains("by hand"), "{text:?}: {err}");
         }
         // Plain scalars with these characters inside, comments, block bodies and
         // flow sequences of plain scalars are fine.
         let fine = "- id: x\n  url: http://h/?a=1&b=2\n  mark: a*b # *x &y !z\n  list: [a, b]\n  empty: {}\n  text: |\n    *x &y !z [{\n  other: 'it''s'\n";
-        assert!(apply_route(fine, &route, false).is_ok());
+        assert!(apply_route(fine, &route, false, crate::locale::Locale::English).is_ok());
     }
 
     #[test]
@@ -3006,7 +3872,7 @@ mod tests {
             "- id: x\n  note: \"folded\n    text\"\n",
             "- id: x\n  note: \"ends with \\\n    escape\"\n",
         ] {
-            let err = apply_route(text, &route, false).unwrap_err().to_string();
+            let err = apply_route(text, &route, false, crate::locale::Locale::English).unwrap_err().to_string();
             assert!(err.contains("by hand"), "{text:?}: {err}");
         }
     }
@@ -3014,11 +3880,18 @@ mod tests {
     #[test]
     fn yaml_double_quoted_escapes_decode() {
         assert_eq!(
-            decode_double(r#"\0\a\b\t\n\v\f\r\e\ \"\/\\\N\_\L\P\x41\u0042\U00000043"#).unwrap(),
+            decode_double(
+                r#"\0\a\b\t\n\v\f\r\e\ \"\/\\\N\_\L\P\x41\u0042\U00000043"#,
+                crate::locale::Locale::English
+            )
+            .unwrap(),
             "\0\u{7}\u{8}\t\n\u{b}\u{c}\r\u{1b} \"/\\\u{85}\u{a0}\u{2028}\u{2029}ABC"
         );
         for bad in [r"\q", r"\x4", r"\uD800", r"\U00110000", "\\"] {
-            assert!(decode_double(bad).is_err(), "{bad}");
+            assert!(
+                decode_double(bad, crate::locale::Locale::English).is_err(),
+                "{bad}"
+            );
         }
     }
 
@@ -3033,11 +3906,19 @@ mod tests {
             let text = format!(
                 "{head}\n  config :\n    providers :\n      other :\n        baseURL : http://o\n        models:\n          - id: o1\n"
             );
-            let out = apply_route(&text, &route("hai", &["m1"]), false)
-                .unwrap_or_else(|e| panic!("{head}: {e}"))
-                .text;
+            let out = apply_route(
+                &text,
+                &route("hai", &["m1"]),
+                false,
+                crate::locale::Locale::English,
+            )
+            .unwrap_or_else(|e| panic!("{head}: {e}"))
+            .text;
             assert_eq!(out.matches("llm-pi-ai").count(), 1, "{head}\n{out}");
-            let ids: Vec<String> = routes_in(&out).into_iter().map(|r| r.id).collect();
+            let ids: Vec<String> = routes_in(&out, crate::locale::Locale::English)
+                .into_iter()
+                .map(|r| r.id)
+                .collect();
             assert_eq!(ids, ["other", "hai"], "{head}\n{out}");
         }
     }
@@ -3060,10 +3941,18 @@ mod tests {
             ("- id: llm-pi-ai\n  config:\n    other: 1\n", 2),
             ("- id: llm-pi-ai\n  config:\n      other: 1\n", 4),
         ] {
-            let out = apply_route(text, &detailed_route(), false)
-                .unwrap_or_else(|e| panic!("{text:?}: {e}"))
-                .text;
-            let ids: Vec<String> = routes_in(&out).into_iter().map(|r| r.id).collect();
+            let out = apply_route(
+                text,
+                &detailed_route(),
+                false,
+                crate::locale::Locale::English,
+            )
+            .unwrap_or_else(|e| panic!("{text:?}: {e}"))
+            .text;
+            let ids: Vec<String> = routes_in(&out, crate::locale::Locale::English)
+                .into_iter()
+                .map(|r| r.id)
+                .collect();
             assert_eq!(ids, ["hai"], "{text:?}\n{out}");
         }
     }
@@ -3071,31 +3960,43 @@ mod tests {
     #[test]
     fn read_back_rejects_a_lost_route_or_misaligned_keys() {
         let r = route("hai", &["m1"]);
-        let before = routes_in(WITH_OTHER);
-        let good = apply_route(WITH_OTHER, &r, false).unwrap().text;
-        assert!(verify_written(&before, &good, &r).is_ok());
+        let before = routes_in(WITH_OTHER, crate::locale::Locale::English);
+        let good = apply_route(WITH_OTHER, &r, false, crate::locale::Locale::English)
+            .unwrap()
+            .text;
+        assert!(verify_written(&before, &good, &r, crate::locale::Locale::English).is_ok());
         // The existing route vanished.
         let lost = good.replace("      other:", "      other_:");
-        assert!(verify_written(&before, &lost, &r)
-            .unwrap_err()
-            .contains("other"));
+        assert!(
+            verify_written(&before, &lost, &r, crate::locale::Locale::English)
+                .unwrap_err()
+                .contains("other")
+        );
         // A model key drifts out of line with its `- id`.
         let drift = good.replace(
             "          - id: m1\n",
             "          - id: m1\n              name: M\n",
         );
-        assert!(verify_written(&before, &drift, &r)
-            .unwrap_err()
-            .contains("aligned"));
+        assert!(
+            verify_written(&before, &drift, &r, crate::locale::Locale::English)
+                .unwrap_err()
+                .contains("aligned")
+        );
         // A second llm-pi-ai entry.
         let dup = format!("{good}- id: llm-pi-ai\n  config: {{}}\n");
-        assert!(verify_written(&before, &dup, &r).is_err());
+        assert!(verify_written(&before, &dup, &r, crate::locale::Locale::English).is_err());
     }
 
     #[test]
     fn a_quoted_existing_key_is_found() {
         let text = "- id: llm-pi-ai\n  config:\n    providers:\n      \"hai\":\n        baseURL: http://x\n";
-        let out = apply_route(text, &route("hai", &["m1"]), false).unwrap();
+        let out = apply_route(
+            text,
+            &route("hai", &["m1"]),
+            false,
+            crate::locale::Locale::English,
+        )
+        .unwrap();
         assert_eq!(out.change, Change::Exists);
     }
 
@@ -3155,7 +4056,7 @@ mod tests {
     fn compat_sits_beside_models_and_is_replaced_with_the_block() {
         let p = preset("sarashina").unwrap();
         let mut models = model_ids(&["sarashina3-mini", "sarashina3-nano"]);
-        assert!(apply_preset_models(p, &mut models).is_empty());
+        assert!(apply_preset_models(p, &mut models, crate::locale::Locale::English).is_empty());
         let lines = render_route(&sarashina_route(models.clone()), 6, 2);
         let compat = lines.iter().position(|l| l.ends_with("compat:")).unwrap();
         let models_at = lines.iter().position(|l| l.ends_with("models:")).unwrap();
@@ -3174,16 +4075,30 @@ mod tests {
             .iter()
             .any(|l| l.contains("compat")));
 
-        let once = apply_route(WITH_OTHER, &sarashina_route(models.clone()), false)
-            .unwrap()
-            .text;
-        assert_eq!(routes_in(&once)[1].models, 2);
+        let once = apply_route(
+            WITH_OTHER,
+            &sarashina_route(models.clone()),
+            false,
+            crate::locale::Locale::English,
+        )
+        .unwrap()
+        .text;
+        assert_eq!(
+            routes_in(&once, crate::locale::Locale::English)[1].models,
+            2
+        );
         // A stale hand-edited compat is dropped by --replace.
         let stale = once.replace(
             "supportsStore: false",
             "supportsStore: true\n          extra: 1",
         );
-        let fixed = apply_route(&stale, &sarashina_route(models), true).unwrap();
+        let fixed = apply_route(
+            &stale,
+            &sarashina_route(models),
+            true,
+            crate::locale::Locale::English,
+        )
+        .unwrap();
         assert_eq!(fixed.change, Change::Replaced);
         assert_eq!(fixed.text, once);
     }
@@ -3203,7 +4118,7 @@ mod tests {
                 ..Model::default()
             },
         ];
-        let notes = apply_preset_models(p, &mut models);
+        let notes = apply_preset_models(p, &mut models, crate::locale::Locale::English);
         assert_eq!(models[0].max_tokens, Some(8000));
         assert_eq!(models[0].context_window, Some(128000));
         assert_eq!(models[0].name.as_deref(), Some("Sarashina3 mini"));
@@ -3218,11 +4133,16 @@ mod tests {
             max_tokens: Some(1000),
             ..Model::default()
         }];
-        apply_preset_models(p, &mut small);
+        apply_preset_models(p, &mut small, crate::locale::Locale::English);
         assert_eq!(small[0].max_tokens, Some(1000));
         // Presets without knowledge leave models alone.
         let mut hai = model_ids(&["m"]);
-        assert!(apply_preset_models(preset("hai").unwrap(), &mut hai).is_empty());
+        assert!(apply_preset_models(
+            preset("hai").unwrap(),
+            &mut hai,
+            crate::locale::Locale::English
+        )
+        .is_empty());
         assert_eq!(hai, model_ids(&["m"]));
     }
 
@@ -3255,6 +4175,7 @@ mod tests {
                 json: false,
             },
             "tui",
+            crate::locale::Locale::English,
         )
         .unwrap_err()
         .to_string();
