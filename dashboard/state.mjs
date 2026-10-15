@@ -54,7 +54,8 @@ import {
   validateHistoryConflicts,
 } from "./history-backup.mjs";
 
-// Bucket D display notes (no schema change; schema stays 1):
+// Bucket D display notes preserve schema 1; explicit state migrations can move
+// legacy projects to schema 2 without changing nested extension schemas.
 // #12 task contract, #13 review inbox, #14 outcome cards, #15 dependencies.
 // Legacy field shapes remain unchanged. Optional question_contracts metadata
 // has its own schema and explicit revision contract (#40).
@@ -242,13 +243,26 @@ function verifyStateSeal(value, key) {
   return timingSafeEqual(Buffer.from(actual, "hex"), Buffer.from(expected, "hex"));
 }
 
+// An authorized state transformation (for example an explicit migration) can
+// change the sealed payload. Re-sign it with the existing project key so the
+// seal keeps proving integrity instead of refusing the migrated state.
+export async function resealStoredState(project, value) {
+  if (!value || typeof value !== "object" || !Object.hasOwn(value, "state_auth"))
+    return value;
+  const key = await fs.readFile(stateIntegrityKeyPath(project));
+  if (key.byteLength !== 32)
+    throw new Error("Dashboard state integrity key is invalid");
+  return sealState(value, key);
+}
+
 function validateStoredState(value, project) {
   if (
     !value ||
     typeof value !== "object" ||
     Array.isArray(value) ||
     value.project?.id !== project.id ||
-    value.schema !== 1
+    ![1, 2].includes(value.schema) ||
+    (value.schema === 2 && !Array.isArray(value.changes))
   )
     throw new Error("Dashboard state belongs to a different project or version");
   validateQuestionContracts(value);
@@ -276,6 +290,12 @@ export class ProjectStore {
     return next;
   }
   static async open(project, options = {}) {
+    try {
+      await fs.access(path.join(project.directory, "state-migration.lock"));
+      throw new Error("Dashboard state migration is in progress");
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
     let value;
     const stateFile = path.join(project.directory, "state.json");
     let stateExists = true;
@@ -478,6 +498,12 @@ export class ProjectStore {
     return structuredClone(result);
   }
   async commit(next, operation = null, input = {}) {
+    try {
+      await fs.access(path.join(this.project.directory, "state-migration.lock"));
+      throw new Error("Dashboard state migration is in progress");
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
     const historyChanged = next.history_backups !== this.protectedHistory;
     const historyIds = historyChanged
       ? validateRestoredHistory(next)
