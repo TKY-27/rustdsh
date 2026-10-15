@@ -546,7 +546,7 @@
       .attention-history-entry { margin-top: 12px; }
       select:focus-visible,
       .attention-group > summary:focus-visible,
-      tr:focus { outline: 3px solid #85aaff; outline-offset: 3px; }
+      tr:focus { outline: 3px solid var(--focus); outline-offset: 3px; }
       .cost-grid .value {
         font-size: 24px;
         overflow-wrap: anywhere;
@@ -1010,7 +1010,7 @@
         gap: 10px;
       }
       .notification-item[data-delivery-state="held"] {
-        border-left: 4px solid #bd7b00;
+        border-left: 4px solid var(--chart-warn);
       }
       .notification-heading,
       .notification-actions {
@@ -1215,7 +1215,7 @@
       }
       #palette-list [role="option"][aria-selected="true"] {
         border-color: var(--blue);
-        background: #edf1f7;
+        background: var(--choice-bg);
       }
       #palette-list [role="option"]:focus-visible {
         outline: 2px solid var(--blue);

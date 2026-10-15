@@ -361,9 +361,17 @@ test("project state, HTTP/stdio MCP, subscriptions, answers, and auth work toget
   );
   assert.equal(changeDelta.status, 200);
   const changeView = await changeDelta.json();
-  assert.equal(changeView.revision, 4);
-  assert.equal(changeView.records.length, 1);
-  assert.equal(changeView.records[0].name, "dashboard.progress.updated");
+  assert.equal(changeView.revision, 8);
+  assert.deepEqual(
+    changeView.records.map((record) => record.name),
+    [
+      "dashboard.contract.updated",
+      "dashboard.policy.checked",
+      "dashboard.policy.checked",
+      "dashboard.question.created",
+      "dashboard.progress.updated",
+    ],
+  );
   assert.equal("summary" in changeView.records[0], false);
   assert.equal(
     (

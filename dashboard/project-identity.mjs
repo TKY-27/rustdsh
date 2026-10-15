@@ -297,6 +297,35 @@ async function projectState(projectId, home = stateHome()) {
   return { directory, value };
 }
 
+// The live-instance lock written by server.mjs is "pid:token" text; older
+// installations may hold a bare pid. Accept that shape as well as the
+// JSON owner record, so a real running (or stale) dashboard is classified
+// instead of being reported as unreadable.
+function parseServerLock(text) {
+  const trimmed = String(text ?? "").trim();
+  if (trimmed.startsWith("{")) {
+    let owner;
+    try {
+      owner = JSON.parse(trimmed);
+    } catch {
+      return null;
+    }
+    if (
+      !owner ||
+      !Number.isSafeInteger(owner.pid) ||
+      owner.pid <= 0 ||
+      typeof owner.platform !== "string" ||
+      typeof owner.token !== "string"
+    )
+      return null;
+    return { pid: owner.pid, platform: owner.platform };
+  }
+  const separator = trimmed.indexOf(":");
+  const pid = Number(separator === -1 ? trimmed : trimmed.slice(0, separator));
+  if (!Number.isSafeInteger(pid) || pid <= 0) return null;
+  return { pid, platform: null };
+}
+
 async function serverLockStatus(directory, { clearStale = false } = {}) {
   const file = path.join(directory, "server.lock");
   let text;
@@ -306,23 +335,13 @@ async function serverLockStatus(directory, { clearStale = false } = {}) {
     if (error.code === "ENOENT") return "stopped";
     throw error;
   }
-  let owner;
-  try {
-    owner = JSON.parse(text);
-  } catch {
-    throw new Error(
-      "Dashboard lock predates cross-runtime ownership; stop or inspect it before moving the project",
-    );
-  }
-  if (
-    !owner ||
-    !Number.isSafeInteger(owner.pid) ||
-    owner.pid <= 0 ||
-    typeof owner.platform !== "string" ||
-    typeof owner.token !== "string"
-  )
+  const owner = parseServerLock(text);
+  if (!owner)
     throw new Error("Dashboard lock is unreadable; inspect it before moving the project");
-  if (owner.platform !== process.platform || (await processIsAlive(owner.pid)))
+  if (
+    (owner.platform !== null && owner.platform !== process.platform) ||
+    (await processIsAlive(owner.pid))
+  )
     throw new Error("Stop this project's dashboard before moving its identity");
   if (clearStale) {
     const currentText = await fs.readFile(file, "utf8").catch((error) => {

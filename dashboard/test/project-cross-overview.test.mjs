@@ -8,6 +8,8 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { createProjectCrossOverview } from "../project-cross-overview.mjs";
 import { identity, ProjectStore } from "../state.mjs";
+import { writeSealedState } from "./sealed-state.mjs";
+import { readRuntime } from "./owner-runtime.mjs";
 import { startDashboard } from "../server.mjs";
 
 async function freePort() {
@@ -19,11 +21,7 @@ async function freePort() {
 }
 
 async function saveState(project, state) {
-  await fs.mkdir(project.directory, { recursive: true });
-  await fs.writeFile(
-    path.join(project.directory, "state.json"),
-    JSON.stringify(state),
-  );
+  await writeSealedState(project, state);
 }
 
 function state(project, overrides = {}) {
@@ -248,12 +246,8 @@ test("HTTP overview is limited to the explicit list and a human browser credenti
     port: await freePort(),
     tailscale: false,
   });
-  const runtime = JSON.parse(
-    await fs.readFile(path.join(primary.directory, "runtime.json"), "utf8"),
-  );
-  const includedRuntime = JSON.parse(
-    await fs.readFile(path.join(included.directory, "runtime.json"), "utf8"),
-  );
+  const runtime = await readRuntime(primary.directory);
+  const includedRuntime = await readRuntime(included.directory);
   const token = new URL(runtime.browser_url).hash.slice("#key=".length);
   const includedToken = new URL(includedRuntime.browser_url).hash.slice(
     "#key=".length,

@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
+import { readLocalRuntime } from "./private-runtime.mjs";
 
 const maxProjects = 32;
 const loopbackHosts = new Set(["127.0.0.1", "localhost", "[::1]"]);
@@ -77,11 +78,22 @@ function alive(pid, processApi) {
   }
 }
 
+// The owner browser credential (and its URL) live in owner-credentials.json;
+// merge it with runtime.json so the detail link is available, while older
+// checkouts that still keep browser_url in runtime.json keep working.
+async function readRuntimeFacts(directory) {
+  try {
+    return await readLocalRuntime(directory);
+  } catch {
+    return JSON.parse(
+      await fs.readFile(path.join(directory, "runtime.json"), "utf8"),
+    );
+  }
+}
+
 async function detailUrl(project, processApi) {
   try {
-    const runtime = JSON.parse(
-      await fs.readFile(path.join(project.directory, "runtime.json"), "utf8"),
-    );
+    const runtime = await readRuntimeFacts(project.directory);
     // The live-instance lock is "pid:token" (older locks hold a bare pid).
     const lockText = String(
       await fs.readFile(path.join(project.directory, "server.lock"), "utf8"),

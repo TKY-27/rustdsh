@@ -542,7 +542,7 @@ try {
   )
     throw new Error("Release selection options require release");
   if (
-    command !== "state-migrate" &&
+    !["state-migrate", "project-move"].includes(command) &&
     ["migration-id", "confirm-stale-lock"].some(
       (key) => values[key] !== undefined,
     )
@@ -815,6 +815,7 @@ try {
         );
       }
     }
+    console.log(JSON.stringify(result, null, 2));
   } else if (command === "plan") {
     const action = positionals[1],
       allowed = new Set(["project", "plan-id", "run-id", "input-file", "help"]);

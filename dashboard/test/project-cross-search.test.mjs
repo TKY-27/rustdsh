@@ -7,6 +7,8 @@ import net from "node:net";
 import { createProjectCrossSearch } from "../project-cross-search.mjs";
 import { identity, ProjectStore } from "../state.mjs";
 import { startDashboard } from "../server.mjs";
+import { writeSealedState } from "./sealed-state.mjs";
+import { readRuntime } from "./owner-runtime.mjs";
 
 async function freePort() {
   const server = net.createServer();
@@ -20,11 +22,7 @@ async function freePort() {
 }
 
 async function saveState(project, value) {
-  await fs.mkdir(project.directory, { recursive: true });
-  await fs.writeFile(
-    path.join(project.directory, "state.json"),
-    JSON.stringify(value),
-  );
+  await writeSealedState(project, value);
 }
 
 async function runtimeFiles(project, port, key) {
@@ -317,12 +315,8 @@ test("HTTP cross-project search requires the primary human browser credential", 
     port: await freePort(),
     tailscale: false,
   });
-  const primaryRuntime = JSON.parse(
-    await fs.readFile(path.join(primary.directory, "runtime.json"), "utf8"),
-  );
-  const includedRuntime = JSON.parse(
-    await fs.readFile(path.join(included.directory, "runtime.json"), "utf8"),
-  );
+  const primaryRuntime = await readRuntime(primary.directory);
+  const includedRuntime = await readRuntime(included.directory);
   const token = new URL(primaryRuntime.browser_url).hash.slice("#key=".length);
   const includedToken = new URL(includedRuntime.browser_url).hash.slice("#key=".length);
   const route = primaryDashboard.localUrl + "api/projects/search";

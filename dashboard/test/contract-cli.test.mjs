@@ -6,6 +6,7 @@ import path from "node:path";
 import http from "node:http";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { fileURLToPath } from "node:url";
 import { identity } from "../state.mjs";
 import { writeOwnerCredentials } from "../private-runtime.mjs";
 
@@ -43,7 +44,7 @@ test("set-contract reports malformed or inconsistent server responses without ec
     browser_url: `http://127.0.0.1:${server.address().port}/#key=${"b".repeat(64)}`,
   });
   const run = () => promisify(execFile)(process.execPath, [
-    path.resolve("cli.mjs"), "set-contract", "--project", root, "--file", contractFile,
+    fileURLToPath(new URL("../cli.mjs", import.meta.url)), "set-contract", "--project", root, "--file", contractFile,
   ], { windowsHide: true, env: { ...process.env, RDSH_DASHBOARD_HOME: stateHome } });
   for (const [body, message] of [
     [responseBody, "invalid contract response"],

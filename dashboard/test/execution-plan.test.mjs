@@ -12,6 +12,7 @@ import { ExecutionPlans, graphProblems } from "../execution-plan.mjs";
 import { AcceptanceStore } from "../acceptance.mjs";
 import { nativePlanBoundary } from "../plan-runtime.mjs";
 import { startDashboard } from "../server.mjs";
+import { readRuntime } from "./owner-runtime.mjs";
 import net from "node:net";
 
 const exec = promisify(execFile),
@@ -413,9 +414,7 @@ test("read-only HTTP is human scoped, stop persists, and agent cannot mutate the
     port,
   });
   t.after(() => server.close());
-  const info = JSON.parse(
-      await fs.readFile(path.join(f.project.directory, "runtime.json"), "utf8"),
-    ),
+  const info = await readRuntime(f.project.directory),
     url = `http://127.0.0.1:${port}`;
   const admin = { authorization: "Bearer " + info.token };
   assert.equal((await fetch(url + "/api/plans")).status, 401);

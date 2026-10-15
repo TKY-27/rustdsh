@@ -6,7 +6,8 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { ProjectStore, writeJson } from "../state.mjs";
+import { ProjectStore } from "../state.mjs";
+import { writeSealedState } from "./sealed-state.mjs";
 import { startDashboard } from "../server.mjs";
 import {
   acquireProjectIdentityLock,
@@ -51,7 +52,7 @@ async function seedHistory(project) {
     task_id: "task-kept",
     reference: "evidence://kept",
   });
-  await writeJson(path.join(project.directory, "state.json"), store.value);
+  await writeSealedState(project, store.value);
   return JSON.parse(
     await fs.readFile(path.join(project.directory, "state.json"), "utf8"),
   );
@@ -171,7 +172,7 @@ test("apply refuses a source revision that changed after preview", async (t) => 
   const preview = await previewProjectMove(targetRoot, source.id);
   const changed = await ProjectStore.open(source);
   changed.value.revision++;
-  await writeJson(path.join(source.directory, "state.json"), changed.value);
+  await writeSealedState(source, changed.value);
 
   await assert.rejects(
     applyProjectMove(targetRoot, source.id, preview.source_revision),

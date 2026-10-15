@@ -148,6 +148,16 @@ test("a captured pre-GPU adapter cannot silently ignore an explicit or restored 
     path.join(legacy, "dashboard/node_modules"),
     { recursive: true, dereference: false },
   );
+  // The captured manifest includes the dashboard UI modules and the seccomp
+  // profile, so a legacy adapter fixture has to provide them too.
+  await fs.cp(path.join(repo, "dashboard/ui"), path.join(legacy, "dashboard/ui"), {
+    recursive: true,
+  });
+  await fs.mkdir(path.join(legacy, "security"), { recursive: true });
+  await fs.copyFile(
+    path.join(repo, "security/seccomp.mjs"),
+    path.join(legacy, "security/seccomp.mjs"),
+  );
   for (const plugin of ["rdsh-budget-guard", "rdsh-release-probe"])
     await fs.cp(
       path.join(repo, "plugins", plugin),

@@ -412,8 +412,9 @@ export async function startDashboard(options) {
           claimApproval: approvalClaim,
           executeApproval,
           checkWorkerStart: workerStartCheck,
+          presentUi: mutateUiSurface,
+          recordReview,
         },
-        { getState: visibleState, mutate, presentUi: mutateUiSurface },
         eventsHub,
         connections,
       )
