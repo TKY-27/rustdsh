@@ -1,0 +1,34 @@
+# Codecov configuration for jimoto-no-llm/rustdsh.
+# The report comes from .github/workflows/codecov.yml
+# (cargo tarpaulin -> cobertura.xml) uploaded with codecov/codecov-action.
+# Statuses and comment settings follow Codecov's documented recommendations.
+codecov:
+  require_ci_to_pass: true
+  notify:
+    wait_for_ci: true
+
+coverage:
+  precision: 2
+  round: down
+  range: "70...100"
+  status:
+    # `target: auto` compares against the base commit, so the first report on a
+    # commit may produce only the patch status. Neither status is a required
+    # check: they report on the pull request without blocking a merge.
+    project:
+      default:
+        target: auto
+        threshold: 1%
+    patch:
+      default:
+        target: auto
+        threshold: 1%
+
+comment:
+  # Codecov's current recommended PR comment: condensed and diff-first.
+  layout: "condensed_header, condensed_files, condensed_footer"
+  hide_project_coverage: true
+  behavior: default
+  require_changes: false
+  require_base: false
+  require_head: true

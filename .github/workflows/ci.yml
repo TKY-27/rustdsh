@@ -17,6 +17,35 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  plan-runtime-native:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node: [22, 24]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+      - run: npm ci --prefix dashboard
+      - name: Install only public native test dependencies
+        run: npm install --prefix "${{ runner.temp }}/rdsh-plan-native" --ignore-scripts --no-audit --no-fund @deepseek-ai/dsh-workflow-ptc@0.2.0-rc.2 @deepseek-ai/dsh-subagent@0.2.0-rc.2 @deepseek-ai/dsh-subagent-spawn-in-process@0.2.0-rc.2 @deepseek-ai/cordis@4.0.4
+      - if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo systemd-run --unit="rdsh-plan-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --wait --pipe --collect --property=Delegate=yes \
+            --property=DelegateSubgroup=supervisor --uid="$(id -u)" \
+            --working-directory="$PWD" /usr/bin/env HOME="$HOME" PATH="$PATH" \
+            RDSH_TEST_PLAN_PACKAGE="$RUNNER_TEMP/rdsh-plan-native/package.json" \
+            node --test tests/plan-runtime-native.test.mjs
+      - if: runner.os == 'Windows'
+        run: node --test tests/plan-runtime-native.test.mjs
+        env:
+          RDSH_TEST_PLAN_PACKAGE: ${{ runner.temp }}/rdsh-plan-native/package.json
+
   # Keep required PR/main/tag names stable; distinguish the fully executed branch-push run.
   msrv:
     name: "msrv${{ github.event_name == 'push' && github.ref_type == 'branch' && github.event.repository.default_branch && github.ref_name != github.event.repository.default_branch && ' [branch push]' || '' }}"
@@ -35,6 +64,8 @@ jobs:
         run: python3 -m unittest discover -s tests -p 'test_release_*.py'
       - name: Test ICO directory validation
         run: python3 -m unittest discover -s tests -p 'test_icon_generation.py'
+      - name: Test branch cleanup safeguards
+        run: python3 -m unittest discover -s tests -p 'test_branch_cleanup.py'
       - name: Check the current version's release notes
         run: |
           version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')
@@ -50,6 +81,26 @@ jobs:
           node-version: 22
       - run: node --test tests/update-banner.test.mjs
 
+  fedora:
+    name: Fedora packages
+    runs-on: ubuntu-latest
+    container: fedora:latest
+    timeout-minutes: 45
+    steps:
+      # The package names here are the ones docs/FEDORA.md documents; if Fedora
+      # renames one, this job fails before a user hits it.
+      - run: dnf install -y --setopt=install_weak_deps=False git gcc gcc-c++ make cargo zstd bubblewrap nodejs python3 tar gzip curl diffutils findutils
+      - uses: actions/checkout@v7
+      - run: cargo build --locked
+      - run: cargo test --locked
+      - name: doctor reports the Fedora dependency state
+        run: './target/debug/rdsh doctor | grep -F "[rdsh] fedora: optional tools present (zstd, bubblewrap)"'
+      - name: Regress with a stub dsh
+        shell: bash
+        run: |
+          printf '#!/bin/sh\necho stub-dsh $@' > /tmp/stub-dsh && chmod +x /tmp/stub-dsh
+          BIN=./target/debug/rdsh DSH_ORIG_BIN=/tmp/stub-dsh sh tests/regress.sh
+
   plugin-security:
     name: "plugin-security${{ github.event_name == 'push' && github.ref_type == 'branch' && github.event.repository.default_branch && github.ref_name != github.event.repository.default_branch && ' [branch push]' || '' }}"
     runs-on: ubuntu-latest
@@ -64,11 +115,15 @@ jobs:
         run: npm ci --ignore-scripts --no-audit --no-fund
         working-directory: scripts/headless-runtime/runtime
       - name: Test plugin and hook contracts
-        run: node --test tests/plugin-security.test.mjs tests/settings-client.test.mjs tests/update-banner.test.mjs tests/rdsh-mobile-ui.test.mjs tests/answer-guard.test.mjs tests/feature-switches.test.mjs tests/discord-presence.test.mjs tests/model_benchmark/fence.test.mjs tests/context_inject_contract.mjs tests/settings-sanitize.test.mjs
+        run: node --test tests/plugin-security.test.mjs tests/settings-client.test.mjs tests/japanese-locale.test.mjs tests/update-banner.test.mjs tests/rdsh-mobile-ui.test.mjs tests/answer-guard.test.mjs tests/feature-switches.test.mjs tests/discord-presence.test.mjs tests/model_benchmark/fence.test.mjs tests/context_inject_contract.mjs tests/settings-sanitize.test.mjs
         env:
           BIN: ${{ github.workspace }}/target/debug/rdsh
           DSH_HOOK_PROTOCOL: ${{ github.workspace }}/scripts/headless-runtime/runtime/node_modules/@deepseek-ai/dsh-hook-protocol/lib/index.js
           RDSH_HOOK_CODEC_REQUIRED: '1'
+      - name: Install pinned public DSH APIs for the optional plugins
+        run: npm install --prefix "$RUNNER_TEMP/rdsh-public-api" --ignore-scripts --no-audit --no-fund @deepseek-ai/dsh-subagent@0.2.0-rc.2 @deepseek-ai/dsh-tool-subagent@0.2.0-rc.2 @deepseek-ai/dsh-client-ui-slots@0.2.0-rc.2
+      - name: Check native API compatibility without model or authentication calls
+        run: RDSH_PUBLIC_DSH_MODULES="$RUNNER_TEMP/rdsh-public-api/node_modules" node --test plugins/rdsh-subagent-optimizer/test/*.test.mjs plugins/rdsh-easy-work/test/*.test.mjs
       - name: Build and test the offline headless runtime
         run: |
           node scripts/headless-runtime/build-candidate.mjs --out "$RUNNER_TEMP/rdsh-headless-candidate"
@@ -110,8 +165,8 @@ jobs:
       - run: python3 -m unittest discover -s tests -p 'test_release_assets.py'
       - name: Verify preserved DSH modes and isolated inspection
         run: |
-          npm install --prefix "$RUNNER_TEMP/rdsh-runtime" --ignore-scripts --no-audit --no-fund @deepseek-ai/dsh-tools@0.2.0-rc.2
-          RDSH_TOOL_RUNTIME="$RUNNER_TEMP/rdsh-runtime/node_modules/@deepseek-ai/dsh-tools/lib/index.js" RDSH_SECURE_WORKSPACE="$GITHUB_WORKSPACE" RDSH_SHARED_FILES='[]' node --import ./security/preload.mjs tests/guarded-runtime-probe.mjs
+          npm ci --prefix plugins/rdsh-ptc-catalog --ignore-scripts --no-audit --no-fund
+          RDSH_TOOL_RUNTIME="$GITHUB_WORKSPACE/plugins/rdsh-ptc-catalog/node_modules/@deepseek-ai/dsh-tools/lib/index.js" RDSH_SECURE_WORKSPACE="$GITHUB_WORKSPACE" RDSH_SHARED_FILES='[]' node --import ./security/preload.mjs tests/guarded-runtime-probe.mjs
 
   lint:
     name: "Rust lint${{ github.event_name == 'push' && github.ref_type == 'branch' && github.event.repository.default_branch && github.ref_name != github.event.repository.default_branch && ' [branch push]' || '' }}"
@@ -172,7 +227,7 @@ jobs:
         working-directory: plugins/rdsh-compute
         env:
           RDSH_BIN: ${{ runner.os == 'Windows' && format('{0}/target/debug/rdsh.exe', github.workspace) || format('{0}/target/debug/rdsh', github.workspace) }}
-      - run: node --test tests/runtime-compatibility.test.mjs tests/icon-assets.test.mjs
+      - run: node --test tests/runtime-compatibility.test.mjs tests/icon-assets.test.mjs tests/desktop.test.mjs
       - if: runner.os == 'Windows'
         run: npm ci --ignore-scripts --no-audit --no-fund
         working-directory: scripts/headless-runtime/runtime
@@ -194,6 +249,11 @@ jobs:
       - if: '! matrix.regress'
         shell: pwsh
         run: |
+          # install.ps1 cannot be executed end to end without a release, but its
+          # syntax (including the Desktop block) is parsed here on every run.
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path ./install.ps1), [ref]$null, [ref]$errors) | Out-Null
+          if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error $_ }; exit 1 }
           ./tests/installer-security.ps1
           ./tests/installer-security.ps1 -Version v0.0.0-rc.1
           ./tests/icon-assets.ps1
@@ -283,7 +343,12 @@ jobs:
       - run: npm ci --prefix tests/e2e
       - run: npx playwright install --with-deps chromium
         working-directory: tests/e2e
-      - run: npm test --prefix tests/e2e
+      - run: |
+          sudo systemd-run --unit="rdsh-browser-e2e-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --wait --pipe --collect --property=Delegate=yes \
+            --property=DelegateSubgroup=supervisor --uid="$(id -u)" \
+            --working-directory="$PWD" /usr/bin/env HOME="$HOME" PATH="$PATH" \
+            RDSH_E2E_BIN="$RDSH_E2E_BIN" npm test --prefix tests/e2e
         env:
           RDSH_E2E_BIN: ./target/release/rdsh
           RDSH_E2E_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}

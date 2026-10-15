@@ -20,6 +20,9 @@ import { join, posix, win32 } from "node:path";
 
 export const PROTOCOL_VERSION = 1;
 export const MAX_TEXT_BYTES = 1_048_576;
+// Rust 側と同じ batch 上限（src/compute.rs の MAX_BATCH_ITEMS / MAX_BATCH_ITEM_BYTES）。
+export const MAX_BATCH_ITEMS = 64;
+export const MAX_BATCH_ITEM_BYTES = 262_144;
 const DEFAULT_TIMEOUT_MS = 5000;
 const DEFAULT_SHUTDOWN_GRACE_MS = 250;
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 1000;
@@ -176,6 +179,29 @@ export function createComputeBridge({
   }
 
   function request(op, payload) {
+    // estimate_batch は payload.text を持たないため、件数と合計もここで見る。
+    // 見ないと 1 MiB 超を1往復で送ってしまい、README の保証と食い違う。
+    const texts = payload.texts;
+    if (Array.isArray(texts)) {
+      const total = texts.reduce(
+        (n, t) => n + (typeof t === "string" ? Buffer.byteLength(t, "utf8") : 0),
+        0,
+      );
+      const bad =
+        texts.length < 1 ||
+        texts.length > MAX_BATCH_ITEMS ||
+        texts.some(
+          (t) => typeof t !== "string" || Buffer.byteLength(t, "utf8") > MAX_BATCH_ITEM_BYTES,
+        ) ||
+        total > MAX_TEXT_BYTES;
+      if (bad) {
+        return Promise.resolve({
+          ok: false,
+          code: "bad_batch",
+          error: "batch exceeds 64 items / 256 KiB each / 1 MiB total; chunk before sending",
+        });
+      }
+    }
     const text = payload.text ?? "";
     if (Buffer.byteLength(text, "utf8") > MAX_TEXT_BYTES) {
       return Promise.resolve({

@@ -75,6 +75,13 @@ const names = [
   "dashboard.task.updated",
   "dashboard.progress.updated",
   "dashboard.metrics.updated",
+  "dashboard.provider_status.updated",
+  "dashboard.contract.updated",
+  "dashboard.policy.checked",
+  "dashboard.approval.requested",
+  "dashboard.approval.decided",
+  "dashboard.approval.checked",
+  "dashboard.approval.claimed",
 ];
 const diagnosticReasons = [
   "challenge_verified",
@@ -120,6 +127,14 @@ export const eventDefinitions = names.map((name) => ({
     "dashboard.progress.updated":
       "New progress or an artifact reference was reported.",
     "dashboard.metrics.updated": "Measured project metrics were updated.",
+    "dashboard.provider_status.updated":
+      "A provider status, quota or provider-reported retry hint was updated.",
+    "dashboard.contract.updated": "A versioned task contract changed; revalidate prior approvals.",
+    "dashboard.policy.checked": "A declared operation was structurally checked; execution remains held.",
+    "dashboard.approval.requested": "A pending scoped approval request was created or revised.",
+    "dashboard.approval.decided": "The dashboard owner granted, rejected or revoked an approval request.",
+    "dashboard.approval.checked": "An approval was matched against a declared operation; no attempt was reserved.",
+    "dashboard.approval.claimed": "An approval reservation was checked; retrieve state for the result. No operation was executed.",
   }[name],
   delivery: ["webhook"],
   inputSchema: {
@@ -343,7 +358,10 @@ export class EventsHub {
     return subscriptionId(this.project.id, url.href, params.name);
   }
   async signedPost(subscription, event, verification = false) {
-    const body = JSON.stringify(event),
+    // Notification grouping metadata stays inside the project's state file and
+    // is not part of the public MCP Events payload.
+    const { notification: _notification, ...publicEvent } = event;
+    const body = JSON.stringify(publicEvent),
       id = verification
         ? `msg_verification_${randomBytes(16).toString("hex")}`
         : event.eventId,

@@ -3,6 +3,7 @@ import path from 'node:path';
 
 export const qaCases = [
   { id: 'desktop.sse-draft', device: 'Desktop browser · 1280×900', input: 'Keyboard', action: 'Edit a reply while another state update arrives over SSE', connection: 'Loopback project dashboard', mode: 'browser' },
+  { id: 'desktop.command-palette', device: 'Desktop browser · 1280×900', input: 'Keyboard', action: 'Search and run a command palette entry with arrows, Enter and Escape, checking ARIA state', connection: 'Loopback project dashboard', mode: 'browser' },
   { id: 'desktop.double-submit', device: 'Desktop browser · 1280×900', input: 'Mouse double-click', action: 'Submit one reply twice in quick succession', connection: 'Loopback project dashboard', mode: 'browser' },
   { id: 'desktop.offline-retry', device: 'Desktop browser · 1280×900', input: 'Keyboard', action: 'Disconnect before submit, reconnect, then retry the retained draft', connection: 'Browser offline simulation', mode: 'browser' },
   { id: 'desktop.lost-response', device: 'Desktop browser · 1280×900', input: 'Keyboard', action: 'Lose the response after the server commits a reply', connection: 'Loopback response fault fixture', mode: 'browser' },

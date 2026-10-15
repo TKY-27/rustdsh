@@ -11,6 +11,9 @@
 //   shared minimally per call, not broad secrets dumped into the prompt.
 // - #30 approval ledger: JSON mode emits a block decision or no decision (`{}`).
 //   Deny-list misses must never bypass the host's approval policy.
+// - Boundary note: this is a best-effort misoperation guard, not a sandbox.
+//   Patterns are bypassable by construction (case, splitting, aliases), so
+//   critical operations must rely on tool isolation, not on deny-list hits.
 // - #29 structured policy is opt-in: only known file tool schemas are classified;
 //   shell commands and unknown tools stay blocked rather than guessed.
 
@@ -380,6 +383,9 @@ pub fn cmd_guard(
 ) -> anyhow::Result<()> {
     use std::io::Read;
     const MAX_INPUT: u64 = 1024 * 1024;
+    if deny.iter().all(|p| p.trim().is_empty()) {
+        eprintln!("[rdsh guard] warning: no deny patterns configured; this hook is a best-effort aid, not a security boundary");
+    }
     let policy = match policy_file {
         Some(path) => match read_policy(&path) {
             Ok(policy) => Some(policy),

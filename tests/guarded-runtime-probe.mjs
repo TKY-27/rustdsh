@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict';
 import { pathToFileURL } from 'node:url';
 import path from 'node:path';
+import { apply as applyPtcCatalog } from '../plugins/rdsh-ptc-catalog/index.js';
 
 const root = path.resolve(process.env.RDSH_TOOL_RUNTIME, '../../..');
 const { Context } = await import(pathToFileURL(path.join(root, 'cordis/lib/index.js')));
@@ -11,6 +12,12 @@ const { default: ToolRuntime } = await import(pathToFileURL(process.env.RDSH_TOO
 const ctx = new Context();
 ctx.provide('systemPrompt', { tools() {}, section() {}, getSectionOrder() { return 1; } });
 const tools = new ToolRuntime(ctx, { mode: 'ptc' });
+
+// The catalog bundle requires an already authorized PTC composition. The
+// guarded launcher must refuse it before any registration or prompt wiring.
+assert.throws(() => applyPtcCatalog(ctx), { code: 'RDSH_CATALOG_GUARDED_NATIVE' });
+assert.equal(tools.get('rdsh_catalog_search'), undefined);
+assert.equal(tools.get('rdsh_catalog_describe'), undefined);
 
 // The preload must leave DSH's selected mode and ordinary middleware intact.
 assert.equal(tools.defaultMode, 'ptc');
@@ -40,4 +47,4 @@ const dispatched = await tools.execute({
 assert.equal(dispatched.isError, true);
 assert.match(JSON.stringify(dispatched), /only `run_code` is callable directly/);
 
-console.log('DSH modes are preserved and isolated inspection remains available');
+console.log('guarded runtime refused the PTC catalog, preserved DSH modes and kept isolated inspection available');

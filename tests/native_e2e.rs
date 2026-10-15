@@ -100,6 +100,7 @@ fn raw_frame(body: &[u8], known_size: bool) -> Vec<u8> {
     frame
 }
 
+#[cfg(unix)]
 #[test]
 fn sessions_known_and_concatenated_frames_cache_and_growth() {
     let f = Fixture::new();
@@ -128,6 +129,7 @@ fn sessions_known_and_concatenated_frames_cache_and_growth() {
     assert_eq!(f.sessions(), rows);
 }
 
+#[cfg(unix)]
 #[test]
 fn sessions_json_preserves_legacy_object_key_order() {
     let f = Fixture::new();
@@ -261,6 +263,7 @@ fn streaming_growth_stays_inexact_until_recomputed_single_and_parallel() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn concurrent_session_writers_leave_parseable_correct_cache() {
     let f = Fixture::new();
