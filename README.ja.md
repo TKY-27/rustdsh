@@ -406,6 +406,10 @@ rdsh --profile web                             # プラグイン付きで起動
 
 ポート番号（DSH Web: `3080`、rdsh serve: `38080`）も競合しません。
 
+DSHの会話GUIに読み取り専用のworkflow進捗ボードを追加する場合は、[対応sourceへの適用・診断ツール](plugins/workflow-board/README.ja.md)を隔離した対応checkoutに使います。boardと共通表示projectionを変更する18ファイルのpatch・fixtureテストを同梱し、patched DSHのbuild・採用は別工程です。
+
+MCP resourceを安全な添付成果物として開き、resource linkを明示操作で読む場合は、[対応sourceへの適用・診断ツール](plugins/mcp-resource-artifacts/README.ja.md)を指定revisionの隔離checkoutに使います。リンクは自動取得せず、binaryをモデル向けテキストに展開しません。patched DSHのbuild・採用は別工程です。
+
 rdsh が同梱するのは Smart-DSH のスマホ幅レイアウトだけです
 （[`plugins/rdsh-mobile-ui`](plugins/rdsh-mobile-ui/README.md)、MIT・Smart-DSH 由来）。
 767px 以下でチャットと入力欄が全幅になり、ロゴを1タップするとセッション一覧が開きます。
