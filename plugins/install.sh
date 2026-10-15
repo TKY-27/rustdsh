@@ -1,7 +1,8 @@
 #!/bin/sh
 # Install recommended dsh plugins into a profile (idempotent per package).
-# Also installs the bundled rdsh plugins (rdsh settings UI) so they are
-# available by default.
+# Also installs the bundled settings UI, phone-width layout adapted from
+# Smart-DSH (MIT), the reasoning-only answer guard, and the Web-only update
+# banner.
 # Usage: [PROFILE=headless] [DRY_RUN=1] [SOUND=0] [GITVIEW=0] [COMPUTE=1] [EASY_WORK=1] [SUBAGENTS=1] ./plugins/install.sh
 # PROFILE=desktop targets the Electron application's reserved profile: the npm
 # dsh CLI refuses it, so the work is forwarded to the Desktop-installed command
@@ -23,10 +24,18 @@ COMPUTE="${COMPUTE:-0}"
 EASY_WORK="${EASY_WORK:-0}"
 SUBAGENTS="${SUBAGENTS:-0}"
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-BUNDLED="rdsh-settings"
+# Bundled rdsh plugins. The update banner is a Web client plugin whose bundle
+# patch inserts itself into the profile; when the package is missing, the whole
+# insert fails to import on every boot and no release notification appears
+# (issue #5). pnpm also prunes links it does not manage, so the banner has to be
+# installed through the same path as the settings UI.
+BUNDLED="rdsh-settings rdsh-mobile-ui rdsh-answer-guard"
 [ "$COMPUTE" = "1" ] && BUNDLED="$BUNDLED rdsh-compute"
 [ "$EASY_WORK" = "1" ] && BUNDLED="$BUNDLED rdsh-easy-work"
 [ "$SUBAGENTS" = "1" ] && BUNDLED="$BUNDLED rdsh-subagent-optimizer"
+if [ "$PROFILE" = "web" ]; then
+  BUNDLED="$BUNDLED rdsh-update-banner"
+fi
 
 # SOUND/GITVIEW follow the browser-profile default; features.sound=false and
 # features.gitview=false in rdsh.json are the vetoes. A missing/corrupt file,

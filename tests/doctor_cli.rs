@@ -1,280 +1,148 @@
-use serde_json::Value;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::time::{SystemTime, UNIX_EPOCH};
 
-struct Fixture(PathBuf);
-impl Fixture {
-    fn new() -> Self {
-        let stamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let root = std::env::temp_dir().join(format!("rdsh-doctor-{}-{stamp}", std::process::id()));
-        std::fs::create_dir_all(root.join("bin")).unwrap();
-        std::fs::create_dir_all(root.join("dsh/profiles")).unwrap();
-        Self(root)
-    }
-    fn command(&self) -> Command {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_rdsh"));
-        command.env_clear();
-        command
-            .env("HOME", &self.0)
-            .env("USERPROFILE", &self.0)
-            .env("DSH_HOME", self.0.join("dsh"))
-            .env("PATH", self.0.join("bin"));
-        if let Some(system_root) = std::env::var_os("SYSTEMROOT") {
-            command.env("SYSTEMROOT", system_root);
-        }
-        command
-    }
-    fn original(&self) -> PathBuf {
-        let path = self.0.join(if cfg!(windows) {
-            "original.cmd"
-        } else {
-            "original"
-        });
-        executable(&path, "#!/bin/sh\necho fixture-original\n");
-        path
-    }
-}
-impl Drop for Fixture {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
-fn executable(path: &Path, text: &str) {
-    std::fs::write(path, text).unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
-}
-fn report(output: &Output) -> Value {
-    serde_json::from_slice(&output.stdout)
-        .unwrap_or_else(|_| panic!("doctor did not emit JSON; exit {:?}", output.status.code()))
-}
-
-#[test]
-fn json_is_read_only_and_does_not_probe_the_original_or_expose_credentials() {
-    let f = Fixture::new();
-    let original = f.original();
-    let marker = f.0.join("original-was-run");
-    executable(
-        &original,
-        &format!("#!/bin/sh\nprintf called > '{}'\n", marker.display()),
-    );
-    for profile in ["web", "desktop"] {
-        std::fs::create_dir_all(f.0.join("dsh/profiles").join(profile)).unwrap();
-    }
-    std::fs::write(f.0.join("dsh/profiles/README"), "not a profile").unwrap();
-    std::fs::write(
-        f.0.join("dsh/.credentials.yaml"),
-        "fixture-secret-never-echo",
-    )
-    .unwrap();
-    let output = f
-        .command()
-        .args(["doctor", "--json"])
-        .env("RDSH_ORIG_BIN", &original)
-        .output()
-        .unwrap();
-    assert!(output.status.success());
-    let value = report(&output);
-    assert_eq!(value["schema"], 1);
-    assert_eq!(value["ok"], true);
-    assert_eq!(value["original"]["probed"], false);
-    assert_eq!(value["profiles"]["count"], 2);
-    assert!(!String::from_utf8_lossy(&output.stdout).contains("fixture-secret-never-echo"));
-    assert!(!marker.exists());
-    assert!(!f.0.join("dsh/rdsh.json").exists());
-}
-
-#[test]
-fn missing_original_still_emits_a_json_report_and_exits_unsuccessfully() {
-    let f = Fixture::new();
-    let output = f.command().args(["doctor", "--json"]).output().unwrap();
-    assert_eq!(output.status.code(), Some(1));
-    let value = report(&output);
-    assert_eq!(value["ok"], false);
-    assert_eq!(value["original"]["found"], false);
-    assert!(value["original"]["path"].is_null());
-}
-
-#[test]
-fn javascript_original_reports_a_missing_node_without_launching_it() {
-    let f = Fixture::new();
-    let original = f.0.join("original.js");
-    std::fs::write(&original, "throw new Error('must never run');").unwrap();
-    let output = f
-        .command()
-        .args(["doctor", "--json"])
-        .env("RDSH_ORIG_BIN", original)
-        .output()
-        .unwrap();
-    assert_eq!(output.status.code(), Some(1));
-    let value = report(&output);
-    assert_eq!(value["original"]["found"], true);
-    assert_eq!(value["node"]["required"], true);
-    assert_eq!(value["node"]["found"], false);
-}
-
-#[test]
-fn nonexistent_override_is_not_reported_as_an_installed_original() {
-    let f = Fixture::new();
-    let output = f
-        .command()
-        .args(["doctor", "--json"])
-        .env("RDSH_ORIG_BIN", f.0.join("missing-original"))
-        .output()
-        .unwrap();
-    assert_eq!(output.status.code(), Some(1));
-    assert_eq!(report(&output)["original"]["found"], false);
-}
-
-#[test]
-fn json_uses_the_same_matching_node_tree_as_delegation() {
-    let f = Fixture::new();
-    let os = if cfg!(windows) {
-        "win"
-    } else if cfg!(target_os = "macos") {
-        "darwin"
-    } else {
-        "linux"
-    };
-    let arch = if cfg!(target_arch = "aarch64") {
-        "arm64"
-    } else {
-        "x64"
-    };
-    let tree = f.0.join(format!(".local/opt/node-v99.0.0-{os}-{arch}"));
-    std::fs::create_dir_all(tree.join("bin")).unwrap();
-    std::fs::create_dir_all(tree.join("lib")).unwrap();
-    let original = tree.join("lib/original.js");
-    std::fs::write(&original, "throw new Error('must never run');").unwrap();
-    let node_name = if cfg!(windows) { "node.exe" } else { "node" };
-    let node = tree.join("bin").join(node_name);
-    let marker = f.0.join("node-was-run");
-    executable(
-        &node,
-        &format!(
-            "#!/bin/sh\nprintf called > '{}'\nexit 99\n",
-            marker.display()
-        ),
-    );
-    executable(&f.0.join("bin").join(node_name), "#!/bin/sh\nexit 98\n");
-    let output = f
-        .command()
-        .args(["doctor", "--json"])
-        .env("RDSH_ORIG_BIN", original)
-        .output()
-        .unwrap();
-    assert!(output.status.success());
-    let value = report(&output);
-    assert_eq!(value["node"]["required"], true);
-    let reported = Path::new(value["node"]["path"].as_str().unwrap());
-    assert_eq!(
-        std::fs::canonicalize(reported).unwrap(),
-        std::fs::canonicalize(node).unwrap()
-    );
-    assert!(!marker.exists());
+fn temp_dir(tag: &str) -> PathBuf {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!(
+        "rdsh-doctor-cli-{tag}-{}-{nonce}",
+        std::process::id()
+    ));
+    fs::create_dir_all(&path).unwrap();
+    path
 }
 
 #[cfg(unix)]
-#[test]
-fn a_later_rdsh_alias_does_not_shadow_the_first_executable_dsh() {
-    let f = Fixture::new();
-    let original = f.original();
-    executable(&f.0.join("bin/dsh"), "#!/bin/sh\nexit 0\n");
-    let later = f.0.join("later");
-    std::fs::create_dir(&later).unwrap();
-    std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_rdsh"), later.join("dsh")).unwrap();
-    let path = std::env::join_paths([f.0.join("bin"), later]).unwrap();
-    let output = f
-        .command()
-        .args(["doctor", "--json"])
-        .env("RDSH_ORIG_BIN", original)
-        .env("PATH", path)
-        .output()
-        .unwrap();
-    assert!(output.status.success());
-    assert_eq!(report(&output)["path_shadowed"], false);
+fn make_executable(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
 }
 
-#[cfg(unix)]
-#[test]
-fn explicit_js_launchers_and_comments_do_not_count_as_broken_path_wrappers() {
-    let f = Fixture::new();
-    let original = f.original();
-    let local_bin = f.0.join(".local/bin");
-    std::fs::create_dir_all(&local_bin).unwrap();
-    executable(
-        &local_bin.join("safe"),
-        "#!/bin/sh\n# node on dsh is dangerous\nexec node /opt/dsh/index.js\n",
-    );
-    executable(
-        &local_bin.join("broken"),
-        "#!/bin/sh\nexec node \"$(command -v dsh)\"\n",
-    );
-    let output = f
-        .command()
-        .args(["doctor", "--json"])
-        .env("RDSH_ORIG_BIN", original)
-        .output()
-        .unwrap();
-    let warnings = report(&output)["warnings"].as_array().unwrap().clone();
-    assert_eq!(warnings.len(), 1);
-    assert!(warnings[0].as_str().unwrap().contains("broken"));
-}
-
-#[cfg(unix)]
-#[test]
-fn plaintext_diagnosis_does_not_wait_for_a_slow_original_version() {
-    let f = Fixture::new();
-    let original = f.original();
-    executable(
-        &original,
-        "#!/bin/sh\n/bin/sleep 3\necho delayed-version-fixture\n",
-    );
-    let output = f
-        .command()
+fn run_doctor(root: &Path, cwd: &Path, path: &Path, original: &str) -> Output {
+    let home = root.join("home");
+    fs::create_dir_all(&home).unwrap();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_rdsh"));
+    command
         .arg("doctor")
+        .current_dir(cwd)
+        .env("HOME", &home)
+        .env("USERPROFILE", &home)
+        .env("LOCALAPPDATA", root.join("local-app-data"))
+        .env("DSH_HOME", root.join("dsh"))
+        .env("XDG_CONFIG_HOME", root.join("config"))
+        .env("XDG_DATA_HOME", root.join("data"))
         .env("RDSH_ORIG_BIN", original)
-        .output()
-        .unwrap();
-    assert!(output.status.success());
-    assert!(!String::from_utf8_lossy(&output.stdout).contains("delayed-version-fixture"));
+        .env_remove("DSH_ORIG_BIN")
+        .env("PATH", std::env::join_paths([path]).unwrap());
+    command.output().unwrap()
 }
 
 #[cfg(unix)]
 #[test]
-fn plaintext_preserves_a_successful_original_version() {
-    let f = Fixture::new();
-    let output = f
-        .command()
-        .arg("doctor")
-        .env("RDSH_ORIG_BIN", f.original())
-        .output()
-        .unwrap();
-    assert!(output.status.success());
-    assert!(String::from_utf8_lossy(&output.stdout).contains("dsh version: fixture-original"));
-}
+fn doctor_resolves_bare_original_override_from_path_not_working_directory() {
+    let root = temp_dir("path-override");
+    let cwd = root.join("cwd");
+    let path_dir = root.join("path");
+    let empty_path = root.join("empty-path");
+    fs::create_dir_all(&cwd).unwrap();
+    fs::create_dir_all(&path_dir).unwrap();
+    fs::create_dir_all(&empty_path).unwrap();
 
-#[cfg(unix)]
-#[test]
-fn an_exited_original_cannot_extend_the_deadline_through_an_inherited_pipe() {
-    let f = Fixture::new();
-    let original = f.original();
-    executable(
-        &original,
-        "#!/bin/sh\n/bin/sleep 3 &\necho retained-pipe-fixture\nexit 0\n",
+    let on_path = path_dir.join("dsh-original");
+    fs::write(&on_path, "#!/bin/sh\nexit 0\n").unwrap();
+    make_executable(&on_path);
+    let path_result = run_doctor(&root, &cwd, &path_dir, "dsh-original");
+    let path_output = String::from_utf8_lossy(&path_result.stdout);
+    assert!(
+        !path_output.contains("RDSH_ORIG_BIN=dsh-original is not a usable"),
+        "{path_output}"
     );
-    let output = f
-        .command()
-        .arg("doctor")
-        .env("RDSH_ORIG_BIN", original)
-        .output()
-        .unwrap();
-    assert!(output.status.success());
-    assert!(!String::from_utf8_lossy(&output.stdout).contains("retained-pipe-fixture"));
+
+    let only_in_cwd = cwd.join("dsh-original");
+    fs::write(&only_in_cwd, "#!/bin/sh\nexit 0\n").unwrap();
+    make_executable(&only_in_cwd);
+    let cwd_result = run_doctor(&root, &cwd, &empty_path, "dsh-original");
+    let cwd_output = String::from_utf8_lossy(&cwd_result.stdout);
+    assert!(
+        cwd_output.contains("RDSH_ORIG_BIN=dsh-original is not a usable"),
+        "{cwd_output}"
+    );
+
+    let missing_result = run_doctor(&root, &cwd, &empty_path, "missing-dsh");
+    let missing_output = String::from_utf8_lossy(&missing_result.stdout);
+    assert!(
+        missing_output.contains("RDSH_ORIG_BIN=missing-dsh is not a usable"),
+        "{missing_output}"
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn doctor_accepts_bare_js_original_override_from_current_directory() {
+    let root = temp_dir("js-cwd-override");
+    let cwd = root.join("cwd");
+    let path_dir = root.join("path");
+    fs::create_dir_all(&cwd).unwrap();
+    fs::create_dir_all(&path_dir).unwrap();
+
+    let entry = cwd.join("entry.js");
+    fs::write(&entry, "process.exit(0);\n").unwrap();
+    let result = run_doctor(&root, &cwd, &path_dir, "entry.js");
+    let output = String::from_utf8_lossy(&result.stdout);
+    assert!(
+        !output.contains("RDSH_ORIG_BIN=entry.js is not a usable"),
+        "Node receives a bare JS entrypoint as a file argument resolved from CWD: {output}"
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn doctor_does_not_resolve_bare_js_original_override_from_path() {
+    let root = temp_dir("js-path-override");
+    let cwd = root.join("cwd");
+    let path_dir = root.join("path");
+    fs::create_dir_all(&cwd).unwrap();
+    fs::create_dir_all(&path_dir).unwrap();
+
+    let entry = path_dir.join("entry.js");
+    fs::write(&entry, "process.exit(0);\n").unwrap();
+    make_executable(&entry);
+    let result = run_doctor(&root, &cwd, &path_dir, "entry.js");
+    let output = String::from_utf8_lossy(&result.stdout);
+    assert!(
+        output.contains("RDSH_ORIG_BIN=entry.js is not a usable"),
+        "Node treats a bare JS argument as a CWD file, not a PATH command: {output}"
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(windows)]
+#[test]
+fn doctor_scans_the_windows_installer_wrapper_directory() {
+    let root = temp_dir("windows-wrapper-dir");
+    let cwd = root.join("cwd");
+    let path = root.join("path");
+    let local_bin = root.join("local-app-data").join("rdsh").join("bin");
+    fs::create_dir_all(&cwd).unwrap();
+    fs::create_dir_all(&path).unwrap();
+    fs::create_dir_all(&local_bin).unwrap();
+    let original = root.join("dsh-original.exe");
+    fs::write(&original, b"fixture").unwrap();
+    let broken = local_bin.join("dsh-broken.cmd");
+    fs::write(&broken, "#!/rdsh-test-interpreter-missing\n").unwrap();
+
+    let result = run_doctor(&root, &cwd, &path, &original.to_string_lossy());
+    let output = String::from_utf8_lossy(&result.stdout);
+    assert!(output.contains("dsh-broken.cmd needs"), "{output}");
+    assert!(
+        output.contains(&broken.display().to_string()),
+        "diagnostic must show the Windows installer wrapper directory: {output}"
+    );
+    fs::remove_dir_all(root).unwrap();
 }

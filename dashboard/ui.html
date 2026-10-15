@@ -456,6 +456,9 @@
       .done {
         color: var(--green);
       }
+      .status.stale {
+        color: var(--red);
+      }
       .blocked {
         color: var(--red);
       }
@@ -488,6 +491,27 @@
       .decision-card h3 {
         font-size: 18px;
         margin: 12px 0;
+      }
+      .outcome-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 440px), 1fr));
+        gap: 16px;
+      }
+      .outcome-checks {
+        border-top: 1px solid var(--line);
+        padding-top: 12px;
+      }
+      .outcome-checks ul {
+        padding-left: 22px;
+      }
+      .outcome-checks li {
+        margin: 12px 0;
+      }
+      .outcome-checks p {
+        margin: 4px 0 8px;
+      }
+      .outcome-checks code {
+        overflow-wrap: anywhere;
       }
       .decision-details {
         display: grid;
@@ -1598,6 +1622,7 @@
           <p id="managed-status" role="status" aria-live="polite">
             所有範囲を確認中…
           </p>
+          <p id="managed-provider" class="sub"></p>
           <p id="managed-remaining" class="sub"></p>
           <details>
             <summary>実行IDと停止履歴</summary>
@@ -1709,6 +1734,22 @@
           <div class="feed" id="observed-cli-list" aria-live="polite"></div>
           <button id="observed-cli-refresh" type="button">識別状態を再確認</button>
         </details>
+        <details class="fold" id="github-status-detail">
+          <summary>最新push・CI・レビュー状態</summary>
+          <p class="sub">
+            ローカルHEAD、追跡先の実SHA、PR headを照合します。GitHubのrequired判定とpush／pull_request起動を分けて表示します。取得できない状態は成功として扱いません。
+          </p>
+          <button id="github-status-refresh">GitHub状態を読み取る</button>
+          <p id="github-status-message" class="sub" role="status" aria-live="polite">
+            未確認 · ボタンを押すと最新状態を取得します。
+          </p>
+          <section
+            id="github-status-result"
+            class="decision-grid"
+            aria-label="GitHub push・CI・レビュー状態"
+            aria-live="polite"
+          ></section>
+        </details>
             <h3 id="pending-heading" tabindex="-1">未回答の質問</h3>
             <p class="sub" id="pending-note">
               AIからのお願いがここに出ます。あるときだけ選ぶ・書く・送るの順で答えます。0件なら何もいりません。答えるだけで実行は起きません。
@@ -1752,24 +1793,22 @@
               <p id="agent-ui-status" role="status" aria-live="polite"></p>
             </details>
             <details class="fold" id="tasks-detail">
-              <summary>タスク一覧</summary>
-              <h3 id="tasks-heading" tabindex="-1">
-                タスク <span class="sub" id="task-milestones"></span>
-              </h3>
-              <div class="table-box">
-                <!-- #57: 各行に task-<id> の目印を付け、端末を替えても同じ行へ戻れるようにします。 -->
-                <table aria-labelledby="tasks-heading">
-                  <thead>
-                    <tr>
-                      <th scope="col">ID</th>
-                      <th scope="col">状態</th>
-                      <th scope="col">題名</th>
-                      <th scope="col">ブロック要因</th>
-                    </tr>
-                  </thead>
-                  <tbody id="tasks"></tbody>
-                </table>
-              </div>
+              <summary>成果と受入条件</summary>
+              <h3 id="tasks-heading" tabindex="-1">成果中心のタスクカード</h3>
+              <p class="sub">
+                done は作業の申告です。受入条件の検証結果とは別に確認します。
+              </p>
+              <div
+                id="tasks"
+                class="outcome-grid"
+                aria-labelledby="tasks-heading"
+              ></div>
+              <h3 id="milestones-heading">マイルストーンの終了条件</h3>
+              <div
+                id="task-milestones"
+                class="outcome-grid"
+                aria-labelledby="milestones-heading"
+              ></div>
             </details>
             <details class="fold" id="instruction-detail">
               <summary>同じsessionへ追指示を送る</summary>

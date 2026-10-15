@@ -12,6 +12,7 @@ import { identity, ProjectStore, publicState } from "../state.mjs";
 import { SessionLedger, attachRecordedSession } from "../session-ledger.mjs";
 import { ReplyConsumer } from "../reply-consumer.mjs";
 import { startDashboard } from "../server.mjs";
+import { InstructionQueueWorker } from "../instruction-queue-worker.mjs";
 import { feedbackSince } from "../mcp.mjs";
 import { EventsHub } from "../webhooks.mjs";
 import { Webhook } from "standardwebhooks";
@@ -1538,6 +1539,363 @@ test("unknown/corrupt application schemas preserve the original file and legacy 
     await fs.writeFile(file, bytes);
     await assert.rejects(ProjectStore.open(project));
     assert.equal(await fs.readFile(file, "utf8"), bytes);
+  }
+});
+
+test("ProjectStore commits Rust instruction results and leaves state untouched on native errors", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "rdsh-native-queue-store-"));
+  t.after(() => fs.rm(root, { recursive: true }));
+  const project = { id: "fixture", name: "fixture", root, directory: root };
+  await fs.writeFile(
+    path.join(root, "state.json"),
+    JSON.stringify({
+      schema: 1,
+      project: { id: project.id, name: project.name, root },
+      revision: 0,
+      updated_at: null,
+      metrics: {},
+      tasks: [],
+      questions: [],
+      events: [],
+      feedback: [],
+      history_backups: [],
+    }),
+  );
+
+  let fail = false;
+  let received;
+  const instructionQueueWorker = {
+    async request(document) {
+      received = document;
+      if (fail) throw Object.assign(new Error("native conflict"), { status: 409 });
+      return {
+        operation: document.operation,
+        state: {
+          instructions: {
+            schema: 1,
+            revision: 0,
+            sequence: 0,
+            requests: {},
+            commands: {},
+          },
+          history_backups: [{ malformed: true }],
+        },
+        result: { command_id: "native-command" },
+      };
+    },
+  };
+  const store = await ProjectStore.open(project, { instructionQueueWorker });
+  const runId = "run_" + randomUUID();
+  await store.mutateReply("register", {
+    run_id: runId,
+    cli_session_id: "fixture-session",
+    task_id: "fixture-task",
+  });
+  const historyBackups = store.value.history_backups;
+  const result = await store.mutateReply(
+    "instruction_submit",
+    { command_id: "input_" + randomUUID(), run_id: runId },
+    { actor: "human" },
+  );
+
+  assert.equal(received.operation, "submit");
+  assert.equal(received.prevalidated, true);
+  assert.deepEqual(Object.keys(received.state).sort(), [
+    "answer_applications",
+    "feedback",
+    "project",
+  ]);
+  assert.deepEqual(result, { command_id: "native-command" });
+  assert.deepEqual(store.value.instructions, {
+    schema: 1,
+    revision: 0,
+    sequence: 0,
+    requests: {},
+    commands: {},
+  });
+  assert.equal(store.value.history_backups, historyBackups);
+  const beforeFailure = structuredClone(store.value);
+  const persistedBeforeFailure = await fs.readFile(path.join(root, "state.json"), "utf8");
+  fail = true;
+  await assert.rejects(
+    store.mutateReply("instruction_resolve", {}, { actor: "human" }),
+    (error) => error.message === "native conflict" && error.status === 409,
+  );
+  assert.deepEqual(store.value, beforeFailure);
+  assert.equal(
+    await fs.readFile(path.join(root, "state.json"), "utf8"),
+    persistedBeforeFailure,
+  );
+});
+
+test("ProjectStore uses JavaScript when a valid queue exceeds the native transport bound", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "rdsh-native-queue-overflow-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const project = { id: "fixture", name: "fixture", root, directory: root };
+  let requests = 0;
+  const instructionQueueWorker = {
+    async request() {
+      requests++;
+      throw Object.assign(new Error("request exceeds worker limit"), {
+        status: 413,
+      });
+    },
+  };
+  const store = await ProjectStore.open(project, { instructionQueueWorker });
+  const runId = "run_" + randomUUID();
+  const sessionId = "fixture-session";
+  const consumer = await store.mutateReply("register", {
+    run_id: runId,
+    cli_session_id: sessionId,
+    task_id: "fixture-task",
+  });
+  const result = await store.mutateReply(
+    "instruction_submit",
+    {
+      command_id: "input_" + randomUUID(),
+      consumer_id: consumer.consumer_id,
+      run_id: runId,
+      session_id: sessionId,
+      text: "保存して続行してください",
+      mode: "next_turn",
+      expected_queue_revision: 0,
+    },
+    { actor: "human" },
+  );
+
+  assert.equal(requests, 1);
+  assert.equal(result.request.status, "accepted");
+  assert.equal(Object.keys(store.value.instructions.requests).length, 1);
+});
+
+test("live Dashboard uses and closes its configured instruction worker", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "rdsh-live-native-queue-"));
+  const projectRoot = path.join(root, "project");
+  await fs.mkdir(projectRoot);
+  const project = await identity(projectRoot);
+  project.directory = path.join(root, "dashboard");
+  const executable = path.join(root, "rdsh-fixture.cjs");
+  await fs.writeFile(
+    executable,
+    `
+const readline = require("node:readline");
+const input = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+input.on("line", (line) => {
+  const request = JSON.parse(line);
+  const state = request.state;
+  state.instructions ||= { schema: 1, revision: 0, sequence: 0, requests: {}, commands: {} };
+  process.stdout.write(JSON.stringify({ operation: request.operation, state, result: { native: true } }) + "\\n");
+});
+`,
+  );
+  let dashboard;
+  const worker = new InstructionQueueWorker(process.execPath, {
+    prefixArgs: [executable],
+  });
+  t.after(async () => {
+    if (dashboard) await dashboard.close();
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  dashboard = await startDashboard({
+    project,
+    port: await freePort(),
+    tailscale: false,
+    instructionQueueWorker: worker,
+  });
+  assert.ok(worker);
+  assert.deepEqual(
+    await dashboard.store.mutateReply("control", { command_id: "fixture" }, { actor: "human" }),
+    { native: true },
+  );
+  assert.ok(worker.record);
+  await dashboard.close();
+  assert.equal(worker.closed, true);
+  assert.equal(worker.record, null);
+});
+
+test(
+  "live Dashboard keeps JavaScript routing by default when a Rust worker is available",
+  { skip: process.platform === "win32" },
+  async (t) => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "rdsh-native-queue-default-"));
+    const projectRoot = path.join(root, "project");
+    await fs.mkdir(projectRoot);
+    const project = await identity(projectRoot);
+    project.directory = path.join(root, "dashboard");
+    const executable = path.join(root, "rdsh");
+    await fs.writeFile(
+      executable,
+      "#!/bin/sh\n[ \"$1\" = \"instruction-queue\" ] && [ \"$2\" = \"serve\" ] || exit 64\ncat >/dev/null\nprintf '%s\\n' '{\"operation\":\"capabilities\",\"protocol\":1,\"features\":{\"prevalidated_state\":true}}'\n",
+    );
+    await fs.chmod(executable, 0o700);
+    const previousRdshBin = process.env.RDSH_BIN;
+    const previousWorkerSetting = process.env.RDSH_DASHBOARD_RUST_INSTRUCTION_QUEUE;
+    process.env.RDSH_BIN = executable;
+    delete process.env.RDSH_DASHBOARD_RUST_INSTRUCTION_QUEUE;
+    let dashboard;
+    let enabledDashboard;
+    t.after(async () => {
+      if (dashboard) await dashboard.close();
+      if (enabledDashboard) await enabledDashboard.close();
+      if (previousRdshBin === undefined) delete process.env.RDSH_BIN;
+      else process.env.RDSH_BIN = previousRdshBin;
+      if (previousWorkerSetting === undefined)
+        delete process.env.RDSH_DASHBOARD_RUST_INSTRUCTION_QUEUE;
+      else process.env.RDSH_DASHBOARD_RUST_INSTRUCTION_QUEUE = previousWorkerSetting;
+      await fs.rm(root, { recursive: true, force: true });
+    });
+
+    dashboard = await startDashboard({
+      project,
+      port: await freePort(),
+      tailscale: false,
+    });
+    assert.equal(dashboard.store.instructionQueueWorker, null);
+
+    const enabledRoot = path.join(root, "enabled-project");
+    await fs.mkdir(enabledRoot);
+    const enabledProject = await identity(enabledRoot);
+    enabledProject.directory = path.join(root, "enabled-dashboard");
+    process.env.RDSH_DASHBOARD_RUST_INSTRUCTION_QUEUE = "1";
+    enabledDashboard = await startDashboard({
+      project: enabledProject,
+      port: await freePort(),
+      tailscale: false,
+    });
+    assert.ok(enabledDashboard.store.instructionQueueWorker);
+  },
+);
+
+test("live Dashboard keeps JavaScript routing when rdsh lacks the serve action", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "rdsh-old-native-queue-"));
+  const projectRoot = path.join(root, "project");
+  await fs.mkdir(projectRoot);
+  const project = await identity(projectRoot);
+  project.directory = path.join(root, "dashboard");
+  const previousRdshBin = process.env.RDSH_BIN;
+  const previousWorkerSetting = process.env.RDSH_DASHBOARD_RUST_INSTRUCTION_QUEUE;
+  process.env.RDSH_BIN = process.execPath;
+  process.env.RDSH_DASHBOARD_RUST_INSTRUCTION_QUEUE = "1";
+  let dashboard;
+  t.after(async () => {
+    if (dashboard) await dashboard.close();
+    if (previousRdshBin === undefined) delete process.env.RDSH_BIN;
+    else process.env.RDSH_BIN = previousRdshBin;
+    if (previousWorkerSetting === undefined)
+      delete process.env.RDSH_DASHBOARD_RUST_INSTRUCTION_QUEUE;
+    else process.env.RDSH_DASHBOARD_RUST_INSTRUCTION_QUEUE = previousWorkerSetting;
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  dashboard = await startDashboard({
+    project,
+    port: await freePort(),
+    tailscale: false,
+  });
+  assert.equal(dashboard.store.instructionQueueWorker, null);
+  const runId = "run_" + randomUUID();
+  const sessionId = "fixture-session";
+  const consumer = await dashboard.store.mutateReply("register", {
+    run_id: runId,
+    cli_session_id: sessionId,
+    task_id: "fixture-task",
+  });
+  const result = await dashboard.store.mutateReply(
+    "instruction_submit",
+    {
+      command_id: "input_" + randomUUID(),
+      consumer_id: consumer.consumer_id,
+      run_id: runId,
+      session_id: sessionId,
+      text: "従来経路で受け付ける",
+      mode: "next_turn",
+      expected_queue_revision: 0,
+    },
+    { actor: "human" },
+  );
+  assert.equal(result.request.status, "accepted");
+});
+
+test(
+  "live Dashboard keeps JavaScript routing when serve lacks prevalidated-state support",
+  { skip: process.platform === "win32" },
+  async (t) => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "rdsh-old-native-protocol-"));
+    const projectRoot = path.join(root, "project");
+    await fs.mkdir(projectRoot);
+    const project = await identity(projectRoot);
+    project.directory = path.join(root, "dashboard");
+    const executable = path.join(root, "rdsh-old");
+    await fs.writeFile(
+      executable,
+      "#!/bin/sh\n[ \"$1\" = \"instruction-queue\" ] && [ \"$2\" = \"serve\" ] || exit 64\ncat >/dev/null\nprintf '%s\\n' '{\"error\":\"Invalid instruction-queue action/options\",\"status\":400}'\n",
+    );
+    await fs.chmod(executable, 0o700);
+    const previousRdshBin = process.env.RDSH_BIN;
+    const previousWorkerSetting = process.env.RDSH_DASHBOARD_RUST_INSTRUCTION_QUEUE;
+    process.env.RDSH_BIN = executable;
+    process.env.RDSH_DASHBOARD_RUST_INSTRUCTION_QUEUE = "1";
+    let dashboard;
+    t.after(async () => {
+      if (dashboard) await dashboard.close();
+      if (previousRdshBin === undefined) delete process.env.RDSH_BIN;
+      else process.env.RDSH_BIN = previousRdshBin;
+      if (previousWorkerSetting === undefined)
+        delete process.env.RDSH_DASHBOARD_RUST_INSTRUCTION_QUEUE;
+      else process.env.RDSH_DASHBOARD_RUST_INSTRUCTION_QUEUE = previousWorkerSetting;
+      await fs.rm(root, { recursive: true, force: true });
+    });
+
+    dashboard = await startDashboard({
+      project,
+      port: await freePort(),
+      tailscale: false,
+    });
+    assert.equal(dashboard.store.instructionQueueWorker, null);
+    const runId = "run_" + randomUUID();
+    const sessionId = "fixture-session";
+    const consumer = await dashboard.store.mutateReply("register", {
+      run_id: runId,
+      cli_session_id: sessionId,
+      task_id: "fixture-task",
+    });
+    const result = await dashboard.store.mutateReply(
+      "instruction_submit",
+      {
+        command_id: "input_" + randomUUID(),
+        consumer_id: consumer.consumer_id,
+        run_id: runId,
+        session_id: sessionId,
+        text: "旧Rust workerでも受け付ける",
+        mode: "next_turn",
+        expected_queue_revision: 0,
+      },
+      { actor: "human" },
+    );
+    assert.equal(result.request.status, "accepted");
+  },
+);
+
+test("Dashboard preserves Rust worker failure and timeout HTTP statuses", options, async (t) => {
+  const f = await setup(t);
+  const runId = "run_" + randomUUID();
+  const sessionId = "fixture-session";
+  const consumer = await f.server.store.mutateReply("register", {
+    run_id: runId,
+    cli_session_id: sessionId,
+    task_id: "fixture-task",
+  });
+  const input = await instruction(f, { consumer });
+  for (const status of [500, 504]) {
+    f.server.store.instructionQueueWorker = {
+      async request() {
+        throw Object.assign(new Error("worker unavailable"), { status });
+      },
+    };
+    const response = await f.post("instructions/submit", input);
+    assert.equal(response.status, status);
+    assert.equal((await response.json()).error, "worker unavailable");
   }
 });
 

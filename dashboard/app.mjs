@@ -3,11 +3,13 @@ import { renderQuestionCards } from "./question-cards-ui.mjs";
 import { renderAnswerApplications } from "./answer-applications-ui.mjs";
 import { renderOverview } from "./project-overview.mjs";
 import { renderConnectionDiagnostics } from "./connection-diagnostics-ui.mjs";
+import { renderGitHubStatus } from "./github-status-ui.mjs";
 import { createInstructionPanel } from "./instruction-queue-ui.mjs";
 import { createCostPanel } from "./cost-ledger-ui.mjs";
 import { createModelCatalogPanel } from "./model-catalog-ui.mjs";
 import { renderSurface } from "./ui/blocks.mjs";
 import { renderBudget } from "./budget-ui.mjs";
+import { createTaskOutcomesPanel } from "./task-outcomes-ui.mjs";
 import { createHumanAnnotationPanel } from "./human-annotations-ui.mjs";
 import { setupObservedCli } from "./observed-cli-ui.mjs";
 
@@ -224,12 +226,35 @@ $("diagnostics-refresh").onclick = async () => {
     $("diagnostics-refresh").disabled = false;
   }
 };
+$("github-status-refresh").onclick = async () => {
+  const button = $("github-status-refresh");
+  button.disabled = true;
+  $("github-status-message").textContent =
+    "ローカルSHA・追跡先・GitHubの状態を取得中…";
+  try {
+    const report = await api("github/status");
+    renderGitHubStatus($("github-status-result"), report, node);
+    $("github-status-message").textContent =
+      "読み取り専用の観測結果です。時刻とSHAを確認してください。";
+  } catch {
+    $("github-status-result").replaceChildren();
+    $("github-status-message").textContent =
+      "状態を取得できません。未確認として扱い、成功表示へ置き換えません。";
+  } finally {
+    button.disabled = false;
+  }
+};
 const renderInstructions = createInstructionPanel($("instruction-panel"), {
   node,
   api,
   refreshState,
 });
 const renderCosts = createCostPanel($("cost-ledger"), node);
+const renderTaskOutcomes = createTaskOutcomesPanel(
+  $("tasks"),
+  $("task-milestones"),
+  { node, api },
+);
 const renderCatalog = createModelCatalogPanel($("model-catalog"), node);
 // rdsh-ui/1: the agent presents a surface, and a human action returns to the
 // same session. The rendered surface is skipped until its revision changes so
@@ -305,6 +330,7 @@ function render(state) {
   renderHumanAnnotations(state);
   renderReports(state);
   const unanswered = state.questions.filter((question) => question.answer === null);
+  renderTaskOutcomes(state);
   renderQuestionCards($("questions"), unanswered, state.question_contracts, {
     node,
     api,
@@ -519,6 +545,9 @@ try {
         };
         $("managed-status").textContent =
           labels[scope?.status] ?? "所有する実行はありません";
+        $("managed-provider").textContent = value.provider
+          ? `起動先: ${value.provider.label} · ${value.provider.capabilities.connection} · 停止: ${value.provider.capabilities.stop}`
+          : "";
         $("managed-remaining").textContent = scope
           ? `残存プロセス ${scope.remaining_count ?? "未確認"} 件` +
             (scope.remaining_pids.length
