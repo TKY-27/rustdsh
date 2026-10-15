@@ -108,4 +108,8 @@ an SSE event; the server always checks the deadline at submission.
 Expired and cancelled cards remain visible with disabled answer controls.
 Saved replies are labeled as saved; older replies stay visible as invalidated
 history. Responsive cards keep their content visible in a narrow viewport.
+If a cancelled or expired revision is replaced, its terminal status, recorded
+time and optional attention report stay with that superseded revision and remain
+available after reopening the project. The replacement begins as a separate
+open revision; the old report does not transfer to it.
 See the [actual captures and validation](evidence/question-contracts.md).

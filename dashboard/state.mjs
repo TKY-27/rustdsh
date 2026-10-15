@@ -1,7 +1,9 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
+import { normalizeAttention, updateTaskAttention, validateAttentionState } from "./attention.mjs";
 import { applyTaskOutcomes, validateTaskOutcomes } from "./task-outcomes.mjs";
 import { normalizeObservation } from "./observations.mjs";
 import {
@@ -145,6 +147,7 @@ export class ProjectStore {
       throw new Error(
         "Dashboard state belongs to a different project or version",
       );
+    validateAttentionState(value);
     validateQuestionContracts(value);
     validateAnswerApplications(value);
     validateInstructions(value);
@@ -494,6 +497,8 @@ export function applyOperation(state, operation, input) {
       // root/id holds the target repo, and status/milestone/blocker hold the
       // exit conditions. This store never grants action approval; callers
       // must check the active revision before starting work. Schema frozen.
+      // #14 outcome card: keep title/status/milestone/blocker/updated_at on
+      // one card; "done" is not "verified" until a check result is recorded.
       const task = {
         id: text(input.id, "id", 160),
         title: text(input.title, "title", 1000),
@@ -512,6 +517,7 @@ export function applyOperation(state, operation, input) {
         }),
       };
       const index = state.tasks.findIndex((item) => item.id === task.id);
+      updateTaskAttention(task, index < 0 ? null : state.tasks[index], input, task.updated_at);
       applyTaskOutcomes(state, input);
       if (index < 0) state.tasks.push(task);
       else state.tasks[index] = task;
@@ -523,7 +529,17 @@ export function applyOperation(state, operation, input) {
         input.action !== undefined ||
         input.expected_revision !== undefined
       ) {
-        changeQuestionContract(state, input);
+        const previousAttention = state.questions.find((question) => question.id === input.id)?.attention;
+        const { attention, ...questionInput } = input;
+        const reported = Object.hasOwn(input, "attention")
+          ? normalizeAttention(attention, "question") : previousAttention;
+        if (input.action === "cancel" && Object.hasOwn(input, "attention") &&
+            !isDeepStrictEqual(reported, previousAttention ?? {}))
+          throw new Error("Cancellation cannot replace question attention");
+        changeQuestionContract(state, questionInput);
+        const question = state.questions.find((item) => item.id === input.id);
+        if (reported !== undefined && input.action !== "cancel")
+          question.attention = structuredClone(reported);
         validateReplyRecipient(
           state,
           state.question_contracts.cards[input.id].snapshot.decision,
@@ -547,6 +563,10 @@ export function applyOperation(state, operation, input) {
         created_at: new Date().toISOString(),
         answer: null,
       };
+      if (Object.hasOwn(input, "attention_history"))
+        throw new Error("attention_history is server-managed");
+      if (Object.hasOwn(input, "attention"))
+        question.attention = normalizeAttention(input.attention, "question");
       if (state.questions.some((item) => item.id === question.id))
         throw new Error(
           "Question id already exists; use a new id for a follow-up",
@@ -573,6 +593,7 @@ export function applyOperation(state, operation, input) {
         answer: question.answer,
         created_at: question.answered_at,
         ...(contract || {}),
+        ...(question.attention ? { attention: structuredClone(question.attention) } : {}),
       });
       recordAnswerApplication(state, state.feedback.at(-1));
       break;
