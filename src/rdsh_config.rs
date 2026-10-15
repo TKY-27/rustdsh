@@ -48,12 +48,22 @@ pub struct ExtrasSection {
 
 /// Extra feature ids that can be enabled via `extras.enable`.
 /// `serve` = `rdsh serve` dashboard, `search-web` = `rdsh search-web`.
-/// Setup itself (`rdsh setup --web`) always runs: it hosts the switches.
+/// Setup is not an extra; `features.setup_web` (default on) gates it instead.
 pub const KNOWN_EXTRAS: &[&str] = &["serve", "search-web"];
 
 /// True when the named extra is enabled in settings (unknown ids never match).
 pub fn extra_enabled(cfg: &RdshSettings, id: &str) -> bool {
     KNOWN_EXTRAS.contains(&id) && cfg.extras.enable.iter().any(|e| e == id)
+}
+
+/// Extra ids that are actually enabled, honoring an explicit `features.<id>`.
+/// The setup UI reads this so its switches show the effective state.
+pub fn enabled_extras(cfg: &RdshSettings) -> Vec<String> {
+    KNOWN_EXTRAS
+        .iter()
+        .filter(|id| feature_enabled(cfg, id))
+        .map(|id| (*id).to_string())
+        .collect()
 }
 
 /// One switchable capability. `default` reproduces the behavior that existed
@@ -106,6 +116,11 @@ pub const FEATURES: &[FeatureDef] = &[
         summary: "experimental per-turn context engine (rdsh context)",
     },
     FeatureDef {
+        id: "dep_graph",
+        default: true,
+        summary: "static code-dependency graph and change impact (rdsh deps)",
+    },
+    FeatureDef {
         id: "compute",
         default: false,
         summary: "allow the resident compute bridge (RDSH_COMPUTE=1)",
@@ -114,6 +129,11 @@ pub const FEATURES: &[FeatureDef] = &[
         id: "budget_guard",
         default: true,
         summary: "budget guard hook in the DSH plugin",
+    },
+    FeatureDef {
+        id: "answer_guard",
+        default: true,
+        summary: "ask the model once more when a turn ends with reasoning only",
     },
     FeatureDef {
         id: "agent_tool_sandbox",
@@ -368,6 +388,13 @@ pub struct ContextSection {
     pub max_code_hits: usize,
     pub max_sessions: usize,
     pub include_git_diff: bool,
+    /// Token budget for the context injection hook payload (not a turn budget).
+    pub inject_budget: usize,
+    /// Wall-clock deadline for one injection; retrieval is skipped past it.
+    pub inject_deadline_ms: usize,
+    /// Carry the newest matching sessions into an injection.
+    pub inject_sessions: bool,
+    pub inject_session_count: usize,
 }
 
 impl Default for GeneralSection {
@@ -449,6 +476,10 @@ impl Default for ContextSection {
             max_code_hits: 20,
             max_sessions: 0,
             include_git_diff: true,
+            inject_budget: 1200,
+            inject_deadline_ms: 1200,
+            inject_sessions: true,
+            inject_session_count: 2,
         }
     }
 }
@@ -508,14 +539,54 @@ pub fn try_load() -> anyhow::Result<RdshSettings> {
     try_load_at(&path)
 }
 
-fn try_load_at(path: &str) -> anyhow::Result<RdshSettings> {
-    let raw: Option<String> = match std::fs::read_to_string(path) {
-        Ok(raw) => Some(raw),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-        Err(e) => {
-            return Err(anyhow::anyhow!("cannot read settings file at {path}: {e}"));
-        }
+/// Settings documents are small. The cap and the regular-file check keep a FIFO
+/// or a runaway file from stalling a reader — `context inject` loads settings on
+/// the hook path, where a blocked read would hold up a prompt.
+const SETTINGS_MAX_BYTES: u64 = 4 * 1024 * 1024;
+
+/// Read a settings document under the size cap, or `None` when it is absent.
+pub(crate) fn read_small_config(path: &str) -> anyhow::Result<Option<String>> {
+    use std::io::Read;
+    // Open once, then validate and read that handle. `metadata(path)` followed
+    // by `File::open(path)` allowed a checked regular file to be replaced by a
+    // FIFO between the check and open. O_NONBLOCK makes even that replacement
+    // fail promptly; symlinked settings files remain supported.
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NONBLOCK);
+    }
+    let file = match options.open(path) {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(anyhow::anyhow!("cannot read settings file at {path}: {e}")),
     };
+    let meta = file
+        .metadata()
+        .map_err(|e| anyhow::anyhow!("cannot read settings file at {path}: {e}"))?;
+    if !meta.is_file() {
+        anyhow::bail!("settings file at {path} is not a regular file");
+    }
+    if meta.len() > SETTINGS_MAX_BYTES {
+        anyhow::bail!(
+            "settings file at {path} is {} bytes (limit {SETTINGS_MAX_BYTES})",
+            meta.len()
+        );
+    }
+    let mut raw = String::new();
+    file.take(SETTINGS_MAX_BYTES + 1)
+        .read_to_string(&mut raw)
+        .map_err(|e| anyhow::anyhow!("cannot read settings file at {path}: {e}"))?;
+    if raw.len() as u64 > SETTINGS_MAX_BYTES {
+        anyhow::bail!("settings file at {path} exceeds {SETTINGS_MAX_BYTES} bytes");
+    }
+    Ok(Some(raw))
+}
+
+fn try_load_at(path: &str) -> anyhow::Result<RdshSettings> {
+    let raw: Option<String> = read_small_config(path)?;
     // Missing file: defaults + legacy complement without a failed JSON parse.
     // Same result as before (Null branch), one error allocation saved.
     let Some(raw) = raw else {
@@ -623,7 +694,7 @@ impl RdshSettings {
             },
             discord: DiscordSection::from_value(&sec("discord")),
             tokens: TokensSection {
-                default_budget: clamp_u64(num(&t, "default_budget"), 4000, 500, 200000) as usize,
+                default_budget: clamp_u64(num(&t, "default_budget"), 4000, 500, 200_000) as usize,
             },
             search: SearchSection {
                 dir: {
@@ -639,7 +710,7 @@ impl RdshSettings {
                 searxng_url: text(&s, "searxng_url", URL_CHARS),
             },
             compact: CompactSection {
-                max_tokens: clamp_u64(num(&c, "max_tokens"), 8000, 500, 200000) as usize,
+                max_tokens: clamp_u64(num(&c, "max_tokens"), 8000, 500, 200_000) as usize,
             },
             sessions: SessionsSection {
                 limit: clamp_u64(num(&ss, "limit"), 20, 1, 100) as usize,
@@ -670,7 +741,7 @@ impl RdshSettings {
                 context_engine: flag(&be, "context_engine", false),
             },
             context: ContextSection {
-                token_budget: clamp_u64(num(&cx, "token_budget"), 4000, 500, 200000) as usize,
+                token_budget: clamp_u64(num(&cx, "token_budget"), 4000, 500, 200_000) as usize,
                 enable_retriever: flag(&cx, "enable_retriever", true),
                 enable_packer: flag(&cx, "enable_packer", true),
                 enable_verifier: flag(&cx, "enable_verifier", true),
@@ -682,6 +753,12 @@ impl RdshSettings {
                 max_code_hits: clamp_u64(num(&cx, "max_code_hits"), 20, 1, 100) as usize,
                 max_sessions: clamp_u64(num(&cx, "max_sessions"), 0, 0, 100) as usize,
                 include_git_diff: flag(&cx, "include_git_diff", true),
+                inject_budget: clamp_u64(num(&cx, "inject_budget"), 1200, 200, 8000) as usize,
+                inject_deadline_ms: clamp_u64(num(&cx, "inject_deadline_ms"), 1200, 100, 10_000)
+                    as usize,
+                inject_sessions: flag(&cx, "inject_sessions", true),
+                inject_session_count: clamp_u64(num(&cx, "inject_session_count"), 2, 0, 10)
+                    as usize,
             },
             extras: ExtrasSection {
                 enable: list(&sec("extras"), "enable", TEXT_CHARS)
@@ -715,7 +792,7 @@ impl RdshSettings {
         out.discord = DiscordSection::from_value(&v["discord"]);
         let t = v.get("tokens").cloned().unwrap_or(serde_json::Value::Null);
         out.tokens.default_budget =
-            clamp_u64(num(&t, "default_budget"), 4000, 500, 200000) as usize;
+            clamp_u64(num(&t, "default_budget"), 4000, 500, 200_000) as usize;
         let s = v.get("search").cloned().unwrap_or(serde_json::Value::Null);
         out.search.dir = {
             let d = text(&s, "dir", PATH_CHARS);
@@ -729,7 +806,7 @@ impl RdshSettings {
         out.search.web_limit = clamp_u64(num(&s, "web_limit"), 10, 1, 100) as usize;
         out.search.searxng_url = text(&s, "searxng_url", URL_CHARS);
         let c = v.get("compact").cloned().unwrap_or(serde_json::Value::Null);
-        out.compact.max_tokens = clamp_u64(num(&c, "max_tokens"), 8000, 500, 200000) as usize;
+        out.compact.max_tokens = clamp_u64(num(&c, "max_tokens"), 8000, 500, 200_000) as usize;
         let ss = v
             .get("sessions")
             .cloned()
@@ -765,7 +842,7 @@ impl RdshSettings {
                 .unwrap_or(serde_json::Value::Null),
         );
         let cx = v.get("context").cloned().unwrap_or(serde_json::Value::Null);
-        out.context.token_budget = clamp_u64(num(&cx, "token_budget"), 4000, 500, 200000) as usize;
+        out.context.token_budget = clamp_u64(num(&cx, "token_budget"), 4000, 500, 200_000) as usize;
         out.context.enable_retriever = flag(&cx, "enable_retriever", true);
         out.context.enable_packer = flag(&cx, "enable_packer", true);
         out.context.enable_verifier = flag(&cx, "enable_verifier", true);
@@ -777,6 +854,12 @@ impl RdshSettings {
         out.context.max_code_hits = clamp_u64(num(&cx, "max_code_hits"), 20, 1, 100) as usize;
         out.context.max_sessions = clamp_u64(num(&cx, "max_sessions"), 0, 0, 100) as usize;
         out.context.include_git_diff = flag(&cx, "include_git_diff", true);
+        out.context.inject_budget = clamp_u64(num(&cx, "inject_budget"), 1200, 200, 8000) as usize;
+        out.context.inject_deadline_ms =
+            clamp_u64(num(&cx, "inject_deadline_ms"), 1200, 100, 10_000) as usize;
+        out.context.inject_sessions = flag(&cx, "inject_sessions", true);
+        out.context.inject_session_count =
+            clamp_u64(num(&cx, "inject_session_count"), 2, 0, 10) as usize;
         out
     }
 
@@ -832,6 +915,10 @@ impl RdshSettings {
                 "max_code_hits": self.context.max_code_hits,
                 "max_sessions": self.context.max_sessions,
                 "include_git_diff": self.context.include_git_diff,
+                "inject_budget": self.context.inject_budget,
+                "inject_deadline_ms": self.context.inject_deadline_ms,
+                "inject_sessions": self.context.inject_sessions,
+                "inject_session_count": self.context.inject_session_count,
             },
         })
     }
@@ -843,6 +930,12 @@ impl RdshSettings {
         if key.is_empty() || key == "all" {
             return Some(v);
         }
+        // set_dotted が受理する旧別名は読み出しでも解決する。解決しないと
+        // 保存に成功した直後の読み戻しが失敗し、成功した set が exit 1 になる。
+        let key = match key {
+            "context.files" => "context.working_files",
+            other => other,
+        };
         let mut cur = &v;
         for part in key.split('.') {
             cur = cur.get(part)?;
@@ -917,6 +1010,16 @@ impl RdshSettings {
             "context.max_code_hits" => self.context.max_code_hits = parse_usize(raw, 20)? as usize,
             "context.max_sessions" => self.context.max_sessions = parse_usize(raw, 0)? as usize,
             "context.include_git_diff" => self.context.include_git_diff = parse_bool(raw)?,
+            "context.inject_budget" => {
+                self.context.inject_budget = parse_usize(raw, 1200)? as usize
+            }
+            "context.inject_deadline_ms" => {
+                self.context.inject_deadline_ms = parse_usize(raw, 1200)? as usize
+            }
+            "context.inject_sessions" => self.context.inject_sessions = parse_bool(raw)?,
+            "context.inject_session_count" => {
+                self.context.inject_session_count = parse_usize(raw, 2)? as usize
+            }
             k if k.starts_with("features.") => {
                 let id = &k["features.".len()..];
                 if feature_def(id).is_none() {
@@ -1059,6 +1162,10 @@ impl RdshSettings {
             "context.max_code_hits(1-100)",
             "context.max_sessions(0-100)",
             "context.include_git_diff(bool)",
+            "context.inject_budget(200-8000)",
+            "context.inject_deadline_ms(100-10000)",
+            "context.inject_sessions(bool)",
+            "context.inject_session_count(0-10)",
         ]
     }
 
@@ -1105,7 +1212,10 @@ fn complement_from_legacy(cfg: &mut RdshSettings, has_context: bool) {
     if has_context {
         return;
     }
-    let raw = std::fs::read_to_string(legacy_context_path()).unwrap_or_default();
+    let raw = read_small_config(&legacy_context_path())
+        .ok()
+        .flatten()
+        .unwrap_or_default();
     if raw.trim().is_empty() {
         return;
     }
@@ -1117,7 +1227,7 @@ fn complement_from_legacy(cfg: &mut RdshSettings, has_context: bool) {
         return;
     }
     let c = &mut cfg.context;
-    let budget = clamp_u64(num(&v, "token_budget"), 4000, 500, 200000) as usize;
+    let budget = clamp_u64(num(&v, "token_budget"), 4000, 500, 200_000) as usize;
     if c.token_budget == ContextSection::default().token_budget && budget != c.token_budget {
         c.token_budget = budget;
     }
@@ -1129,6 +1239,9 @@ fn complement_from_legacy(cfg: &mut RdshSettings, has_context: bool) {
     }
     if c.enable_verifier && !flag(&v, "enable_verifier", true) {
         c.enable_verifier = false;
+    }
+    if c.include_git_diff && !flag(&v, "include_git_diff", true) {
+        c.include_git_diff = false;
     }
     if c.goal.is_empty() {
         c.goal = text(&v, "goal", GOAL_CHARS);
@@ -1153,6 +1266,26 @@ fn complement_from_legacy(cfg: &mut RdshSettings, has_context: bool) {
     if c.max_sessions == ContextSection::default().max_sessions {
         if let Some(n) = num(&v, "max_sessions") {
             c.max_sessions = n.clamp(0, 100) as usize;
+        }
+    }
+    if c.inject_budget == ContextSection::default().inject_budget {
+        if let Some(n) = num(&v, "inject_budget") {
+            c.inject_budget = n.clamp(200, 8000) as usize;
+        }
+    }
+    if c.inject_deadline_ms == ContextSection::default().inject_deadline_ms {
+        if let Some(n) = num(&v, "inject_deadline_ms") {
+            c.inject_deadline_ms = n.clamp(100, 10_000) as usize;
+        }
+    }
+    if c.inject_sessions == ContextSection::default().inject_sessions {
+        if let Some(b) = v.get("inject_sessions").and_then(|x| x.as_bool()) {
+            c.inject_sessions = b;
+        }
+    }
+    if c.inject_session_count == ContextSection::default().inject_session_count {
+        if let Some(n) = num(&v, "inject_session_count") {
+            c.inject_session_count = n.clamp(0, 10) as usize;
         }
     }
 }
@@ -1307,17 +1440,59 @@ fn split_list(s: &str, max_chars: usize) -> Vec<String> {
 mod rdsh_config_tests {
     use super::*;
 
+    #[test]
+    fn bounded_config_reader_accepts_regular_files_and_rejects_oversize() {
+        let dir = std::env::temp_dir().join(format!(
+            "rdsh-config-read-{}-{}",
+            std::process::id(),
+            crate::local_http::random_token().unwrap()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        std::fs::write(&path, "{\"schema\":1}").unwrap();
+        assert_eq!(
+            read_small_config(path.to_str().unwrap())
+                .unwrap()
+                .as_deref(),
+            Some("{\"schema\":1}")
+        );
+        std::fs::write(&path, vec![b'x'; SETTINGS_MAX_BYTES as usize + 1]).unwrap();
+        assert!(read_small_config(path.to_str().unwrap()).is_err());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bounded_config_reader_rejects_fifo_without_waiting_for_a_writer() {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+
+        let dir = std::env::temp_dir().join(format!(
+            "rdsh-config-fifo-{}-{}",
+            std::process::id(),
+            crate::local_http::random_token().unwrap()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let name = CString::new(path.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+        let error = read_small_config(path.to_str().unwrap()).unwrap_err();
+        assert!(error.to_string().contains("not a regular file"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     fn lock() -> std::sync::MutexGuard<'static, ()> {
         static M: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
         M.get_or_init(|| std::sync::Mutex::new(()))
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// DSH_HOME を一時 dir に向けて f を実行する（復元・後片付けつき）。
     fn with_home(tag: &str, f: impl FnOnce(&str)) {
         let _guard = lock();
-        let dir = std::env::temp_dir().join(format!("rdsh-settings-{}-{tag}", std::process::id()));
+        let pid = std::process::id();
+        let dir = std::env::temp_dir().join(format!("rdsh-settings-{pid}-{tag}"));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let prev = std::env::var("DSH_HOME").ok();
@@ -1444,7 +1619,7 @@ mod rdsh_config_tests {
             std::fs::write(
                 &p,
                 serde_json::json!({
-                    "tokens": { "default_budget": 9999999 },
+                    "tokens": { "default_budget": 9_999_999 },
                     "compact": { "max_tokens": 1 },
                     "context": { "token_budget": 10 },
                     "search": { "max": 500, "web_limit": 0 },
@@ -1458,7 +1633,7 @@ mod rdsh_config_tests {
             )
             .unwrap();
             let c = load();
-            assert_eq!(c.tokens.default_budget, 200000);
+            assert_eq!(c.tokens.default_budget, 200_000);
             assert_eq!(c.compact.max_tokens, 500);
             assert_eq!(c.context.token_budget, 500);
             assert_eq!(c.search.max, 100);
@@ -1611,6 +1786,7 @@ mod rdsh_config_tests {
                     "goal": "旧ファイルのgoal",
                     "files": ["src/tokens.rs"],
                     "open_tasks": ["packing評価"],
+                    "include_git_diff": false,
                 })
                 .to_string(),
             )
@@ -1623,6 +1799,8 @@ mod rdsh_config_tests {
             assert_eq!(c.context.goal, "旧ファイルのgoal");
             assert_eq!(c.context.working_files, vec!["src/tokens.rs".to_string()]);
             assert_eq!(c.context.open_tasks, vec!["packing評価".to_string()]);
+            // 旧ファイルの opt-out を無言で無視しない（既定 true のときだけ補完する）。
+            assert!(!c.context.include_git_diff);
             assert!(!std::path::Path::new(&settings_path()).exists());
 
             std::fs::write(
@@ -1663,6 +1841,13 @@ mod rdsh_config_tests {
         c.set_dotted("context.working_files", "src/a.rs, src/b.rs")
             .unwrap();
         assert_eq!(c.context.working_files.len(), 2);
+        // 旧別名 context.files は set が受理するので get でも解決できること
+        // （解決しないと main.rs の読み戻しが失敗し、保存済みなのに exit 1 になる）。
+        c.set_dotted("context.files", "src/c.rs").unwrap();
+        assert_eq!(
+            c.get_dotted("context.files").unwrap(),
+            serde_json::json!(["src/c.rs"])
+        );
         c.set_dotted("serve.port", "38080").unwrap();
         assert_eq!(c.serve.port, 38080);
         assert!(c.set_dotted("unknown.key", "1").is_err());
@@ -1677,5 +1862,36 @@ mod rdsh_config_tests {
         c.reset_dotted("all").unwrap();
         assert_eq!(c, RdshSettings::default());
         assert!(c.reset_dotted("unknown.key").is_err());
+    }
+
+    #[test]
+    fn feature_enabled_precedence_and_defaults() {
+        let mut c = RdshSettings::default();
+        // 既定値: discord は既定 on、sound は既定 off、未知 id は false。
+        assert!(feature_enabled(&c, "discord"));
+        assert!(!feature_enabled(&c, "sound"));
+        assert!(!feature_enabled(&c, "no-such-feature"));
+        assert!(!feature_is_explicit(&c, "discord"));
+
+        // features.<id> が未記載なら旧キーを見る。
+        c.discord.enabled = false;
+        assert!(!feature_enabled(&c, "discord"));
+        c.extras.enable = vec!["search-web".to_string()];
+        assert!(feature_enabled(&c, "search-web"));
+        c.beta.context_engine = true;
+        assert!(feature_enabled(&c, "context_engine"));
+        assert_eq!(enabled_extras(&c), vec!["search-web".to_string()]);
+
+        // 明示 features.<id> が最優先で、旧キーを上書きする。
+        c.features.values.insert("discord".to_string(), true);
+        c.features.values.insert("search-web".to_string(), false);
+        c.features
+            .values
+            .insert("context_engine".to_string(), false);
+        assert!(feature_enabled(&c, "discord"));
+        assert!(feature_is_explicit(&c, "discord"));
+        assert!(!feature_enabled(&c, "search-web"));
+        assert!(!feature_enabled(&c, "context_engine"));
+        assert!(enabled_extras(&c).is_empty());
     }
 }
