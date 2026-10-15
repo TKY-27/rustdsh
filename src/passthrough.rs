@@ -1,7 +1,5 @@
-//! Env overrides for drop-in `dsh` mode (see install.sh --as-dsh).
-//! RDSH_PASSTHROUGH=1 disables slim env; RDSH_DRY_RUN=1 only prints the exec.
-use crate::executable::is_executable as is_executable_candidate;
-
+/// Env overrides for drop-in `dsh` mode (see install.sh --as-dsh).
+/// RDSH_PASSTHROUGH=1 disables slim env; RDSH_DRY_RUN=1 only prints the exec.
 pub fn env_passthrough() -> bool {
     std::env::var("RDSH_PASSTHROUGH").is_ok_and(|v| v == "1")
 }

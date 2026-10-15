@@ -48,9 +48,7 @@ mod context_hook;
 mod cost_ledger;
 mod deps;
 mod desktop;
-mod distro;
 mod dsh_args;
-mod executable;
 mod file_lock;
 mod file_security;
 mod guard;
@@ -472,12 +470,6 @@ enum DesktopAction {
         /// Also install rdsh-compute (resident compute bridge)
         #[arg(long = "compute")]
         compute: bool,
-        /// Skip the default sound notifications (github:cwd514/dsh-sound-notifications)
-        #[arg(long = "no-sound")]
-        no_sound: bool,
-        /// Skip the default Git panel (github:yugapor/dsh-gitview)
-        #[arg(long = "no-gitview")]
-        no_gitview: bool,
         /// Extra package spec to add (name, git URL, or path; repeatable)
         #[arg(long = "package")]
         package: Vec<String>,
@@ -489,7 +481,7 @@ enum DesktopAction {
     },
     /// Exit nonzero unless the desktop profile has the required plugin enabled
     Verify {
-        /// Plugin that must be enabled (repeatable; default: rdsh-settings)
+        /// Plugin that must be enabled (repeatable; default: rdsh-settings and rdsh-translation)
         #[arg(long = "require")]
         require: Vec<String>,
         #[arg(long = "json")]
@@ -1181,21 +1173,17 @@ fn main() {
                 dry_run,
                 plugins_dir,
                 compute,
-                no_sound,
-                no_gitview,
                 package,
                 no_bundled,
                 json: inner,
-            }) => desktop::cmd_install(desktop::InstallOptions {
-                plugins_dir,
-                packages: package,
+            }) => desktop::cmd_install(
+                plugins_dir.as_deref(),
+                &package,
                 no_bundled,
                 dry_run,
                 compute,
-                no_sound: no_sound || !rdsh_config::feature_enabled(&cfg, "sound"),
-                no_gitview: no_gitview || !rdsh_config::feature_enabled(&cfg, "gitview"),
-                json: json || inner,
-            }),
+                json || inner,
+            ),
             Some(DesktopAction::Verify {
                 require,
                 json: inner,
@@ -1724,10 +1712,6 @@ fn doctor() -> anyhow::Result<()> {
                 enabled.join(", ")
             }
         ));
-    }
-    // Host-specific optional dependencies (rpm-based hosts only).
-    for line in distro::doctor_notes() {
-        say(line);
     }
     say(format!("[rdsh] slim env: {}", slim::describe()));
     say(format!("[rdsh] auth: {}", auth::summary_line()));

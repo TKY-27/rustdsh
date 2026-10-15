@@ -16,6 +16,11 @@ Format follows Keep a Changelog, versioning follows Semantic Versioning.
   never on an aborted turn, and never when a tool result is still owed. It is
   installed by `./plugins/install.sh` and `rdsh features off answer_guard`
   disables it. See [README](plugins/rdsh-answer-guard/README.md).
+- 日本語以外で確定したテキストのみの回答を、Web UI のボタン1つで和訳して履歴上
+  の表示を置き換える `plugins/rdsh-translation` を同梱しました。元の回答は
+  append-only のセッションログと「元の回答を表示」に残り、`/ja <message-id>` で
+  も翻訳できます。かな比率のしきい値は `rdsh.json` の `translation.kana_threshold`
+  で調整でき、`./plugins/install.sh` が既定で導入します（issue #448）。
 
 ### Fixed
 

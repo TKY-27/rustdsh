@@ -566,7 +566,6 @@ export async function startDashboard(options) {
               "--project",
               project.root,
             ],
-            env: { RDSH_DASHBOARD_HOME: path.resolve(stateHome()) },
           },
         },
       });
@@ -769,32 +768,6 @@ export async function startDashboard(options) {
       for (const response of live.keys())
         response.write(`event: changed\ndata: ${store.value.revision}\n\n`);
       for (const { mcp } of sessions.values()) void mcp.notify();
-      return result;
-    });
-    updateQueue = task.catch(() => {});
-    return task;
-  }
-  // rdsh-ui/1: the agent presents a surface through MCP, and a human action
-  // returns to the same session as feedback. Both go through updateQueue so
-  // live views and MCP subscribers see one ordered revision.
-  async function mutateUiSurface(input) {
-    const task = updateQueue.then(async () => {
-      const result = await store.mutateUiSurface(input);
-      for (const response of live)
-        response.write("event: changed\ndata: " + store.value.revision + "\n\n");
-      for (const { mcp } of sessions.values()) void mcp.notify();
-      return result;
-    });
-    updateQueue = task.catch(() => {});
-    return task;
-  }
-  async function mutateUiAction(input) {
-    const task = updateQueue.then(async () => {
-      const result = await store.mutateUiAction(input);
-      for (const response of live)
-        response.write("event: changed\ndata: " + store.value.revision + "\n\n");
-      for (const { mcp } of sessions.values()) void mcp.notify();
-      void eventsHub.flush().catch(() => {});
       return result;
     });
     updateQueue = task.catch(() => {});
@@ -1018,29 +991,6 @@ export async function startDashboard(options) {
         browserAccess?.role === "device"
       )
         return json(res, 403, { error: "Harness UI requires its owner session" });
-        (route === "/" ||
-          route === "/app.mjs" ||
-          route === "/deep-links.mjs" ||
-          route === "/deep-link-ui.mjs" ||
-          route === "/human-annotations-ui.mjs" ||
-          route === "/annotation-identifiers.mjs" ||
-          route === "/observations.mjs" ||
-          route === "/reports-view.mjs" ||
-          route === "/question-cards-ui.mjs" ||
-          route === "/model-catalog-ui.mjs" ||
-          route === "/project-overview.mjs" ||
-          route === "/connection-diagnostics-ui.mjs" ||
-          route === "/github-status-ui.mjs" ||
-          route === "/answer-applications-ui.mjs" ||
-          route === "/instruction-queue-ui.mjs" ||
-          route === "/cost-ledger-ui.mjs" ||
-          route === "/budget-ui.mjs" ||
-          route === "/notifications-ui.mjs" ||
-          route === "/task-outcomes-ui.mjs" ||
-          route === "/observed-cli-ui.mjs" ||
-          route === "/favicon.ico" ||
-          route === "/icon.png" ||
-          route === "/icon.svg");
       if (
         !publicAsset &&
         !adminAuthorized &&
@@ -1792,21 +1742,7 @@ export async function startDashboard(options) {
             return json(res, 403, {
               error: "This credential cannot perform that operation",
             });
-          const body = await readBody(req);
-          if (operation === "ui_surface")
-            return json(res, 200, await mutateUiSurface(body));
-          return json(res, 200, await mutate(operation, body));
-        }
-        if (route === "/api/ui/actions") {
-          // The browser returns a human action to the same session. The action
-          // id came from the server, and no operation is executed here.
-          if (req.method !== "POST")
-            return json(res, 405, { error: "Method not allowed" });
-          if (!humanAuthorized)
-            return json(res, 403, {
-              error: "Dashboard owner browser required",
-            });
-          return json(res, 200, await mutateUiAction(await readBody(req, 65536)));
+          return json(res, 200, await mutate(operation, await readBody(req)));
         }
         if (req.method === "GET" && route === "/api/live") {
           res.writeHead(200, {

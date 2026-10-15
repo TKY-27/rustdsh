@@ -97,13 +97,8 @@ pub const FEATURES: &[FeatureDef] = &[
     },
     FeatureDef {
         id: "sound",
-        default: true,
-        summary: "allow the DSH sound notifications install (installer SOUND=0 to skip)",
-    },
-    FeatureDef {
-        id: "gitview",
-        default: true,
-        summary: "allow the DSH git panel install (installer GITVIEW=0 to skip)",
+        default: false,
+        summary: "allow the DSH sound notifications install (installer SOUND=1)",
     },
     FeatureDef {
         id: "serve",
