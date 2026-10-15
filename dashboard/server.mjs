@@ -40,6 +40,7 @@ import { HumanAnnotationStore } from "./human-annotations.mjs";
 import { inspectGitHubStatus } from "./github-status.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
+const handoffMaximum = 1024 * 1024;
 const equal = (a, b) =>
   typeof a === "string" &&
   typeof b === "string" &&
@@ -422,7 +423,7 @@ export async function startDashboard(options) {
       if (error.code === "ENOENT") return null;
       throw error;
     }
-    if (bytes.length > 1024 * 1024)
+    if (bytes.length > handoffMaximum)
       throw new Error("Stored handoff packet exceeds the size limit");
     const packet = JSON.parse(bytes.toString("utf8"));
     if (!isHandoffPacket(packet))
@@ -455,6 +456,11 @@ export async function startDashboard(options) {
       const state = await visibleState();
       const acceptance = await inspectAcceptance(taskId);
       const packet = buildHandoff(state, taskId, acceptance);
+      packet.snapshot_revision = state.revision + 1;
+      if (
+        Buffer.byteLength(JSON.stringify(packet, null, 2) + "\n") > handoffMaximum
+      )
+        throw new Error("Handoff packet exceeds the size limit");
       const committed = await store.recordHandoff();
       packet.snapshot_revision = committed.revision;
       await writeJson(path.join(project.directory, "handoff.json"), packet);
