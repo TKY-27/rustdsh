@@ -131,7 +131,9 @@ test("legacy task shape retains observation metadata and omitted outcome fields 
     status: "done",
   });
   assert.equal(Object.hasOwn(legacy, "task_outcomes"), false);
-  assert.equal(tools.length, 6);
+  // Keep a sanity check on the task tool itself; a hardcoded total makes this
+  // test fail whenever an unrelated tool is registered in mcp.mjs.
+  assert.ok(tools.some((tool) => tool.name === "dashboard_upsert_task"));
 });
 test("reported done and partial or operator-reported passes never imply a verified full check", async (t) => {
   const f = await setup(t);
