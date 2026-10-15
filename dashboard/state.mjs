@@ -261,10 +261,11 @@ function validateStoredState(value, project) {
 }
 
 export class ProjectStore {
-  constructor(project, value, integrityKey) {
+  constructor(project, value, { integrityKey, instructionQueueWorker } = {}) {
     this.project = project;
     this.value = value;
     this.integrityKey = integrityKey;
+    this.instructionQueueWorker = instructionQueueWorker || null;
     this.historyIds = validateRestoredHistory(value);
     this.protectedHistory = freezeHistory(value.history_backups);
   }
@@ -274,7 +275,7 @@ export class ProjectStore {
     if (history_backups !== undefined) next.history_backups = history_backups;
     return next;
   }
-  static async open(project) {
+  static async open(project, options = {}) {
     let value;
     const stateFile = path.join(project.directory, "state.json");
     let stateExists = true;
@@ -315,7 +316,7 @@ export class ProjectStore {
       await writeStateIntegrityMarker(project);
       if (migration)
         await fs.rm(stateIntegrityMigrationPath(project), { force: true });
-      return new ProjectStore(project, value, keyState.key);
+      return new ProjectStore(project, value, { ...options, integrityKey: keyState.key });
     }
 
     if (stateExists) {
@@ -340,7 +341,7 @@ export class ProjectStore {
       await writeJson(stateFile, value);
       await writeStateIntegrityMarker(project);
       await fs.rm(stateIntegrityMigrationPath(project), { force: true });
-      return new ProjectStore(project, value, keyState.key);
+      return new ProjectStore(project, value, { ...options, integrityKey: keyState.key });
     }
 
     if (migration)
@@ -352,7 +353,7 @@ export class ProjectStore {
     });
     validateStoredState(value, project);
     sealState(value, keyState.key);
-    return new ProjectStore(project, value, keyState.key);
+    return new ProjectStore(project, value, { ...options, integrityKey: keyState.key });
   }
   async mutate(operation, input, authority = "agent") {
     const next = this.clone();
@@ -406,7 +407,7 @@ export class ProjectStore {
     return this.commit(next, operation, input);
   }
   async mutateReply(operation, input, context) {
-    const next = this.clone();
+    let next = this.clone();
     const handlers = {
       register: registerReplyConsumer,
       ack: applyReplyAck,
@@ -414,9 +415,65 @@ export class ProjectStore {
       instruction_resolve: resolveInstruction,
       control: applyInstructionControl,
     };
-    const result = handlers[operation](next, input, context);
+    const nativeOperations = {
+      instruction_submit: "submit",
+      instruction_resolve: "resolve",
+      control: "control",
+    };
+    let result;
+    let workerValidatedState = false;
+    const nativeOperation = nativeOperations[operation];
+    if (this.instructionQueueWorker && nativeOperation) {
+      let response;
+      try {
+        response = await this.instructionQueueWorker.request({
+          operation: nativeOperation,
+          // ProjectStore.open() and every mutation path validate this state.
+          // Rust still validates the returned state before acknowledging it.
+          prevalidated: true,
+          state: {
+            project: { id: next.project.id },
+            feedback: next.feedback,
+            answer_applications: next.answer_applications,
+            ...(Object.hasOwn(next, "instructions")
+              ? { instructions: next.instructions }
+              : {}),
+          },
+          input,
+          context,
+        });
+      } catch (error) {
+        if (error.status !== 413) throw error;
+        // A valid project can outgrow the bounded native transport. Preserve
+        // the existing JS implementation for that request rather than making
+        // a previously valid queue impossible to reconcile.
+        result = handlers[operation](next, input, context);
+      }
+      if (response) {
+        if (
+          response.operation !== nativeOperation ||
+          !response.state ||
+          typeof response.state !== "object" ||
+          Array.isArray(response.state) ||
+          !response.state.instructions ||
+          typeof response.state.instructions !== "object" ||
+          Array.isArray(response.state.instructions) ||
+          !Object.hasOwn(response, "result")
+        ) {
+          throw Object.assign(
+            new Error("Rust instruction worker returned an invalid response"),
+            { status: 500 },
+          );
+        }
+        workerValidatedState = response.state_validated === true;
+        next.instructions = response.state.instructions;
+        result = response.result;
+      }
+    } else {
+      result = handlers[operation](next, input, context);
+    }
     validateAnswerApplications(next);
-    validateInstructions(next);
+    if (!workerValidatedState) validateInstructions(next);
     await this.commit(next);
     return structuredClone(result);
   }
