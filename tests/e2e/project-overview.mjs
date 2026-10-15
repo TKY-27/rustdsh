@@ -6,6 +6,7 @@ import path from "node:path";
 import { chromium } from "playwright";
 import { identity, ProjectStore } from "../../dashboard/state.mjs";
 import { startDashboard } from "../../dashboard/server.mjs";
+import { writeSealedState } from "../../dashboard/test/sealed-state.mjs";
 
 async function freePort() {
   const server = net.createServer();
@@ -78,20 +79,12 @@ try {
     path.join(included.root, "reports", "release.md"),
     "artifact body must not be indexed",
   );
-  await fs.mkdir(included.directory, { recursive: true });
-  await fs.writeFile(
-    path.join(included.directory, "state.json"),
-    JSON.stringify(includedStore.value),
-  );
+  await writeSealedState(included, includedStore.value);
   const notIncludedStore = await ProjectStore.open(notIncluded);
   notIncludedStore.value.tasks = [
     { id: "T2", title: "Hidden fixture", status: "blocked" },
   ];
-  await fs.mkdir(notIncluded.directory, { recursive: true });
-  await fs.writeFile(
-    path.join(notIncluded.directory, "state.json"),
-    JSON.stringify(notIncludedStore.value),
-  );
+  await writeSealedState(notIncluded, notIncludedStore.value);
 
   includedDashboard = await startDashboard({
     project: included,

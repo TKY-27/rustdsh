@@ -32,6 +32,7 @@ const expectedConsoleErrors = new Set([
   JSON.stringify({ case_id: 'desktop.offline-retry', path: '/api/update/answer', text: 'Failed to load resource: net::ERR_INTERNET_DISCONNECTED' }),
   JSON.stringify({ case_id: 'desktop.offline-retry', path: '/api/state', text: 'Failed to load resource: net::ERR_INTERNET_DISCONNECTED' }),
   JSON.stringify({ case_id: 'desktop.offline-retry', path: '/api/model-routing', text: 'Failed to load resource: net::ERR_INTERNET_DISCONNECTED' }),
+  JSON.stringify({ case_id: 'desktop.offline-retry', path: '/api/plans', text: 'Failed to load resource: net::ERR_INTERNET_DISCONNECTED' }),
   JSON.stringify({ case_id: 'desktop.lost-response', path: '/api/update/answer', text: 'Failed to load resource: net::ERR_FAILED' }),
 ]);
 

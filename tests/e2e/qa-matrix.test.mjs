@@ -74,6 +74,11 @@ test('model routing offline errors require the exact deliberate case, path and m
     text: 'Failed to load resource: net::ERR_INTERNET_DISCONNECTED',
   };
   assert.equal(classifyBrowserConsoleError(offline), 'expected');
+  assert.equal(
+    classifyBrowserConsoleError({ ...offline, path: '/api/plans' }),
+    'expected',
+    'the dashboard also refreshes the execution plan while the browser is offline',
+  );
   for (const other of [
     { ...offline, case_id: 'desktop.sse-draft' },
     { ...offline, case_id: null },

@@ -197,8 +197,11 @@ try{
  passQaCase('desktop.sse-draft','browser-results.json#qa_results.desktop.sse-draft');
 
  beginQaCase('desktop.command-palette');
+ await projectPage.locator('#question-Q1 textarea').focus();
+ assert.equal(await projectPage.evaluate(()=>document.activeElement===document.querySelector('#question-Q1 textarea')),true);
  await projectPage.keyboard.press('Control+k');
  assert.equal(await projectPage.locator('#palette').evaluate(e=>e.open),false,'Ctrl+K must not steal answer-form focus');
+ assert.equal(await projectPage.evaluate(()=>document.activeElement===document.querySelector('#question-Q1 textarea')),true,'Ctrl+K must keep the answer-form focus');
  await projectPage.locator('#palette-toggle').click();
  const palette=projectPage.locator('#palette'),paletteSearch=projectPage.locator('#palette-search');
  await palette.waitFor({state:'visible'});
