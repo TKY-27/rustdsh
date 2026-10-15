@@ -22,8 +22,8 @@ const dir = await mkdtemp(join(resolve("node_modules"), "rdsh-native-proof-"));
 const source = await readFile(runtime.mcpPath, "utf8");
 const observations = {
   schema: 1,
-  nativeVersion: "0.2.0-rc.2",
-  sdkVersion: "2.0.0",
+  nativeVersion: runtime.nativeVersion,
+  sdkVersion: runtime.sdkVersion,
   originalSha256: sha256(source),
   patchedSha256: sha256(patchSource(source)),
   modelCalls: 0,
