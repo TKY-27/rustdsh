@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { ProjectStore } from "./state.mjs";
+import { ProjectStore, resealStoredState } from "./state.mjs";
 
 const migrationSchema = 1;
 const migrationDirectory = "state-migrations";
@@ -60,17 +60,17 @@ function decodeState(bytes, project) {
   return state;
 }
 
-function migrationOutput(state) {
+async function migrationOutput(project, state) {
   check(state.schema === 1, "schema_not_supported");
   check(
     state.changes === undefined || Array.isArray(state.changes),
     "legacy_changes_invalid",
   );
-  return {
+  return resealStoredState(project, {
     ...structuredClone(state),
     schema: 2,
     changes: structuredClone(state.changes ?? []),
-  };
+  });
 }
 
 async function writeAtomic(file, bytes) {
@@ -215,10 +215,10 @@ async function writeSnapshot(file, sourceBytes, sourceHash) {
   }
 }
 
-function makePlan(project, sourceBytes, source) {
+async function makePlan(project, sourceBytes, source) {
   const sourceHash = digest(sourceBytes);
   const id = migrationId(sourceHash);
-  const output = migrationOutput(source);
+  const output = await migrationOutput(project, source);
   const targetBytes = Buffer.from(JSON.stringify(output, null, 2) + "\n");
   return {
     schema: migrationSchema,
@@ -268,7 +268,7 @@ export async function dryRunStateMigration(project) {
       changes: [],
     };
   check(source.schema === 1, "schema_not_supported");
-  return publicPlan(makePlan(project, sourceBytes, source));
+  return publicPlan(await makePlan(project, sourceBytes, source));
 }
 
 function publicPlan(plan) {
@@ -334,7 +334,7 @@ export async function applyStateMigration(project) {
       recovery_status: "schema_2_already_present_no_conversion_repeated",
       changes: [],
     };
-  const plan = makePlan(project, initialBytes, initial);
+  const plan = await makePlan(project, initialBytes, initial);
   const unlock = await acquireLock(filePaths.lock);
   try {
     await refuseLiveWriters(filePaths.serverLock);

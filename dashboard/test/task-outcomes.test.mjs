@@ -10,6 +10,7 @@ import { tools } from "../mcp.mjs";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { createOutcomeProject } from "./fixtures/task-outcomes-project.mjs";
+import { readLocalRuntime } from "../private-runtime.mjs";
 
 async function setup(t) {
   const directory = await fs.mkdtemp(
@@ -61,8 +62,7 @@ test("existing HTTP MCP task publication accepts outcome metadata without adding
   assert.deepEqual(
     advertised.map((tool) => tool.name).sort(),
     tools.map((tool) => tool.name).sort(),
-  );
-  assert.ok(
+  );  assert.ok(
     advertised.find((tool) => tool.name === "dashboard_upsert_task").inputSchema
       .properties.outcome,
   );
@@ -134,6 +134,7 @@ test("legacy task shape retains observation metadata and omitted outcome fields 
   // Keep a sanity check on the task tool itself; a hardcoded total makes this
   // test fail whenever an unrelated tool is registered in mcp.mjs.
   assert.ok(tools.some((tool) => tool.name === "dashboard_upsert_task"));
+  assert.equal(tools.filter((tool) => /outcome/i.test(tool.name)).length, 0);
 });
 test("reported done and partial or operator-reported passes never imply a verified full check", async (t) => {
   const f = await setup(t);
@@ -246,9 +247,7 @@ test("outcome inspection requires the project credential, exposes safe fields, a
     tailscale: false,
   });
   t.after(() => dashboard.close());
-  const runtime = JSON.parse(
-    await fs.readFile(path.join(f.project.directory, "runtime.json"), "utf8"),
-  );
+  const runtime = await readLocalRuntime(f.project.directory);
   const url = dashboard.localUrl + "api/task-outcomes?task_id=goal";
   assert.equal((await fetch(url)).status, 401);
   assert.equal(

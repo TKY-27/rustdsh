@@ -11,6 +11,7 @@ import { nativeModelBoundary } from "../model-runtime.mjs";
 import { modelRoutingViews } from "../model-routing-view.mjs";
 import { renderModelRouting } from "../model-routing-ui.mjs";
 import { startDashboard } from "../server.mjs";
+import { readRuntime } from "./owner-runtime.mjs";
 const selected = {
   provider: "fixture-provider",
   model: "model-A",
@@ -248,9 +249,7 @@ test("the human HTTP view rejects unauthenticated and MCP producers, publishes n
     tailscale: false,
   });
   t.after(() => server.close());
-  const runtime = JSON.parse(
-    await fs.readFile(path.join(f.project.directory, "runtime.json")),
-  );
+  const runtime = await readRuntime(f.project.directory);
   const endpoint = server.localUrl + "api/model-routing";
   for (const headers of [{}, { authorization: `Bearer ${runtime.mcp_token}` }])
     assert.equal((await fetch(endpoint, { headers })).status, 401);
