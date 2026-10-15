@@ -227,7 +227,8 @@ function sanitizeSettings(j) {
       slim: bool(g.slim, dg.slim),
       passthrough: bool(g.passthrough, dg.passthrough),
       dry_run: bool(g.dry_run, dg.dry_run),
-      default_profile: str(g.default_profile, 500, dg.default_profile),
+      // Rust 側の PROFILE_CHARS と同じ上限（src/rdsh_config.rs）。
+      default_profile: str(g.default_profile, 200, dg.default_profile),
     },
     tokens: {
       default_budget: clampInt(tk.default_budget, 500, 200000, d.tokens.default_budget),
@@ -236,7 +237,8 @@ function sanitizeSettings(j) {
       dir: str(se.dir, 300, d.search.dir),
       max: clampInt(se.max, 1, 100, d.search.max),
       web_limit: clampInt(se.web_limit, 1, 100, d.search.web_limit),
-      searxng_url: str(se.searxng_url, 500, d.search.searxng_url),
+      // Rust 側の URL_CHARS と同じ上限（src/rdsh_config.rs）。
+      searxng_url: str(se.searxng_url, 2000, d.search.searxng_url),
     },
     compact: {
       max_tokens: clampInt(co.max_tokens, 500, 200000, d.compact.max_tokens),
