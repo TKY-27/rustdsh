@@ -165,16 +165,17 @@ mkdir -p "$ZS/dsh/sessions/p/s1" "$ZS/dsh/sessions/p/s2" "$ZS/shim"
 # s2: frame with no content size (window byte, no FCS), raw last block of 4 bytes.
 { printf '\050\265\057\375\000\000\041\000\000'; printf 'abcd'; } > "$ZS/dsh/sessions/p/s2/a.zstd"
 # A zstd on PATH that logs its arguments: `--version` succeeds (the CLI counts as
-# available), anything else fails. Only the size-less s2 may be handed to `-dc`.
-printf '#!/bin/sh\necho "$*" >> "%s/calls"\ncase "$1" in --version) echo "zstd shim"; exit 0 ;; esac\nexit 1\n' "$ZS" > "$ZS/shim/zstd"
+# available), decompression records stdin and fails. Only the size-less s2 may
+# reach `-dc`; the securely opened file is passed on stdin, never reopened by path.
+printf '#!/bin/sh\necho "$*" >> "%s/calls"\ncase "$1" in --version) echo "zstd shim"; exit 0 ;; -dc) cat > "%s/stdin" ;; esac\nexit 1\n' "$ZS" "$ZS" > "$ZS/shim/zstd"
 chmod +x "$ZS/shim/zstd"
 # RDSH_TOKENS_CACHE=0: results must come from the headers, not from a cache hit.
 PATH="$ZS/shim:$PATH" RDSH_TOKENS_CACHE=0 DSH_HOME="$ZS/dsh" "$BIN" sessions --tokens --project p --limit 5 > "$ZS/out" 2> "$ZS/err"
 if grep "p/s1" "$ZS/out" | grep -q "~50tok " && ! grep "p/s1" "$ZS/out" | grep -q "?"; then ok "sessions --tokens exact from FCS (no ? marker)"; else echo "FAIL(output): sessions --tokens FCS"; cat "$ZS/out"; exit 1; fi
 if grep "p/s2" "$ZS/out" | grep -q "?"; then ok "sessions --tokens marks unknown size with ?"; else echo "FAIL(output): sessions --tokens ? marker"; cat "$ZS/out"; exit 1; fi
 if grep -q -- "--version" "$ZS/calls" 2>/dev/null; then ok "sessions --tokens probes the zstd CLI"; else echo "FAIL(output): zstd shim never probed with --version"; exit 1; fi
-if grep -- "-dc" "$ZS/calls" | grep -q "/p/s1/"; then echo "FAIL: zstd -dc spawned for a frame with a content size"; cat "$ZS/calls"; exit 1; else ok "no zstd -dc for frames with a content size"; fi
-if grep -- "-dc" "$ZS/calls" | grep -q "/p/s2/"; then ok "zstd -dc only for the frame without a content size"; else echo "FAIL: zstd -dc not used for s2"; cat "$ZS/calls" 2>/dev/null; exit 1; fi
+if [ "$(grep -c -- '^-dc$' "$ZS/calls")" = 1 ] && [ "$(grep -c -- '-dc' "$ZS/calls")" = 1 ]; then ok "one path-free zstd -dc call"; else echo "FAIL: expected one path-free zstd -dc call"; cat "$ZS/calls"; exit 1; fi
+if cmp -s "$ZS/dsh/sessions/p/s2/a.zstd" "$ZS/stdin"; then ok "only the frame without a content size reaches zstd stdin"; else echo "FAIL: zstd stdin differs from the size-less s2 frame"; exit 1; fi
 if grep -q "zstd CLI not found" "$ZS/err"; then echo "FAIL: zstd note printed although the CLI is available"; exit 1; else ok "no zstd note when the CLI exists"; fi
 rm -f "$ZS/shim/zstd"
 PATH="$ZS/shim" RDSH_TOKENS_CACHE=0 DSH_HOME="$ZS/dsh" "$BIN" sessions --tokens --project p --limit 5 > "$ZS/out" 2> "$ZS/err"

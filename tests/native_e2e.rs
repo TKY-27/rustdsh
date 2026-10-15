@@ -174,8 +174,16 @@ fn legacy_cache_cannot_promote_an_old_estimate_to_exact() {
     )
     .unwrap();
     let rows = f.sessions();
-    assert_eq!(rows["sessions"][0]["tokens"], 2048);
-    assert_eq!(rows["sessions"][0]["tokens_exact"], true);
+    if cfg!(unix) {
+        assert_eq!(rows["sessions"][0]["tokens"], 2048);
+        assert_eq!(rows["sessions"][0]["tokens_exact"], true);
+    } else {
+        // Without a safe beneath-directory open, use a fresh inexact estimate.
+        // The legacy cache's decompressed size must not become an exact result.
+        assert_eq!(rows["sessions"][0]["tokens"], metadata.len() / 4);
+        assert_ne!(rows["sessions"][0]["tokens"], 1024);
+        assert_eq!(rows["sessions"][0]["tokens_exact"], false);
+    }
 }
 
 #[test]

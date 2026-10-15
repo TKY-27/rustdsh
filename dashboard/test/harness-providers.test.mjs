@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
@@ -172,6 +173,72 @@ test(
     }
   },
 );
+
+test("readiness settles during release without an unhandled rejection or premature cleanup", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "rdsh-provider-early-ready-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const providerUrl = new URL("../harness-providers.mjs", import.meta.url).href;
+  const harnessUrl = new URL("../harness.mjs", import.meta.url).href;
+  const script = `
+    import assert from 'node:assert/strict';
+    import { EventEmitter } from 'node:events';
+    import { PassThrough } from 'node:stream';
+    import { mock } from 'node:test';
+    const { resolveHarnessProvider } = await import(${JSON.stringify(providerUrl)});
+    const realProvider = resolveHarnessProvider({ command: ['unused'] });
+    let scenario;
+    mock.module(${JSON.stringify(providerUrl)}, { namedExports: {
+      resolveHarnessProvider: () => ({ ...realProvider,
+        start: async ({ owner_id }) => {
+          const child = new EventEmitter();
+          child.pid = process.pid;
+          child.stdout = new PassThrough(); child.stderr = new PassThrough();
+          scenario.child = child;
+          return { child, descriptor: { owner_id, kind: 'windows_job',
+            kernel_id: 'early-readiness-fixture', root_identity: null, root_pid: process.pid },
+            release: async () => {
+              if (scenario.readyFails) child.emit('exit', 127);
+              else child.stdout.write('dsh web: http://127.0.0.1:3081/\\n');
+              await new Promise(resolve => setTimeout(resolve, 30));
+              scenario.released = true;
+              if (scenario.releaseFails) throw scenario.releaseError;
+            } };
+        },
+        stop: async () => {
+          assert.equal(scenario.released, true, 'release must settle before cleanup');
+          scenario.stops++;
+          return { confirmed: true, status: 'exit_confirmed' };
+        },
+      }),
+    } });
+    const { startHarness } = await import(${JSON.stringify(harnessUrl)});
+    const root = process.argv[1];
+    for (const [index, [readyFails, releaseFails]] of [[true, false], [true, true], [false, true], [false, false]].entries()) {
+      scenario = { readyFails, releaseFails, released: false, stops: 0, releaseError: new Error('release refused') };
+      const launch = startHarness(3081, 38081, { command: ['unused'], project: { id: 'early-ready-' + index, directory: root + '/state-' + index } });
+      if (readyFails || releaseFails) {
+        await assert.rejects(launch, error => releaseFails ? error === scenario.releaseError : /Harness exited with code 127/.test(error.message));
+      } else {
+        const handle = await launch;
+        assert.equal(handle.url.port, '3081');
+        assert.equal(scenario.released, true);
+        assert.equal(scenario.stops, 0);
+        await handle.stop();
+      }
+      assert.equal(scenario.stops, 1);
+      scenario.child.stdout.destroy(); scenario.child.stderr.destroy();
+    }
+    console.log('early-readiness: 4 cases passed');
+  `;
+  const env = Object.fromEntries(
+    ["PATH", "SystemRoot", "WINDIR", "COMSPEC", "TEMP", "TMP"].filter((key) => process.env[key]).map((key) => [key, process.env[key]]),
+  );
+  Object.assign(env, { HOME: root, USERPROFILE: root, DSH_HOME: path.join(root, "dsh") });
+  const output = execFileSync(process.execPath, [
+    "--experimental-test-module-mocks", "--unhandled-rejections=strict", "--input-type=module", "--eval", script, root,
+  ], { encoding: "utf8", timeout: 10_000, windowsHide: true, env });
+  assert.match(output, /early-readiness: 4 cases passed/);
+});
 
 test("live Windows+WSL provider starts, becomes ready, stops by owned scope, and restarts", {
   skip: wslSmokeSkip,

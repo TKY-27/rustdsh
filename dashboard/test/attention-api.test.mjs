@@ -15,6 +15,7 @@ import {
 } from "@modelcontextprotocol/server";
 import { identity } from "../state.mjs";
 import { startDashboard } from "../server.mjs";
+import { tools } from "../mcp.mjs";
 
 async function freePort() {
   const server = net.createServer();
@@ -178,12 +179,19 @@ test("attention metadata has the same durable contract on HTTP, legacy MCP, stdi
   ];
 
   await t.test("MCP catalogs expose the optional metadata without changing tool names", async () => {
+    const registeredNames = tools.map((tool) => tool.name).sort();
     for (const catalog of [
       await legacy.listTools(),
       await stdio.listTools(),
       await modernRequest("tools/list"),
     ]) {
-      assert.equal(catalog.tools.length, 6);
+      const names = catalog.tools.map((tool) => tool.name).sort();
+      assert.deepEqual(names, registeredNames);
+      assert.equal(new Set(names).size, names.length, "tool names remain unique");
+      for (const name of [
+        "dashboard_update_metrics", "dashboard_upsert_task", "dashboard_ask_question",
+        "dashboard_publish_event", "dashboard_get_feedback", "dashboard_get_state",
+      ]) assert.ok(names.includes(name), `${name} remains available`);
       for (const name of ["dashboard_upsert_task", "dashboard_ask_question"]) {
         const schema = catalog.tools.find(
           (tool) => tool.name === name,
