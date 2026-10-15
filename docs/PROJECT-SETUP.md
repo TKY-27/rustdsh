@@ -103,8 +103,10 @@ The upload needs the repository upload token. Codecov rejects tokenless uploads
 to a protected branch with `Token required because branch is protected`, which
 is what the first runs on `main` reported; generate the token on the
 repository's Codecov settings page and store it as the `CODECOV_TOKEN` secret
-(`gh secret set CODECOV_TOKEN`). `fail_ci_if_error` stays false so a Codecov
-outage cannot fail an otherwise green run.
+(`gh secret set CODECOV_TOKEN`). Fork pull requests have no secret, so a
+missing token is reported as a workflow warning instead of a silent skip, and
+`fail_ci_if_error` stays false so a Codecov outage cannot fail an otherwise
+green run.
 
 Coverage is intentionally not in `required_checks`: it is a new signal, and an
 upload outage must not block unrelated pull requests. Promote it there only after
