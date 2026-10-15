@@ -637,7 +637,48 @@ pub(crate) fn write_creds(path: &str, text: &str) -> anyhow::Result<()> {
         let _ = std::fs::remove_file(&tmp);
     }
     result?;
+    #[cfg(target_os = "windows")]
+    {
+        // No Unix mode bits here: strip inherited ACLs so only the current
+        // user keeps access. Best effort — a failure warns instead of
+        // breaking the save (the file itself is already written).
+        if let Err(e) = lockdown_creds_file(path) {
+            eprintln!(
+                "[rdsh auth] warning: could not restrict {path} to the current user ({e:#}); \
+                 run: icacls \"{path}\" /inheritance:r"
+            );
+        }
+    }
     Ok(())
+}
+
+/// Windows-only: confine a credentials file to the current user via icacls.
+/// No shell is involved (argv only). Returns Err when whoami/icacls is
+/// missing or refuses; the caller warns and keeps the saved file.
+#[cfg(target_os = "windows")]
+fn lockdown_creds_file(path: &str) -> anyhow::Result<()> {
+    let who = std::process::Command::new("whoami")
+        .output()
+        .map_err(|e| anyhow::anyhow!("whoami unavailable: {e}"))?;
+    if !who.status.success() {
+        anyhow::bail!("whoami failed");
+    }
+    let user = String::from_utf8_lossy(&who.stdout).trim().to_string();
+    if user.is_empty() || user.len() > 256 {
+        anyhow::bail!("unexpected whoami output");
+    }
+    let output = std::process::Command::new("icacls")
+        .arg(path)
+        .arg("/inheritance:r")
+        .arg("/grant:r")
+        .arg(format!("{user}:F"))
+        .output()
+        .map_err(|e| anyhow::anyhow!("icacls unavailable: {e}"))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        anyhow::bail!("icacls exited {}", output.status)
+    }
 }
 
 // --- decisions ----------------------------------------------------------------
@@ -1187,6 +1228,7 @@ pub fn cmd_auth(args: AuthArgs, dry: bool) -> anyhow::Result<()> {
         return Ok(());
     }
     println!("[rdsh auth] persistent credentials: {path}");
+    note_env_dsh_home();
     println!(
         "[rdsh auth] sharing policy: {}",
         crate::auth_sharing::policy_path(&root).display()
@@ -1441,6 +1483,52 @@ fn prompt_line(prompt: &str) -> Option<String> {
     }
 }
 
+/// Secret prompt with echo disabled (Unix TTY only). Skip when echo cannot
+/// be controlled; non-Unix explicitly labels its echoed input.
+/// Always restores the terminal mode before returning.
+#[cfg(unix)]
+fn prompt_secret() -> Option<String> {
+    use std::io::IsTerminal as _;
+    use std::os::fd::AsRawFd;
+    if !std::io::stdin().is_terminal() {
+        return None;
+    }
+    let fd = std::io::stdin().as_raw_fd();
+    // SAFETY: tcgetattr/tcsetattr on our own stdin fd; restored below.
+    let mut old: libc::termios = unsafe { std::mem::zeroed() };
+    if unsafe { libc::tcgetattr(fd, &mut old) } != 0 {
+        eprintln!("[rdsh setup] cannot hide input; skipping key paste");
+        return None;
+    }
+    let mut new = old;
+    new.c_lflag &= !libc::ECHO;
+    if unsafe { libc::tcsetattr(fd, libc::TCSANOW, &new) } != 0 {
+        eprintln!("[rdsh setup] cannot hide input; skipping key paste");
+        return None;
+    }
+    eprint!("[rdsh setup] paste DEEPSEEK_API_KEY here (Enter to skip, input hidden): ");
+    use std::io::Write as _;
+    let _ = std::io::stderr().flush();
+    let mut s = String::new();
+    let res = std::io::stdin().read_line(&mut s);
+    unsafe { libc::tcsetattr(fd, libc::TCSANOW, &old) };
+    eprintln!();
+    if res.is_err() {
+        return None;
+    }
+    let s = s.trim().to_string();
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
+}
+
+#[cfg(not(unix))]
+fn prompt_secret() -> Option<String> {
+    prompt_line("[rdsh setup] paste DEEPSEEK_API_KEY here (Enter to skip, input echoed): ")
+}
+
 fn prompt_yes(prompt: &str) -> bool {
     match prompt_line(prompt) {
         Some(s) => matches!(s.trim().to_lowercase().as_str(), "y" | "yes"),
@@ -1472,6 +1560,11 @@ pub(crate) fn store_ref(name: &str, value: &str) -> anyhow::Result<bool> {
 
 fn store_ref_at(path: &str, name: &str, value: &str) -> anyhow::Result<bool> {
     safe_scalar(value)?;
+    // Same bound as the web path (setup_store_key): keep pasted blobs from
+    // bloating the credentials file on every entry route.
+    if value.trim().len() > 512 {
+        anyhow::bail!("oversized value");
+    }
     let _sharing_lock = SharingLock::acquire(&crate::inspect::dsh_home())?;
     let _credential_lock =
         crate::file_lock::CredentialFileLock::exclusive_for(std::path::Path::new(path))?;
@@ -1503,6 +1596,17 @@ fn store_ref_at(path: &str, name: &str, value: &str) -> anyhow::Result<bool> {
     Ok(true)
 }
 
+/// Provenance note for credential commands: when DSH_HOME comes from the
+/// environment, the credentials path follows it — say so explicitly so a
+/// redirected home is visible instead of silent.
+fn note_env_dsh_home() {
+    if let Ok(home) = std::env::var("DSH_HOME") {
+        if !home.trim().is_empty() {
+            eprintln!("[rdsh auth] DSH_HOME is set in the environment: {home}");
+        }
+    }
+}
+
 fn which_bin(bin: &str) -> bool {
     if bin.contains('/') || bin.contains('\\') {
         return false;
@@ -1522,15 +1626,34 @@ fn which_bin(bin: &str) -> bool {
                 {
                     [".exe", ".cmd", ".bat", ""]
                         .iter()
-                        .any(|e| std::fs::metadata(format!("{d}/{bin}{e}")).is_ok())
+                        .any(|e| is_executable_file(&format!("{d}/{bin}{e}")))
                 }
                 #[cfg(not(target_os = "windows"))]
                 {
-                    std::fs::metadata(format!("{d}/{bin}")).is_ok()
+                    is_executable_file(&format!("{d}/{bin}"))
                 }
             })
         })
         .unwrap_or(false)
+}
+
+/// Regular file (executable bit required on Unix): metadata presence alone
+/// also matches directories and planted non-executables on PATH.
+fn is_executable_file(path: &str) -> bool {
+    let Ok(md) = std::fs::metadata(path) else {
+        return false;
+    };
+    if !md.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if md.permissions().mode() & 0o111 == 0 {
+            return false;
+        }
+    }
+    true
 }
 
 /// Launch the provider's own login flow (`opencode auth login` prefers the
@@ -1809,6 +1932,7 @@ pub fn cmd_setup(open: bool, login: bool, json: bool, yes: bool, dry: bool) -> a
     if !dry {
         auto_sync();
     }
+    note_env_dsh_home();
     let mut persisted: Vec<String> = Vec::new();
     let mut known_refs: std::collections::HashSet<String> =
         load_doc(&creds_path()).refs.keys().cloned().collect();
@@ -1834,9 +1958,7 @@ pub fn cmd_setup(open: bool, login: bool, json: bool, yes: bool, dry: bool) -> a
     {
         use std::io::IsTerminal as _;
         if !dry && !json && !yes && std::io::stdin().is_terminal() && setup_needed() {
-            if let Some(pasted) = prompt_line(
-                "[rdsh setup] paste DEEPSEEK_API_KEY here (Enter to skip, input is echoed): ",
-            ) {
+            if let Some(pasted) = prompt_secret() {
                 match store_ref("DEEPSEEK_API_KEY", &pasted) {
                     Ok(true) => persisted.push("DEEPSEEK_API_KEY".to_string()),
                     Ok(false) => {}

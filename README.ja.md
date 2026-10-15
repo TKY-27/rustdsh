@@ -5,6 +5,7 @@
 [![ci](https://github.com/jimoto-no-llm/rustdsh/actions/workflows/ci.yml/badge.svg)](https://github.com/jimoto-no-llm/rustdsh/actions/workflows/ci.yml)
 [![dashboard](https://github.com/jimoto-no-llm/rustdsh/actions/workflows/dashboard.yml/badge.svg)](https://github.com/jimoto-no-llm/rustdsh/actions/workflows/dashboard.yml)
 [![docs](https://github.com/jimoto-no-llm/rustdsh/actions/workflows/docs.yml/badge.svg)](https://github.com/jimoto-no-llm/rustdsh/actions/workflows/docs.yml)
+[![codecov](https://codecov.io/gh/jimoto-no-llm/rustdsh/graph/badge.svg)](https://codecov.io/gh/jimoto-no-llm/rustdsh)
 [![release](https://img.shields.io/github/v/release/jimoto-no-llm/rustdsh.svg)](https://github.com/jimoto-no-llm/rustdsh/releases)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org/)
@@ -157,6 +158,9 @@ rdsh profiles / rdsh skills         # 利用可能なプロファイル・スキ
 rdsh desktop status                 # DeepSeek Harness Desktop アプリとプロファイルの検出
 rdsh bench --n 5                    # rdsh と本家 dsh の起動速度比較
 ```
+
+Windows では親junctionを安全に拒否する読込みを用意できるまで圧縮履歴を開きません。
+そのため `sessions --tokens` の合計には一部の履歴が含まれず、正確な値ではありません。
 
 ### 選択した認証情報だけを共有する（rdsh auth）
 

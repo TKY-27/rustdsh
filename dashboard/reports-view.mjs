@@ -110,7 +110,12 @@ function rateText(state, a, b, now) {
   if (views.some((view) => view.freshness === "unknown")) return "鮮度未確認";
   return "未取得";
 }
-export function renderReports(state, now = Date.now(), sourceEventIds = []) {
+export function renderReports(
+  state,
+  now = Date.now(),
+  sourceEventIds = [],
+  onPreviewArtifact = () => {},
+) {
   openObservations = new Set(
     [...document.querySelectorAll("details.observation-details[open]")]
       .map((element) => element.dataset.observationId),
@@ -181,12 +186,20 @@ export function renderReports(state, now = Date.now(), sourceEventIds = []) {
   // Task outcome cards and milestones have a dedicated renderer. This
   // function can run again for the same SSE revision, so it must not replace
   // content owned by that revision-aware renderer.
-  renderEvents(state, now, sourceEventIds);
+  renderEvents(state, now, sourceEventIds, onPreviewArtifact);
   if (activeDisclosure)
     [...document.querySelectorAll("summary[data-observation-id]")]
       .find((summary) => summary.dataset.observationId === activeDisclosure)?.focus();
 }
-function renderEvents(state, now, sourceEventIds = []) {
+// `sourceEventIds` pins the events the update summary cites and
+// `onPreviewArtifact` arrives as an argument (not a module global) so the
+// preview button reaches the handler wired by the shell.
+function renderEvents(
+  state,
+  now,
+  sourceEventIds = [],
+  onPreviewArtifact = () => {},
+) {
   $("events").replaceChildren(
     ...state.events
       .slice(-30)
@@ -203,7 +216,17 @@ function renderEvents(state, now, sourceEventIds = []) {
           ),
         );
         if (event.detail) element.append(node("p", event.detail));
-        if (event.artifact) element.append(node("code", event.artifact));
+        if (event.artifact) {
+          element.append(node("code", event.artifact));
+          if (event.type === "artifact") {
+            const preview = node("button", "プレビュー");
+            preview.type = "button";
+            preview.addEventListener("click", () =>
+              onPreviewArtifact(event.sequence),
+            );
+            element.append(preview);
+          }
+        }
         element.append(provenance(
           observationView(event.title, event.observation, now),
           undefined, String, "event:" + event.sequence,

@@ -72,12 +72,13 @@ if grep -qi microsoft /proc/version 2>/dev/null || [ -n "${WSL_DISTRO_NAME:-}${W
 fi
 if [ "$MODE" = restore ]; then
   if [ ! -e "$PREFIX/dsh-orig" ]; then echo "no backup at $PREFIX/dsh-orig" >&2; exit 1; fi
-  if "$PREFIX/dsh" doctor 2>&1 | grep -q 'rdsh'; then
-    mv -f "$PREFIX/dsh-orig" "$PREFIX/dsh"
-    echo "restored original dsh (rdsh still at $PREFIX/rdsh)"
-  else
-    echo "refusing: $PREFIX/dsh does not look like rdsh" >&2; exit 1
-  fi
+  # Identify rdsh by its version banner, not by a grep over help text that a
+  # foreign binary could mimic.
+  case "$("$PREFIX/dsh" --version 2>/dev/null)" in
+    rdsh*) mv -f "$PREFIX/dsh-orig" "$PREFIX/dsh"
+      echo "restored original dsh (rdsh still at $PREFIX/rdsh)" ;;
+    *) echo "refusing: $PREFIX/dsh does not look like rdsh" >&2; exit 1 ;;
+  esac
   exit 0
 fi
 glibc_version() {
@@ -437,7 +438,13 @@ fetch_release() {
   url="$base/download/$version/$asset"
   echo "fetching release asset $version/$asset" >&2
   if [ "${RDSH_NO_CHECKSUM:-0}" = 1 ]; then confirm_checksum_bypass "$version" "$asset" || exit 1; fi
-  curl -fsSL -o "$DOWNLOAD_TMPD/pkg.tgz" "$url" || { echo "download failed for release asset $version/$asset" >&2; exit 1; }
+  # Pin TLS like the rustup fetch below; a future sigstore/cosign check
+  # belongs here (same-channel SHA256 alone cannot survive a mirror breach).
+  # The documented explicit file:// fixture/mirror override is local-only.
+  # Network downloads and redirects remain restricted to HTTPS.
+  download_protocol='=https'
+  case "$base" in file://*) download_protocol='=file' ;; esac
+  curl --proto "$download_protocol" --proto-redir '=https' --tlsv1.2 -fsSL -o "$DOWNLOAD_TMPD/pkg.tgz" "$url" || { echo "download failed for release asset $version/$asset" >&2; exit 1; }
   if [ "${RDSH_NO_CHECKSUM:-0}" != 1 ]; then
     verify_sha256 "$DOWNLOAD_TMPD/pkg.tgz" "$expected" || exit 1
   fi
@@ -468,22 +475,25 @@ echo "installed $PREFIX/rdsh"
 if [ "$MODE" = as-dsh ]; then
   if [ -e "$PREFIX/dsh-orig" ]; then echo "backup exists: $PREFIX/dsh-orig (use --restore first)" >&2; exit 1; fi
   if [ -e "$PREFIX/dsh" ]; then
-    if "$PREFIX/dsh" doctor 2>&1 | grep -q 'rdsh'; then
-      echo "PREFIX/dsh is already rdsh; refreshing"
-    else
-      mv "$PREFIX/dsh" "$PREFIX/dsh-orig"
-      echo "$PREFIX/dsh-orig" > "$HOME/.config/rdsh/origin"
-      echo "backed up original dsh -> $PREFIX/dsh-orig"
-    fi
+    case "$("$PREFIX/dsh" --version 2>/dev/null)" in
+      rdsh*) echo "PREFIX/dsh is already rdsh; refreshing" ;;
+      *)
+        mv "$PREFIX/dsh" "$PREFIX/dsh-orig"
+        echo "$PREFIX/dsh-orig" > "$HOME/.config/rdsh/origin"
+        echo "backed up original dsh -> $PREFIX/dsh-orig" ;;
+    esac
   else
     echo "no existing dsh in PREFIX; PATH lookup only"
   fi
   tmp="$PREFIX/.dsh.new.$$"
   install -m755 "$PREFIX/rdsh" "$tmp" && mv -f "$tmp" "$PREFIX/dsh"
   echo "installed rdsh as $PREFIX/dsh (atomic replace; revert: ./install.sh --restore)"
+  # Bounded scan: regular files directly under PREFIX only (no recursion,
+  # no binaries), matching the Rust doctor's own offender listing.
   # -I: バイナリは走査しない。rdsh/dsh 自身が "node" と "dsh" の両方を含むため、
   # テキストのラッパーが1つも無くても常に一致して誤検知になる。
-  if grep -Il "node" "$PREFIX"/* 2>/dev/null | xargs grep -Il "dsh" 2>/dev/null | grep -q .; then
+  node_wrappers="$(find "$PREFIX" -maxdepth 1 -type f -size -65536c -exec grep -Il "node" {} + 2>/dev/null)"
+  if [ -n "$node_wrappers" ] && printf '%s\n' "$node_wrappers" | tr '\n' '\0' | xargs -0 grep -Il "dsh" 2>/dev/null | grep -q .; then
     echo "note: wrappers calling 'node ...dsh...' break while dsh is shadowed (native binary, not JS)."
     echo "note: exec dsh/rdsh directly instead of via node; 'rdsh doctor' lists the offenders."
   fi

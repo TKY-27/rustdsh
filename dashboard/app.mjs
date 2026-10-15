@@ -14,6 +14,7 @@ import { createUpdateSummary } from "./update-summary.mjs";
 import { renderModelRouting } from "./model-routing-ui.mjs";
 import { createTaskOutcomesPanel } from "./task-outcomes-ui.mjs";
 import { createHumanAnnotationPanel } from "./human-annotations-ui.mjs";
+import { createHumanMetricsPanel } from "./human-metrics-ui.mjs";
 import { setupObservedCli } from "./observed-cli-ui.mjs";
 
 const $ = (id) => document.getElementById(id);
@@ -91,6 +92,81 @@ themeQuery.addEventListener("change", (event) => {
 });
 renderThemeToggle();
 
+let artifactPreviewUrl = null;
+let artifactPreviewRequest = 0;
+let artifactPreviewRevision = -1;
+async function previewArtifact(sequence) {
+  const request = ++artifactPreviewRequest;
+  // The state generation at click time: a newer render while the fetch is
+  // in flight leaves older text on screen, so the dialog says so.
+  const revision = latestState?.revision ?? -1;
+  artifactPreviewRevision = revision;
+  const dialog = $("artifact-preview");
+  const status = $("artifact-preview-status");
+  const content = $("artifact-preview-content");
+  content.replaceChildren();
+  status.textContent = "成果物を読み取っています…";
+  dialog.showModal();
+  try {
+    const response = await fetch(
+      base + "api/artifacts/" + encodeURIComponent(sequence),
+      {
+        headers: browserToken
+          ? { "x-rdsh-browser-token": browserToken }
+          : {},
+      },
+    );
+    if (request !== artifactPreviewRequest) return;
+    if (!response.ok) {
+      let reason = "成果物をプレビューできません";
+      try {
+        reason = (await response.json()).error || reason;
+      } catch {}
+      throw new Error(reason);
+    }
+    const blob = await response.blob();
+    if (request !== artifactPreviewRequest) return;
+    const redacted = response.headers.get("x-rdsh-preview-redacted") === "true";
+    const truncated = response.headers.get("x-rdsh-preview-truncated") === "true";
+    const stale =
+      latestState != null &&
+      revision !== -1 &&
+      latestState.revision !== revision;
+    const staleNote = stale ? "（取得後に状態が更新されました）" : "";
+    if (response.headers.get("x-rdsh-preview-kind") === "image") {
+      artifactPreviewUrl = URL.createObjectURL(blob);
+      const image = node("img", undefined, "artifact-preview-image");
+      image.src = artifactPreviewUrl;
+      image.alt = "成果物の画像プレビュー";
+      content.append(image);
+      status.textContent =
+        "画像を読み取り専用で表示しています。" + staleNote;
+    } else {
+      content.append(node("pre", await blob.text(), "artifact-preview-text"));
+      status.textContent =
+        [
+          redacted
+            ? "認証情報らしき値を伏せて表示しています。"
+            : "読み取り専用のテキスト表示です。",
+          truncated ? "先頭128 KiBまで表示しています。" : "",
+        ]
+          .filter(Boolean)
+          .join(" ") + staleNote;
+    }
+  } catch (error) {
+    if (request !== artifactPreviewRequest) return;
+    content.replaceChildren(node("p", error.message, "warn"));
+    status.textContent = "表示できる内容はありません。元ファイルは変更していません。";
+  }
+}
+$("artifact-preview-close").addEventListener("click", () =>
+  $("artifact-preview").close(),
+);
+$("artifact-preview").addEventListener("close", () => {
+  artifactPreviewRequest++;
+  if (artifactPreviewUrl) URL.revokeObjectURL(artifactPreviewUrl);
+  artifactPreviewUrl = null;
+});
 let renderedRevision = -1;
 let latestState = null;
 let selectedTask = "";
@@ -334,11 +410,22 @@ const renderHumanAnnotations = createHumanAnnotationPanel(
   $("human-annotations-panel"),
   { api, node, navigateTo },
 );
+const renderHumanMetrics = createHumanMetricsPanel($("human-metrics"), {
+  api,
+  node,
+  confirm: (message) => window.confirm(message),
+});
+let humanMetricsRevision = -1;
 function render(state) {
   if (state.revision < renderedRevision) return;
   renderedRevision = state.revision;
   latestState = state;
   observedCli?.render(state);
+  renderHumanMetrics.render(state);
+  if (state.revision !== humanMetricsRevision) {
+    humanMetricsRevision = state.revision;
+    void renderHumanMetrics.reload();
+  }
   renderInstructions(state);
   renderCosts(state);
   renderCatalog();
@@ -352,6 +439,7 @@ function render(state) {
     { ...state, change_records: summarySourceRecords },
     Date.now(),
     summarySources.sourceEventIds,
+    previewArtifact,
   );
   const unanswered = state.questions.filter((question) => question.answer === null);
   renderTaskOutcomes(state);
@@ -476,7 +564,7 @@ $("share-refresh").addEventListener("click", async () => {
 });
 // #61: コマンドパレット。既存操作への別導線であり、権限・状態チェックや
 // 確認は各操作側（回答フォームなど）で行い、ここで迂回しない。
-// 入力欄での誤発動を避け、Esc・Ctrl/⌘+K・元フォーカス復帰だけを扱う。
+// 入力欄での誤発動を避け、検索・選択・取消しとフォーカス復帰を扱う。
 const paletteCommands = [
   {
     id: "toggle-share",
@@ -517,9 +605,36 @@ const paletteCommands = [
   },
 ];
 let paletteReturnFocus = null;
+let paletteMatches = [];
+let paletteSelectedIndex = -1;
+let paletteCommandAfterClose = null;
+function setPaletteSelection(index) {
+  if (!paletteMatches.length) {
+    paletteSelectedIndex = -1;
+    $("palette-search").removeAttribute("aria-activedescendant");
+    $("palette-count").textContent = "該当なし";
+    return;
+  }
+  paletteSelectedIndex = (index + paletteMatches.length) % paletteMatches.length;
+  const command = paletteMatches[paletteSelectedIndex];
+  const options = $("palette-list").querySelectorAll('[role="option"]');
+  options.forEach((option, optionIndex) =>
+    option.setAttribute(
+      "aria-selected",
+      String(optionIndex === paletteSelectedIndex),
+    ),
+  );
+  $("palette-search").setAttribute(
+    "aria-activedescendant",
+    `palette-option-${command.id}`,
+  );
+  $("palette-count").textContent =
+    `${paletteSelectedIndex + 1} / ${paletteMatches.length} 件 · ` +
+    `${command.ja} · ${command.en}`;
+}
 function renderPalette(filter = "") {
   const query = filter.trim().toLowerCase();
-  const matched = paletteCommands.filter(
+  paletteMatches = paletteCommands.filter(
     (command) =>
       !query ||
       (command.ja + " " + command.en + " " + command.keys)
@@ -527,26 +642,37 @@ function renderPalette(filter = "") {
         .includes(query),
   );
   $("palette-list").replaceChildren(
-    ...matched.map((command) => {
-      const item = node("li");
-      const button = node("button", command.ja + " · " + command.en);
-      button.type = "button";
-      button.addEventListener("click", () => {
-        $("palette").close();
-        command.run();
+    ...paletteMatches.map((command, index) => {
+      const item = node("li", command.ja + " · " + command.en);
+      item.id = `palette-option-${command.id}`;
+      item.setAttribute("role", "option");
+      item.setAttribute("aria-selected", "false");
+      item.addEventListener("pointermove", () => {
+        if (paletteSelectedIndex !== index) setPaletteSelection(index);
       });
-      item.append(button);
+      item.addEventListener("click", () => activatePalette(index));
       return item;
     }),
   );
-  $("palette-count").textContent = matched.length
-    ? matched.length + " 件"
-    : "該当なし";
+  setPaletteSelection(0);
+}
+function activatePalette(index = paletteSelectedIndex) {
+  const command = paletteMatches[index];
+  if (!command) return;
+  paletteCommandAfterClose = command;
+  $("palette").close();
 }
 function openPalette() {
-  paletteReturnFocus = document.activeElement;
-  renderPalette("");
+  const active = document.activeElement;
+  paletteReturnFocus =
+    active && active !== document.body && active.isConnected
+      ? active
+      : $("palette-toggle");
+  paletteCommandAfterClose = null;
   $("palette-search").value = "";
+  $("palette-search").setAttribute("aria-expanded", "true");
+  $("palette-toggle").setAttribute("aria-expanded", "true");
+  renderPalette("");
   $("palette").showModal();
   $("palette-search").focus();
 }
@@ -554,16 +680,49 @@ $("palette-toggle").addEventListener("click", openPalette);
 $("palette-search").addEventListener("input", (event) =>
   renderPalette(event.target.value),
 );
+$("palette-search").addEventListener("keydown", (event) => {
+  if (event.key === "ArrowDown") {
+    event.preventDefault();
+    setPaletteSelection(paletteSelectedIndex + 1);
+  } else if (event.key === "ArrowUp") {
+    event.preventDefault();
+    setPaletteSelection(paletteSelectedIndex - 1);
+  } else if (event.key === "Enter" && paletteSelectedIndex >= 0) {
+    event.preventDefault();
+    activatePalette();
+  } else if (event.key === "Escape") {
+    event.preventDefault();
+    $("palette").close();
+  }
+});
 $("palette").addEventListener("close", () => {
-  if (paletteReturnFocus?.focus) paletteReturnFocus.focus();
+  $("palette-search").setAttribute("aria-expanded", "false");
+  $("palette-search").removeAttribute("aria-activedescendant");
+  $("palette-toggle").setAttribute("aria-expanded", "false");
+  const returnFocus = paletteReturnFocus;
+  const command = paletteCommandAfterClose;
+  paletteReturnFocus = null;
+  paletteCommandAfterClose = null;
+  if (returnFocus?.isConnected && returnFocus.focus) returnFocus.focus();
+  command?.run();
 });
 document.addEventListener("keydown", (event) => {
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+    if ($("palette").open) {
+      event.preventDefault();
+      $("palette").close();
+      return;
+    }
     const tag = document.activeElement?.tagName;
-    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+    if (
+      tag === "INPUT" ||
+      tag === "TEXTAREA" ||
+      tag === "SELECT" ||
+      document.activeElement?.isContentEditable
+    )
+      return;
     event.preventDefault();
-    if ($("palette").open) $("palette").close();
-    else openPalette();
+    openPalette();
   }
 });
 try {

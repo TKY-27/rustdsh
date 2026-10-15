@@ -1,0 +1,30 @@
+# Codecov configuration for jimoto-no-llm/rustdsh.
+# The report comes from .github/workflows/codecov.yml
+# (cargo tarpaulin -> cobertura.xml) uploaded with codecov/codecov-action.
+codecov:
+  require_ci_to_pass: true
+  notify:
+    wait_for_ci: true
+
+coverage:
+  precision: 2
+  round: down
+  range: "70...95"
+  status:
+    # Informational first: the statuses appear on the PR without blocking it.
+    # Drop these two "informational" flags once the numbers are trusted.
+    project:
+      default:
+        target: auto
+        threshold: 1%
+        informational: true
+    patch:
+      default:
+        target: auto
+        threshold: 1%
+        informational: true
+
+comment:
+  layout: "reach,diff,flags,files"
+  behavior: default
+  require_changes: true

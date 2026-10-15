@@ -54,7 +54,14 @@ test("existing HTTP MCP task publication accepts outcome metadata without adding
     }),
   );
   const advertised = (await client.listTools()).tools;
-  assert.equal(advertised.length, 6);
+  // Track the module's own registry instead of a hardcoded count: every tool
+  // added to mcp.mjs (handoffs, review evidence, contracts, ...) otherwise
+  // leaves this assertion behind and turns the suite red for unrelated work.
+  assert.equal(advertised.length, tools.length);
+  assert.deepEqual(
+    advertised.map((tool) => tool.name).sort(),
+    tools.map((tool) => tool.name).sort(),
+  );
   assert.ok(
     advertised.find((tool) => tool.name === "dashboard_upsert_task").inputSchema
       .properties.outcome,
@@ -124,7 +131,9 @@ test("legacy task shape retains observation metadata and omitted outcome fields 
     status: "done",
   });
   assert.equal(Object.hasOwn(legacy, "task_outcomes"), false);
-  assert.equal(tools.length, 6);
+  // Keep a sanity check on the task tool itself; a hardcoded total makes this
+  // test fail whenever an unrelated tool is registered in mcp.mjs.
+  assert.ok(tools.some((tool) => tool.name === "dashboard_upsert_task"));
 });
 test("reported done and partial or operator-reported passes never imply a verified full check", async (t) => {
   const f = await setup(t);

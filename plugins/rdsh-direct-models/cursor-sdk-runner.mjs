@@ -13,7 +13,7 @@ export async function executeCursorSdk(input,{sdk,env=process.env}={}) {
     return {models:models.map(value=>{const id=value.model?.id??value.id;if(typeof id!=='string'||!id)throw Object.assign(new Error(),{code:'INVALID_RESPONSE'});return {id,name:value.name??value.displayName??id};})};
   }
   if(typeof input.model!=='string'||!input.model||typeof input.prompt!=='string'||Buffer.byteLength(input.prompt)>LIMIT)throw Object.assign(new Error(),{code:'INVALID_REQUEST'});
-  const root=await mkdtemp(path.join(tmpdir(),'rdsh-cursor-sdk-'));
+  const root=await mkdtemp(path.join(env.RDSH_SDK_TMPDIR??tmpdir(),'rdsh-cursor-sdk-'));
   let agent,run;
   try{
     const cwd=path.join(root,'workspace');await mkdir(cwd);

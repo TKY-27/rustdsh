@@ -108,9 +108,13 @@ value wins, `RDSH_NODE_COMPILE_CACHE=0` opts out).
   exact scan (identical results).
 - Search: sequential walk fixes order, files are grepped in parallel, hits merge
   back in walk order. Trees under 32 files keep the sequential path.
-- `sessions --tokens`: parallel zstd expansion (same numbers, order kept).
-- Release profile: `opt-level=3`, fat LTO, `strip`, `panic=abort`.
-  Binary size depends on target and build; `Cargo.toml` is the source of truth.
+- `sessions --tokens`: Unix uses no-follow session opens and parallel zstd
+  expansion (same numbers, order kept). Windows omits compressed histories
+  until parent junctions can be rejected through safe handle-relative opens,
+  so totals remain inexact.
+- Release profile: `opt-level=3`, fat LTO, `strip`, `panic=abort`; published
+  archives are roughly 1.8-2.3MB per platform. Binary size depends on target
+  and build; `Cargo.toml` is the source of truth.
 
 ## Invariants for contributors
 

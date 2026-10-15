@@ -320,6 +320,54 @@
         background: var(--card);
         min-height: 172px;
       }
+      #human-metrics .human-metrics-settings,
+      #human-metrics .human-metrics-actions {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 10px;
+        margin: 12px 0;
+      }
+      #human-metrics .human-metrics-settings label,
+      #human-metrics .human-metrics-control label {
+        display: block;
+        margin: 8px 0;
+      }
+      #human-metrics .human-metrics-control {
+        min-width: min(100%, 280px);
+        padding: 12px 0;
+      }
+      #human-metrics .human-metrics-controls {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
+        gap: 8px 18px;
+      }
+      #human-metrics .value {
+        font-size: 1.25rem;
+        line-height: 1.5;
+        overflow-wrap: anywhere;
+      }
+      #human-metrics .human-metrics-control select {
+        display: block;
+        width: 100%;
+        min-height: 42px;
+        margin-top: 6px;
+        padding: 8px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: white;
+        font: inherit;
+      }
+      #human-metrics .human-metrics-control button {
+        margin: 5px 8px 5px 0;
+      }
+      #human-metrics .human-metrics-control .sub {
+        overflow-wrap: anywhere;
+      }
+      #human-metrics #human-metrics-timer-actions[hidden],
+      #human-metrics button[hidden] {
+        display: none;
+      }
       .label {
         color: var(--mut);
         font-size: 16px;
@@ -815,6 +863,37 @@
         overflow-wrap: anywhere;
         font-size: 13px;
       }
+      #artifact-preview {
+        width: min(900px, calc(100vw - 28px));
+        max-height: 85vh;
+        overflow: auto;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 18px;
+      }
+      #artifact-preview::backdrop {
+        background: rgb(0 0 0 / 0.25);
+      }
+      #artifact-preview-content {
+        max-height: 68vh;
+        overflow: auto;
+      }
+      .artifact-preview-text {
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        margin: 0;
+        padding: 12px;
+        border-radius: 8px;
+        background: var(--bg);
+        font: 13px/1.5 ui-monospace, monospace;
+      }
+      .artifact-preview-image {
+        display: block;
+        max-width: 100%;
+        max-height: 65vh;
+        margin: auto;
+        object-fit: contain;
+      }
       footer {
         margin-top: 24px;
         color: var(--mut);
@@ -971,9 +1050,20 @@
         display: grid;
         gap: 6px;
       }
-      #palette-list button {
-        width: 100%;
-        text-align: left;
+      #palette-list [role="option"] {
+        min-height: 44px;
+        padding: 9px 12px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        cursor: pointer;
+      }
+      #palette-list [role="option"][aria-selected="true"] {
+        border-color: var(--blue);
+        background: #edf1f7;
+      }
+      #palette-list [role="option"]:focus-visible {
+        outline: 2px solid var(--blue);
+        outline-offset: 2px;
       }
       @media (max-width: 1000px) {
         .attention-summary { grid-template-columns: minmax(0, 1.4fr) 125px 75px minmax(0, 1fr); gap: 10px; }
@@ -1626,6 +1716,7 @@
             id="palette-toggle"
             aria-haspopup="dialog"
             aria-controls="palette"
+            aria-expanded="false"
           >
             コマンド
           </button>
@@ -1894,6 +1985,11 @@
               <div class="cards" id="cards"></div>
               <h3>費用の明細と出所</h3>
               <section id="cost-ledger" aria-label="費用台帳"></section>
+              <h3 id="human-metrics-heading">人の作業と復旧指標</h3>
+              <section
+                id="human-metrics"
+                aria-labelledby="human-metrics-heading"
+              ></section>
             </details>
             <details class="fold" id="model-catalog-detail">
               <summary>モデルカタログ（試作）</summary>
@@ -1982,6 +2078,12 @@
                 <div class="feed" id="change-records"></div>
               </details>
             </details>
+            <dialog id="artifact-preview" aria-labelledby="artifact-preview-title">
+              <h2 id="artifact-preview-title">成果物のプレビュー</h2>
+              <p id="artifact-preview-status" class="sub" role="status"></p>
+              <div id="artifact-preview-content"></div>
+              <button id="artifact-preview-close" type="button">閉じる</button>
+            </dialog>
             <details id="answered">
               <summary>回答済みの質問</summary>
               <div class="feed" id="answers"></div>
@@ -2002,17 +2104,22 @@
       <dialog id="palette" aria-labelledby="palette-title">
         <h2 id="palette-title">コマンド</h2>
         <p class="sub">
-          日本語・英語で絞り込めます。Escで閉じて元の位置に戻ります。
+          日本語・英語で絞り込み、↑↓で選択・Enterで実行できます。Escで閉じて元の位置に戻ります。
         </p>
         <input
           id="palette-search"
           type="search"
+          role="combobox"
           aria-label="コマンドを絞り込む"
+          aria-autocomplete="list"
+          aria-haspopup="listbox"
+          aria-controls="palette-list"
+          aria-expanded="false"
           placeholder="例: 共有 / share"
           autocomplete="off"
         />
         <p class="sub" id="palette-count" role="status"></p>
-        <ul id="palette-list"></ul>
+        <ul id="palette-list" role="listbox" aria-label="操作候補"></ul>
       </dialog>
       <dialog id="managed-stop-dialog" aria-labelledby="managed-stop-title">
         <h2 id="managed-stop-title">停止する対象を確認</h2>

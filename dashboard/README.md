@@ -27,6 +27,10 @@ explicit interruption with native proof, and honest unsupported-steer fallback.
 [Task preflight](../docs/TASK-PREFLIGHT.md) checks the required CLI, cwd, disk,
 port, dependencies, GPU/WSL and selected authentication before an ACP session.
 
+[Optional GPU leases](../docs/GPU-LEASES.md) reserve a requested UUID/VRAM amount
+before original ACP attachment, report capacity waits separately from failures,
+and retain uncertain ownership until actual process/group exit is confirmed.
+
 [Resource admission](../docs/RESOURCE-ADMISSION.md) reserves local CPU, memory,
 heavy-build slots and ports before a managed build or test command starts.
 
@@ -290,6 +294,29 @@ partial. The folded metrics section shows each amount's provenance and history.
 endpoint; browser credentials are read-only for these inputs. No prices are
 looked up and legacy numeric costs are not merged with this optional ledger.
 
+### Local human-effort metrics (#73)
+
+Human-effort metrics are **off by default**. A user can enable them in the
+project dashboard and choose 7, 30 or 90 days of local retention. The sidecar
+`human-metrics.json` is created only after opt-in and contains only event types,
+timestamps, durations and aggregate counts. Question, task, command and session
+IDs, text, credentials and secrets are not retained. The dedicated endpoint requires the browser credential;
+it is not an MCP tool, is absent from MCP state, and does not publish webhooks.
+Export downloads an aggregate JSON file in the browser and does not send it.
+Raw events are capped at 10,000; if older in-window records are dropped, the
+summary marks the affected metrics as partial.
+
+Decision time uses a user-started stopwatch that can be paused while away.
+Recovery time is wall-clock time from a user-selected blocked task to the user's
+stop action and can include waiting or absence. Question recurrence and
+instruction resend are counted only after the user marks a specific recorded
+item; text similarity and automatic replay are not inferred. Queue revision
+conflicts count only the existing `queue_revision_changed` outcome. Missing
+timer completions remain unpaired, and a metric with no completed samples stays
+unavailable instead of displaying zero. Token snapshots are exported separately
+from human-effort metrics so a token reduction cannot hide more resends or slower
+recovery.
+
 ### Observation source and freshness (#16)
 
 `dashboard_update_metrics`, `dashboard_upsert_task`, and
@@ -349,8 +376,17 @@ time. Their numeric values are retained as previous reports, not treated as
 current measurements. Send explicit observation metadata to show current values.
 Reference strings and sources are displayed as text, never opened or executed.
 
-Artifact references are displayed as text. Local file contents are never opened
-or served. Treat all user-authored questions, answers, progress, and paths as data.
+Artifact references remain text until a human selects **プレビュー** on an
+artifact event. The authenticated project browser can read only that event's
+relative path beneath the project root; absolute paths, parent traversal,
+dotfiles, symlinks, HTML/SVG, and files over 1 MiB are refused. UTF-8 text,
+diffs, logs, and JSON are shown as text (never rendered as HTML), with common
+credential patterns redacted and text previews capped at 128 KiB. PNG, JPEG,
+GIF, and WebP are accepted only when their extension and signature agree.
+Responses are private and non-cacheable. Previews never write, publish, or
+share the source file. Credential redaction is a best-effort screen, not a
+guarantee that arbitrary text or image content contains no secrets; inspect
+the source when that assurance matters. Treat all user-authored paths as data.
 
 ### Decision inbox
 

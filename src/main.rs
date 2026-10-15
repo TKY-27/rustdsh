@@ -807,6 +807,11 @@ fn main() {
     }
     // NOTE: --version/-V is served by clap itself (prints "rdsh x.y.z", exit 0).
     let cli = Cli::parse();
+    // Fail fast on unusable selections (the tool boundary re-validates).
+    if let Err(e) = crate::file_security::validate_share_files(&cli.share_file) {
+        eprintln!("[rdsh] error: {e}");
+        std::process::exit(2);
+    }
     if matches!(cli.command.as_ref(), Some(Commands::WorkerGit)) {
         if let Err(error) = worker_git::cmd() {
             eprintln!("[rdsh] error: {error:#}");

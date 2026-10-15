@@ -23,6 +23,8 @@ import { ReplyConsumer } from "./reply-consumer.mjs";
 import { instructionRequest } from "./instruction-client.mjs";
 import { costRequest } from "./cost-client.mjs";
 import { budgetRequest } from "./budget-client.mjs";
+import { GpuLeases } from "./gpu-leases.mjs";
+import { gpuRequest, GpuError } from "./gpu-telemetry.mjs";
 import {
   ResourceAdmission,
 } from "./resource-admission.mjs";
@@ -91,6 +93,10 @@ rdsh-dashboard answer-applications apply|validate|public|schema --input-file <re
 rdsh-dashboard instruction-queue validate|context|submit|resolve|control --input-file <request-json>
 rdsh-dashboard budget policy|usage --project <directory> --input-file <json>
 rdsh-dashboard budget inspect --project <directory>
+rdsh-dashboard gpu inspect|reconcile
+rdsh-dashboard session-ledger retry-start --project <directory> --run-id <pending-GPU-run> [--executable <original-dsh> --entrypoint <bin.js>]
+rdsh-dashboard session-ledger start|resume --gpu-request <json> --project <directory> [--run-id <id>] [--executable <original-dsh> --entrypoint <bin.js>]
+rdsh-dashboard reply-consumer once|serve --gpu-request <json> --project <directory> --run-id <id> [--executable <original-dsh> --entrypoint <bin.js>]
 rdsh-dashboard resources inspect
 rdsh-dashboard resources policy --max-heavy-builds <n>
 rdsh-dashboard resources run --request-file <json> --argv-file <json>
@@ -176,6 +182,7 @@ const { values, positionals } = parseArgs({
     "argv-file": { type: "string" },
     "max-heavy-builds": { type: "string" },
     "budget-guard": { type: "boolean" },
+    "gpu-request": { type: "string" },
     "worker-id": { type: "string" },
     "lease-seconds": { type: "string" },
     "expected-head": { type: "string" },
@@ -468,8 +475,28 @@ async function pinnedAttachment(project, options) {
     return { delegated: true };
   return { attached: await releases.attach(project, plan, options) };
 }
+function requestedGpu() {
+  if (values["gpu-request"] === undefined) return null;
+  if (Buffer.byteLength(values["gpu-request"]) > 2048)
+    throw new GpuError("invalid_gpu_request");
+  try {
+    return gpuRequest(JSON.parse(values["gpu-request"]));
+  } catch {
+    throw new GpuError("invalid_gpu_request");
+  }
+}
 try {
   const command = positionals[0];
+  if (
+    values["gpu-request"] !== undefined &&
+    !(
+      (command === "session-ledger" &&
+        ["start", "resume", "retry-start"].includes(positionals[1])) ||
+      (command === "reply-consumer" &&
+        ["once", "serve"].includes(positionals[1]))
+    )
+  )
+    throw new Error("--gpu-request requires a native session attachment");
   if (
     command !== "release" &&
     ["release-id", "selection-revision"].some((k) => values[k] !== undefined)
@@ -493,7 +520,7 @@ try {
       ) &&
         !(
           command === "session-ledger" &&
-          ["start", "resume"].includes(positionals[1])
+          ["start", "resume", "retry-start"].includes(positionals[1])
         ) &&
         !(
           command === "reply-consumer" &&
@@ -535,7 +562,7 @@ try {
   ) {
     const permitted =
       (command === "session-ledger" &&
-        ["start", "resume"].includes(positionals[1])) ||
+        ["start", "resume", "retry-start"].includes(positionals[1])) ||
       (command === "reply-consumer" &&
         ["once", "serve"].includes(positionals[1]));
     if (!permitted || !values["budget-guard"] || !values["worker-id"])
@@ -1137,6 +1164,7 @@ try {
       "help",
       "budget-guard",
       "worker-id",
+      "gpu-request",
       "managed-release-id",
       "managed-revision",
     ]);
@@ -1175,6 +1203,7 @@ try {
       const ledger = await SessionLedger.open(project);
       const managed = await pinnedAttachment(project, {
         ledger,
+        gpu: requestedGpu(),
         run_id: values["run-id"],
         budget: values["budget-guard"]
           ? { worker_id: values["worker-id"] }
@@ -1509,10 +1538,12 @@ try {
     const action = positionals[1];
     if (
       positionals.length !== 2 ||
-      !["list", "record", "resolve", "start", "resume"].includes(action)
+      !["list", "record", "resolve", "start", "resume", "retry-start"].includes(
+        action,
+      )
     )
       throw new Error(
-        "Specify session-ledger list, record, resolve, start or resume",
+        "Specify session-ledger list, record, resolve, start, resume or retry-start",
       );
     const ledger = await SessionLedger.open(
       await identity(values.project || process.cwd()),
@@ -1549,10 +1580,10 @@ try {
         );
       if (action === "start" && values["run-id"])
         throw new Error("start allocates a new run ID");
-      if (action === "resume" && !values["run-id"])
-        throw new Error("resume requires --run-id");
+      if (["resume", "retry-start"].includes(action) && !values["run-id"])
+        throw new Error("resume/retry-start requires --run-id");
       if (
-        action === "resume" &&
+        ["resume", "retry-start"].includes(action) &&
         [values.cwd, values["task-id"], values.label, values.provider].some(
           (value) => value !== undefined,
         )
@@ -1560,7 +1591,9 @@ try {
         throw new Error("resume uses the recorded cwd, task and provider");
       const managed = await pinnedAttachment(ledger.project, {
         ...options,
-        run_id: action === "resume" ? values["run-id"] : null,
+        gpu: requestedGpu(),
+        run_id: action === "start" ? null : values["run-id"],
+        retryStart: action === "retry-start",
         budget: values["budget-guard"]
           ? { worker_id: values["worker-id"] }
           : null,
@@ -1578,10 +1611,33 @@ try {
         history: await attached.history.inspect(attached.record.run_id),
         lifecycle: "attachment_verified_process_stopped",
         process: stopped,
+        ...(attached.gpu ? { gpu: attached.gpu } : {}),
         ...(attached.release ? { release: attached.release } : {}),
       };
     }
     console.log(JSON.stringify(result, null, 2));
+  } else if (command === "gpu") {
+    if (
+      positionals.length !== 2 ||
+      !["inspect", "reconcile"].includes(positionals[1]) ||
+      Object.keys(values).some((key) => key !== "help")
+    )
+      throw new Error(
+        "Specify gpu inspect or reconcile without launch options",
+      );
+    const leases = new GpuLeases();
+    const reconciled =
+      positionals[1] === "reconcile" ? await leases.reconcile() : null;
+    console.log(
+      JSON.stringify(
+        {
+          ...(reconciled ? { reconciliation: reconciled } : {}),
+          ...(await leases.inspect()),
+        },
+        null,
+        2,
+      ),
+    );
   } else if (command === "adapters" || command === "adapter-smoke") {
     const argv = values.executable ? [values.executable] : null;
     if (values.entrypoint && !argv)
@@ -1883,5 +1939,5 @@ try {
     console.error(
       `[rdsh-dashboard] tray diagnostics: ${JSON.stringify(e.trayDiagnostics)}`,
     );
-  process.exitCode = 1;
+  process.exitCode = e.code === "gpu_waiting_resource" ? 75 : 1;
 }

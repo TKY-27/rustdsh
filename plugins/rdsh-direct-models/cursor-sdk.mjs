@@ -1,6 +1,10 @@
 import { spawn } from 'node:child_process';
+import { mkdtempSync } from 'node:fs';
+import { rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { buildTurnPrompt,parseTurnResponse,JsonTurnError } from './json-turn.mjs';
+import { buildTurnPrompt,parseTurnResponse,JsonTurnError,assertSupportedGenerationOptions } from './json-turn.mjs';
 const SCRIPT=fileURLToPath(new URL('./cursor-sdk-runner.mjs',import.meta.url));
 const LIMIT=8*1024*1024;
 const ENV_KEYS=['HOME','PATH','USER','LOGNAME','TMPDIR','TMP','TEMP','LANG','LC_ALL','XDG_CONFIG_HOME','XDG_DATA_HOME','CURSOR_API_KEY'];
@@ -9,16 +13,17 @@ export function createCursorSdkRunner({spawnImpl=spawn,killImpl=process.kill.bin
  return (payload,{signal}={})=>new Promise((resolve,reject)=>{
   if(signal?.aborted){reject(signal.reason??new Error('Cursor SDK: aborted'));return;}
   const input=JSON.stringify(payload);if(Buffer.byteLength(input)>LIMIT){reject(new Error('Cursor SDK: input exceeds limit'));return;}
+  let root;try{root=mkdtempSync(path.join(tmpdir(),'rdsh-cursor-bridge-'));}catch{reject(new Error('Cursor SDK: temporary workspace could not be created'));return;}
   let child,timer,output=Buffer.alloc(0),size=0,done=false,failure;
   const stop=()=>{try{if(process.platform!=='win32'&&child?.pid)killImpl(-child.pid,'SIGKILL');else child?.kill('SIGKILL');}catch{try{child?.kill('SIGKILL');}catch{}}};
   const abort=()=>{failure=new Error('Cursor SDK: aborted');stop();};
-  const finish=(error,value)=>{if(done)return;done=true;clearTimeout(timer);signal?.removeEventListener('abort',abort);error?reject(error):resolve(value);};
+  const finish=async(error,value)=>{if(done)return;done=true;clearTimeout(timer);signal?.removeEventListener('abort',abort);try{await rm(root,{recursive:true,force:true});}catch{reject(new Error('Cursor SDK: temporary workspace cleanup failed'));return;}error?reject(error):resolve(value);};
   try{
-   child=spawnImpl(process.execPath,[SCRIPT],{stdio:['pipe','pipe','pipe'],shell:false,detached:process.platform!=='win32',env:Object.fromEntries(ENV_KEYS.filter(key=>typeof env[key]==='string').map(key=>[key,env[key]]))});
+   child=spawnImpl(process.execPath,[SCRIPT],{stdio:['pipe','pipe','pipe'],shell:false,detached:process.platform!=='win32',env:{...Object.fromEntries(ENV_KEYS.filter(key=>typeof env[key]==='string').map(key=>[key,env[key]])),RDSH_SDK_TMPDIR:root}});
    child.stdout.on('data',chunk=>{size+=chunk.length;if(size>LIMIT){failure=new Error('Cursor SDK: output exceeds limit');stop();}else output=Buffer.concat([output,chunk]);});
    let diagnosticSize=0;child.stderr.on('data',chunk=>{diagnosticSize+=chunk.length;if(diagnosticSize>LIMIT){failure=new Error('Cursor SDK: diagnostics exceed limit');stop();}});
    child.stdin.on('error',()=>{});
-   child.on('error',()=>finish(new Error('Cursor SDK: bridge process could not start')));
+   child.on('error',()=>{failure??=new Error('Cursor SDK: bridge process could not start');});
    child.on('close',code=>{
     if(failure){finish(failure);return;}
     let value;try{value=JSON.parse(output.toString('utf8'));}catch{finish(new Error('Cursor SDK: invalid bridge response'));return;}
@@ -29,13 +34,15 @@ export function createCursorSdkRunner({spawnImpl=spawn,killImpl=process.kill.bin
    signal?.addEventListener('abort',abort,{once:true});
    timer=setTimeout(()=>{failure=new Error('Cursor SDK: timed out');stop();},timeoutMs);timer.unref?.();
    if(signal?.aborted)abort();else child.stdin.end(input);
-  }catch{stop();finish(new Error('Cursor SDK: bridge process could not start'));}
+  }catch{if(child){failure??=new Error('Cursor SDK: bridge process could not start');stop();}else finish(new Error('Cursor SDK: bridge process could not start'));}
  });
 }
 export function createCursorSdkBackend({runner=createCursorSdkRunner()}={}){
  return {
   async discover({signal}={}){const value=await runner({action:'models'},{signal});if(!Array.isArray(value?.models)||value.models.some(model=>typeof model.id!=='string'||!model.id))throw new Error('Cursor SDK: invalid model catalog');return value.models;},
   async generate(options){
+   options.signal?.throwIfAborted();
+   assertSupportedGenerationOptions(options);
    let repair;
    for(let attempt=0;attempt<2;attempt++){
     options.signal?.throwIfAborted();

@@ -5,6 +5,7 @@
 [![ci](https://github.com/jimoto-no-llm/rustdsh/actions/workflows/ci.yml/badge.svg)](https://github.com/jimoto-no-llm/rustdsh/actions/workflows/ci.yml)
 [![dashboard](https://github.com/jimoto-no-llm/rustdsh/actions/workflows/dashboard.yml/badge.svg)](https://github.com/jimoto-no-llm/rustdsh/actions/workflows/dashboard.yml)
 [![docs](https://github.com/jimoto-no-llm/rustdsh/actions/workflows/docs.yml/badge.svg)](https://github.com/jimoto-no-llm/rustdsh/actions/workflows/docs.yml)
+[![codecov](https://codecov.io/gh/jimoto-no-llm/rustdsh/graph/badge.svg)](https://codecov.io/gh/jimoto-no-llm/rustdsh)
 [![release](https://img.shields.io/github/v/release/jimoto-no-llm/rustdsh.svg)](https://github.com/jimoto-no-llm/rustdsh/releases)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org/)
@@ -159,6 +160,10 @@ rdsh profiles / rdsh skills         # list available profiles and skills
 rdsh desktop status                 # detect the DeepSeek Harness Desktop app and profile
 rdsh bench --n 5                    # benchmark startup speed between rdsh and dsh
 ```
+
+On Windows, compressed session histories are not opened until rdsh can reject
+parent junctions safely; `sessions --tokens` may omit those histories and its
+totals are inexact.
 
 ### Credential sharing with rdsh auth
 

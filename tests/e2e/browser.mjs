@@ -71,6 +71,35 @@ try{
  const projectPage=await pageFor(browser,runtime.browser_url);await projectPage.locator('#question-Q1 textarea').waitFor();await check(projectPage,/dashboard/i);
  const updateSummary=projectPage.locator('#update-summary');
  await projectPage.waitForFunction(()=>document.querySelector('#update-summary-status')?.textContent.includes('初回確認'));
+ await projectPage.evaluate(async()=>{
+  const {createHumanMetricsPanel}=await import(new URL('/human-metrics-ui.mjs',location.href).href);
+  const root=document.createElement('section');root.id='human-metrics-ui-regression';document.body.append(root);
+  const calls=[];
+  const metrics={enabled:true,retention_days:30,warning:null,coverage:{status:'observed',from:null,to:null,partial:false},decision_time:{status:'observed',sample_count:0,pending_count:0,unpaired_count:0,median_ms:null,total_ms:0},recovery_time:{status:'observed',sample_count:0,pending_count:0,unpaired_count:0,median_ms:null,total_ms:0},question_recurrence:{status:'observed',count:0},instruction_resend:{status:'observed',count:0},queue_revision_conflicts:{status:'observed',count:0},active_timer:null};
+  const panel=createHumanMetricsPanel(root,{api:async(_route,input)=>{if(input)calls.push(input);return structuredClone(metrics);},node:(tag,text,className)=>{const element=document.createElement(tag);if(text!==undefined)element.textContent=text;if(className)element.className=className;return element;},confirm:()=>true});
+  await panel.reload();panel.render({questions:[{id:'Q1',question:'Synthetic question',answer:null}],tasks:[{id:'T1',title:'Synthetic blocked task',status:'blocked'}],instructions:{requests:{C1:{command_id:'C1',text:'Synthetic instruction',mode:'normal',created_at:'2026-10-11T00:00:00.000Z'}}}});
+  window.__humanMetricsRegression={calls};
+ });
+ const metricsPanel=projectPage.locator('#human-metrics-ui-regression');const metricSelects=metricsPanel.locator('select');
+ for(const step of [
+  {select:1,value:'Q1',button:'判断時間を計測開始',action:'start_decision_timer'},
+  {select:2,value:'T1',button:'ブロック復旧の計測開始',action:'start_recovery_timer'},
+  {select:3,value:'Q1',button:'質問の再発として記録',action:'mark_question_recurrence'},
+  {select:4,value:'C1',button:'指示の再送として記録',action:'mark_instruction_resend'},
+ ]){
+  await metricSelects.nth(step.select).selectOption(step.value);
+  const button=metricsPanel.getByRole('button',{name:step.button});assert.equal(await button.isEnabled(),true,`${step.button} should enable after selection`);
+  await metricSelects.nth(step.select).selectOption('');assert.equal(await button.isDisabled(),true,`${step.button} should disable after clearing selection`);
+  await metricSelects.nth(step.select).selectOption(step.value);assert.equal(await button.isEnabled(),true,`${step.button} should enable again after reselection`);
+  await button.click();await projectPage.waitForFunction(action=>window.__humanMetricsRegression.calls.some(call=>call.action===action),step.action);
+ }
+ assert.deepEqual(await projectPage.evaluate(()=>window.__humanMetricsRegression.calls),[
+  {action:'start_decision_timer',question_id:'Q1'},
+  {action:'start_recovery_timer',task_id:'T1'},
+  {action:'mark_question_recurrence',question_id:'Q1'},
+  {action:'mark_instruction_resend',command_id:'C1'},
+ ]);
+ await metricsPanel.evaluate(element=>element.remove());report.flows.push('human metrics UI: selecting each action target enables its button and submits the selected id');
  const observedCli=projectPage.locator('#observed-cli-panel');
  assert.equal(await observedCli.count(),1,'the read-only CLI observation panel should remain in a workspace pane');
  assert.equal(await observedCli.locator('#observed-cli-form').count(),1,'the observation registration form should remain available');
@@ -99,6 +128,7 @@ try{
  await projectPage.setViewportSize(report.viewports[0]);
  await projectPage.locator('#question-Q1 textarea').fill('Keep this draft');
  beginQaCase('desktop.sse-draft');
+ assert.equal(await projectPage.evaluate(()=>document.activeElement===document.querySelector('#question-Q1 textarea')),true);
  const stateUpdate=projectPage.waitForResponse(r=>r.url().endsWith('/api/state')&&r.status()===200);
  await call('dashboard_update_metrics',{input_tokens:1000,cached_input_tokens:500,tool_calls:10,tool_errors:0});await stateUpdate;
  assert.equal(await projectPage.locator('#question-Q1 textarea').inputValue(),'Keep this draft');
@@ -122,6 +152,61 @@ try{
  assert.equal(await projectPage.evaluate(()=>document.activeElement.id),'update-summary-mark-read','summary refresh must preserve its active control');
  assert.match(await updateSummary.innerText(),/数値レポートが更新/);
  passQaCase('desktop.sse-draft','browser-results.json#qa_results.desktop.sse-draft');
+
+ beginQaCase('desktop.command-palette');
+ await projectPage.keyboard.press('Control+k');
+ assert.equal(await projectPage.locator('#palette').evaluate(e=>e.open),false,'Ctrl+K must not steal answer-form focus');
+ await projectPage.locator('#palette-toggle').click();
+ const palette=projectPage.locator('#palette'),paletteSearch=projectPage.locator('#palette-search');
+ await palette.waitFor({state:'visible'});
+ assert.equal(await projectPage.locator('#palette-list [role="option"]').count(),5);
+ assert.equal(await paletteSearch.getAttribute('aria-expanded'),'true');
+ assert.equal(await paletteSearch.getAttribute('aria-activedescendant'),'palette-option-toggle-share');
+ await paletteSearch.fill('share');
+ assert.equal(await projectPage.locator('#palette-list [role="option"]').count(),2);
+ assert.equal(await projectPage.locator('#palette-count').getAttribute('role'),'status');
+ await paletteSearch.press('ArrowDown');
+ assert.equal(await paletteSearch.getAttribute('aria-activedescendant'),'palette-option-refresh-share');
+ assert.equal(await projectPage.locator('#palette-list [aria-selected="true"]').count(),1);
+ await paletteSearch.press('ArrowUp');
+ await paletteSearch.fill('no such command');
+ assert.equal(await projectPage.locator('#palette-list [role="option"]').count(),0);
+ assert.equal(await paletteSearch.getAttribute('aria-activedescendant'),null);
+ assert.equal(await projectPage.locator('#palette-count').innerText(),'該当なし');
+ await paletteSearch.press('Enter');
+ assert.equal(await palette.evaluate(e=>e.open),true,'Enter with no results must not run a command');
+ await paletteSearch.press('Escape');
+ await palette.waitFor({state:'hidden'});
+ await projectPage.waitForFunction(()=>document.activeElement.id==='palette-toggle');
+ assert.equal(await projectPage.evaluate(()=>document.activeElement.id),'palette-toggle');
+ assert.equal(await projectPage.locator('#share').isHidden(),true,'Esc must cancel without running the selected command');
+ assert.equal(await projectPage.locator('#palette-toggle').getAttribute('aria-expanded'),'false');
+
+ await projectPage.keyboard.press('Control+k');
+ await palette.waitFor({state:'visible'});
+ assert.equal(await projectPage.evaluate(()=>document.activeElement.id),'palette-search');
+ await paletteSearch.fill('answered');
+ assert.equal(await projectPage.locator('#palette-list [role="option"]').count(),1,'English aliases should filter commands');
+ assert.match(await projectPage.locator('#palette-count').innerText(),/回答済み.*Toggle answered questions/);
+ const paletteUpdate=projectPage.waitForResponse(r=>r.url().endsWith('/api/state')&&r.status()===200);
+ await call('dashboard_update_metrics',{input_tokens:2000,cached_input_tokens:700,tool_calls:11,tool_errors:0});await paletteUpdate;
+ assert.equal(await paletteSearch.inputValue(),'answered');
+ assert.equal(await paletteSearch.evaluate(e=>document.activeElement===e),true,'SSE must leave palette search focus intact');
+ assert.equal(await palette.evaluate(e=>e.open),true,'SSE must not close the palette');
+ await paletteSearch.press('Enter');
+ await palette.waitFor({state:'hidden'});
+ await projectPage.waitForFunction(()=>document.querySelector('#answered').open);
+ await projectPage.waitForFunction(()=>document.activeElement.id==='palette-toggle');
+ assert.equal(await projectPage.locator('#answered').evaluate(e=>e.open),true,'Enter should run the selected safe command');
+ assert.equal(await projectPage.evaluate(()=>document.activeElement.id),'palette-toggle');
+ await projectPage.locator('#palette-toggle').click();
+ await paletteSearch.fill('未回答');
+ assert.equal(await projectPage.locator('#palette-list [role="option"]').count(),1,'Japanese labels should filter commands');
+ await paletteSearch.press('Enter');
+ await palette.waitFor({state:'hidden'});
+ await projectPage.waitForFunction(()=>document.activeElement.id==='pending-heading');
+ assert.equal(await projectPage.evaluate(()=>document.activeElement.id),'pending-heading','navigation command should focus its destination');
+ passQaCase('desktop.command-palette','browser-results.json#qa_results.desktop.command-palette');
  await projectPage.locator('#question-Q1 textarea').fill('E2E saved answer');await projectPage.locator('#question-Q1').getByRole('button',{name:'回答を返す'}).click();
  await projectPage.locator('#questions').filter({hasText:'未回答の質問はありません'}).waitFor();await projectPage.locator('#answered').evaluate(e=>e.open=true);await projectPage.locator('#answers').filter({hasText:'E2E saved answer'}).waitFor();
  await projectPage.waitForFunction(()=>document.querySelector('#update-summary-items')?.textContent.includes('質問への回答が保存'));
@@ -197,7 +282,7 @@ try{
  const newPage=await pageFor(browser,fresh.browser_url);await newPage.locator('#tasks-detail').evaluate(e=>e.open=true);await newPage.locator('#task-T1').waitFor();await newPage.locator('#answered').evaluate(e=>e.open=true);await newPage.locator('#answers').filter({hasText:'E2E saved answer'}).waitFor();await check(newPage,/dashboard/i);
  const persisted=await fetch(fresh.local_url+'api/state',{headers:{authorization:`Bearer ${fresh.token}`}});assert.equal(persisted.status,200);const persistedState=await persisted.json();assert.equal(persistedState.questions.find(item=>item.id==='Q1').answer,'E2E saved answer');assert.equal(persistedState.feedback.filter(item=>item.question_id==='Q1'&&item.type==='question_answered').length,1);
  passQaCase('desktop.answer-reload','browser-results.json#qa_results.desktop.answer-reload');await stop(restarted.child);
- report.flows.push('project CLI: real MCP task/question -> preserved read-only CLI observation panel and project-specific pane layout -> browser draft and focus plus change summary on SSE -> browser answer -> per-project summary checkpoint, MCP/file readback -> process restart retained answer and revoked old key');
+ report.flows.push('project CLI: real MCP task/question -> preserved read-only CLI observation panel -> project-specific pane layout persistence, keyboard navigation and mobile one-column -> browser draft and focus preserved on SSE plus change summary -> command palette English/Japanese search, arrows, Enter, Escape, ARIA state and SSE resilience -> browser answer -> per-project summary checkpoint, MCP/file readback -> process restart retained answer and revoked old key');
  }finally{await client.close();}
  assert.deepEqual(report.page_errors,[]);assert.deepEqual(report.console_errors,[]);
  report.result='PASS';
