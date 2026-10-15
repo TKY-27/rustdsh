@@ -161,7 +161,7 @@ the provider says has to be named there explicitly.
 
 | provider | source |
 | --- | --- |
-| `openai-codex` | `codex debug models`, falling back to `~/.codex/models_cache.json` |
+| `openai-codex` | `codex debug models`, falling back to `$CODEX_HOME/models_cache.json` (`CODEX_HOME` defaults to `~/.codex`) |
 | `kimi-coding` | `GET {baseURL}/v1/models`, authenticated with the profile's `apiKeyEnv` credential |
 
 ```sh

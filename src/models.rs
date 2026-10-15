@@ -13,7 +13,8 @@
 //! This module closes that gap from the provider side. Two sources are known:
 //!
 //! * `openai-codex` — the catalog the local Codex CLI already maintains
-//!   (`codex debug models`, falling back to `~/.codex/models_cache.json`).
+//!   (`codex debug models`, falling back to `$CODEX_HOME/models_cache.json`,
+//!   with `~/.codex` as the default Codex home).
 //!   Entries are only *added*: the CLI's display-name style differs from the
 //!   profile's, so an existing entry keeps the name it has.
 //! * `kimi-coding` — the provider's own listing endpoint
@@ -30,6 +31,7 @@
 //! `discoverModels` answers catalog providers from pi-ai without a network
 //! call, which is why a provider's live listing never reaches the picker).
 
+use std::collections::HashSet;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -85,7 +87,7 @@ struct CatalogSource {
 }
 
 enum SourceKind {
-    /// `codex debug models`, falling back to `~/.codex/models_cache.json`.
+    /// `codex debug models`, falling back to the Codex home's model cache.
     CodexCli,
     /// The provider's own listing endpoint, read with the profile's API key.
     Live(LiveEndpoint),
@@ -318,6 +320,7 @@ fn fetch_catalog(source: &CatalogSource, profile_text: &str) -> Result<Fetched> 
         SourceKind::Live(endpoint) => {
             let lines: Vec<String> = profile_text.lines().map(str::to_string).collect();
             let site = locate_owned(&lines, source.provider)?;
+            ensure_rename_supported(&lines, &site)?;
             let key_env = scalar_in(&lines, &site, "apiKeyEnv").ok_or_else(|| {
                 anyhow::anyhow!(
                     "the {} block has no apiKeyEnv: entry, so its listing cannot be read (the subscription login is not used to list)",
@@ -331,8 +334,13 @@ fn fetch_catalog(source: &CatalogSource, profile_text: &str) -> Result<Fetched> 
                         "no credential for {key_env}: store it (`rdsh auth --import --ref {key_env}`) or export it"
                     )
                 })?;
-            let base = scalar_in(&lines, &site, "baseURL")
-                .unwrap_or_else(|| endpoint.base_url.to_string());
+            let base = if find_key(&lines, site.provider_line + 1, site.provider_end, "baseURL")
+                .is_some()
+            {
+                scalar_in(&lines, &site, "baseURL").context("unsupported baseURL scalar")?
+            } else {
+                endpoint.base_url.to_string()
+            };
             let url = format!("{}{}", base.trim_end_matches('/'), endpoint.path);
             let body = curl_json(endpoint, &url, &key)?;
             let doc: Value = serde_json::from_str(&body)
@@ -362,19 +370,20 @@ fn codex_catalog(max_tokens: u64) -> Result<Fetched> {
             }
         }
     }
-    let path = codex_cache_path().context("HOME is not set")?;
+    let path = codex_cache_path()?;
+    let display = path.display();
     let text = std::fs::read_to_string(&path).with_context(|| {
-        format!("neither `codex debug models` nor {path} yielded a model catalog")
+        format!("neither `codex debug models` nor {display} yielded a model catalog")
     })?;
     let doc: Value = serde_json::from_str(&text)
-        .with_context(|| format!("{path} is not the model catalog JSON this build expects"))?;
+        .with_context(|| format!("{display} is not the model catalog JSON this build expects"))?;
     let models = catalog_from_json(&doc, max_tokens);
     if models.is_empty() {
-        bail!("{path} lists no selectable Codex model");
+        bail!("{display} lists no selectable Codex model");
     }
     Ok(Fetched {
         models,
-        label: path,
+        label: display.to_string(),
     })
 }
 
@@ -389,8 +398,18 @@ fn codex_cli_catalog() -> Option<String> {
     String::from_utf8(output.stdout).ok()
 }
 
-fn codex_cache_path() -> Option<String> {
-    crate::inspect::home_dir().map(|home| format!("{home}/.codex/models_cache.json"))
+fn codex_cache_path() -> Result<PathBuf> {
+    let home = if let Some(home) = std::env::var_os("CODEX_HOME").filter(|home| !home.is_empty()) {
+        let path = PathBuf::from(home);
+        if !path.is_dir() {
+            bail!("CODEX_HOME is not an existing directory");
+        }
+        path.canonicalize()
+            .context("failed to canonicalize CODEX_HOME")?
+    } else {
+        PathBuf::from(crate::inspect::home_dir().context("HOME is not set")?).join(".codex")
+    };
+    Ok(home.join("models_cache.json"))
 }
 
 /// The curl config file that describes one listing request. The credential
@@ -479,9 +498,8 @@ fn curl_quote(value: &str) -> String {
 /// The value of one scalar key inside a provider block.
 fn scalar_in(lines: &[String], site: &Site, key: &str) -> Option<String> {
     let index = find_key(lines, site.provider_line + 1, site.provider_end, key)?;
-    let value = lines[index].trim_start().strip_prefix(key)?.trim_start();
-    let value = value.strip_prefix(':')?.trim();
-    (!value.is_empty()).then(|| unquote(value))
+    let value = key_value(&lines[index], key)?;
+    model_scalar(value).ok().filter(|value| !value.is_empty())
 }
 
 /// Read one `refs:` entry from the credentials document.
@@ -492,7 +510,8 @@ fn credential_ref(name: &str) -> Option<String> {
     for line in text.lines() {
         let trimmed = line.trim_end();
         if !in_refs {
-            in_refs = trimmed == "refs:";
+            in_refs =
+                key_value(trimmed, "refs").is_some_and(|value| strip_comment(value).is_empty());
             continue;
         }
         if !trimmed.trim().is_empty() && indent_of(trimmed) == 0 {
@@ -501,14 +520,8 @@ fn credential_ref(name: &str) -> Option<String> {
         if indent_of(trimmed) != 2 {
             continue;
         }
-        let Some((key, value)) = trimmed.trim().split_once(':') else {
-            continue;
-        };
-        if key == name {
-            let value = unquote(value);
-            if !value.is_empty() {
-                return Some(value);
-            }
+        if let Some(value) = key_value(trimmed, name) {
+            return model_scalar(value).ok().filter(|value| !value.is_empty());
         }
     }
     None
@@ -572,8 +585,24 @@ fn selected_sources(provider: Option<&str>) -> Result<Vec<&'static CatalogSource
 /// Whether a profile configures a provider at all. A provider a profile does
 /// not name is not this command's business, so it is not reported.
 fn configures(text: &str, provider: &str) -> bool {
-    text.lines()
-        .any(|line| line.trim_start().starts_with(&format!("{provider}:")))
+    let lines: Vec<String> = text.lines().map(str::to_string).collect();
+    let Some(entry) = llm_pi_ai_entry(&lines) else {
+        return false;
+    };
+    let Some(config) = find_key(&lines, entry + 1, block_end(&lines, entry), "config") else {
+        return false;
+    };
+    let Some(providers) = find_key(&lines, config + 1, block_end(&lines, config), "providers")
+    else {
+        return false;
+    };
+    find_key(
+        &lines,
+        providers + 1,
+        block_end(&lines, providers),
+        provider,
+    )
+    .is_some()
 }
 
 /// Read one profile and fold one provider's catalog into it.
@@ -589,11 +618,15 @@ pub(crate) fn apply_profile(
 ) -> Result<Applied> {
     let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
     let site = locate_owned(&lines, provider)?;
+    if refresh_names {
+        ensure_rename_supported(&lines, &site)?;
+    }
     let listed = existing_ids(&lines, &site);
-    let max_tokens = existing_max_tokens(&lines, &site).unwrap_or(DEFAULT_MAX_TOKENS);
+    let max_tokens = existing_max_tokens(&lines, &site)?.unwrap_or(DEFAULT_MAX_TOKENS);
+    let mut seen: HashSet<&str> = listed.iter().map(String::as_str).collect();
     let missing: Vec<CatalogModel> = catalog
         .iter()
-        .filter(|model| !listed.contains(&model.id))
+        .filter(|model| seen.insert(model.id.as_str()))
         .map(|model| CatalogModel {
             max_tokens,
             ..model.clone()
@@ -612,16 +645,28 @@ pub(crate) fn apply_profile(
             renamed,
         });
     }
+    if text.contains("\r\n") && text.replace("\r\n", "").contains('\n') {
+        bail!("the profile has mixed line endings; use one line ending before syncing models");
+    }
 
-    for rename in &renamed {
+    // Insert missing names from bottom to top so earlier item positions stay
+    // valid; an id is a single-line scalar, so inserting after it cannot alter
+    // a neighboring block scalar's chomping or trailing blank lines.
+    for rename in renamed.iter().rev() {
         if let Some(index) = name_line(&lines, &site, &rename.id) {
-            lines[index] = format!(
-                "{}name: {}",
-                " ".repeat(indent_of(&lines[index])),
-                yaml_scalar(&rename.to)
+            replace_scalar(&mut lines[index], "name", &yaml_scalar(&rename.to));
+        } else if let Some(item) = item_line(&lines, &site, &rename.id) {
+            let index = item_key_line(&lines, item, site.item_indent, "id")
+                .context("model item lost its id before name insertion")?;
+            let depth = item_field_indent(&lines, item, site.item_indent)
+                .context("model item has no field indentation")?;
+            lines.insert(
+                index + 1,
+                format!("{}name: {}", " ".repeat(depth), yaml_scalar(&rename.to)),
             );
         }
     }
+    let site = locate_owned(&lines, provider)?;
     let added: Vec<String> = missing.iter().map(|model| model.id.clone()).collect();
     let block: Vec<String> = missing
         .iter()
@@ -632,7 +677,7 @@ pub(crate) fn apply_profile(
             .is_some_and(|value| strip_comment(value) == "[]")
         {
             // `models: []` is an inline empty sequence: give it a body.
-            lines[models_line] = format!("{}models:", " ".repeat(site.models_indent));
+            replace_scalar(&mut lines[models_line], "models", "");
             lines.splice(models_line + 1..models_line + 1, block);
             return Ok(Applied {
                 text: join(lines, text),
@@ -648,12 +693,21 @@ pub(crate) fn apply_profile(
             lines.splice(insert_at..insert_at, block);
         }
         None => {
-            // The provider block carries no models list yet: append the new
-            // list after its last existing key.
-            let insert_at = (site.provider_line + 1..site.provider_end)
-                .rfind(|i| !lines[*i].trim().is_empty())
-                .map(|i| i + 1)
-                .unwrap_or(site.provider_line + 1);
+            // Keep normal field order, but insert before a final block scalar
+            // so none of its blank lines or EOF chomping can move or change.
+            let last_field = (site.provider_line + 1..site.provider_end).rfind(|i| {
+                indent_of(&lines[*i]) == site.models_indent
+                    && !lines[*i].trim().is_empty()
+                    && !lines[*i].trim_start().starts_with('#')
+            });
+            let insert_at = last_field
+                .filter(|i| {
+                    // A possible block-scalar indicator is sufficient to
+                    // choose the earlier, safe insertion point. This also
+                    // covers quoted keys, explicit tags and inline comments.
+                    strip_comment(&lines[*i]).contains(['|', '>'])
+                })
+                .unwrap_or(site.provider_end);
             let mut header = vec![format!("{}models:", " ".repeat(site.models_indent))];
             header.extend(block);
             lines.splice(insert_at..insert_at, header);
@@ -668,9 +722,14 @@ pub(crate) fn apply_profile(
 }
 
 fn join(lines: Vec<String>, original: &str) -> String {
-    let mut text = lines.join("\n");
+    let newline = if original.contains("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    };
+    let mut text = lines.join(newline);
     if original.ends_with('\n') {
-        text.push('\n');
+        text.push_str(newline);
     }
     text
 }
@@ -698,9 +757,17 @@ fn locate_owned(lines: &[String], provider: &str) -> Result<Site> {
     let entry_end = block_end(lines, entry);
     let config = find_key(lines, entry + 1, entry_end, "config")
         .ok_or_else(|| anyhow::anyhow!("the llm-pi-ai entry has no config: block"))?;
+    if key_value(&lines[config], "config").is_some_and(|value| !strip_comment(value).is_empty()) {
+        bail!("the llm-pi-ai config must be a block mapping");
+    }
     let config_end = block_end(lines, config);
     let providers = find_key(lines, config + 1, config_end, "providers")
         .ok_or_else(|| anyhow::anyhow!("the llm-pi-ai config has no providers: block"))?;
+    if key_value(&lines[providers], "providers")
+        .is_some_and(|value| !strip_comment(value).is_empty())
+    {
+        bail!("providers must be a block mapping");
+    }
     let providers_end = block_end(lines, providers);
     let provider_line = find_key(lines, providers + 1, providers_end, provider).ok_or_else(|| {
         anyhow::anyhow!(
@@ -708,17 +775,46 @@ fn locate_owned(lines: &[String], provider: &str) -> Result<Site> {
         )
     })?;
     let provider_indent = indent_of(&lines[provider_line]);
-    let provider_inline_empty = key_value(&lines[provider_line], provider)
-        .is_some_and(|value| strip_comment(value) == "{}");
+    if key_value(&lines[provider_line], provider)
+        .is_some_and(|value| !strip_comment(value).is_empty())
+    {
+        bail!("the {provider} value is not a block mapping; expand it to a block with a models: list first");
+    }
     let provider_end = block_end(lines, provider_line);
     let step = step_after(lines, provider_line, provider_end).unwrap_or(2);
     match find_key(lines, provider_line + 1, provider_end, "models") {
         Some(models_line) => {
             let models_indent = indent_of(&lines[models_line]);
+            let value = strip_comment(key_value(&lines[models_line], "models").unwrap_or(""));
+            if !value.is_empty() && value != "[]" {
+                bail!("expand models to an indented block sequence before syncing");
+            }
+            let first_content = (models_line + 1..provider_end).find(|i| {
+                let body = lines[*i].trim();
+                !body.is_empty() && !body.starts_with('#')
+            });
+            if first_content.is_some_and(|i| {
+                indent_of(&lines[i]) <= models_indent && item_body(&lines[i]).is_some()
+            }) {
+                bail!("expand models to an indented block sequence before syncing");
+            }
             let models_end = block_end(lines, models_line);
+            for line in &lines[models_line + 1..models_end] {
+                let body = line.trim_start();
+                let body = body.strip_prefix("- ").unwrap_or(body);
+                if key_value(body, "name").is_some_and(|value| {
+                    let value = strip_comment(value);
+                    value.starts_with('|') || value.starts_with('>')
+                }) {
+                    bail!("a multiline name cannot be refreshed safely; use a single-line name before syncing models");
+                }
+            }
             let item_indent = first_item_indent(lines, models_line + 1, models_end)
                 .unwrap_or(models_indent + step);
-            Ok(Site {
+            if first_content.is_some_and(|i| i < models_end && item_body(&lines[i]).is_none()) {
+                bail!("models must be an indented block sequence, not a mapping or scalar");
+            }
+            let site = Site {
                 provider_line,
                 provider_end,
                 models_line: Some(models_line),
@@ -726,24 +822,19 @@ fn locate_owned(lines: &[String], provider: &str) -> Result<Site> {
                 models_indent,
                 item_indent,
                 step,
-            })
+            };
+            validate_model_items(lines, &site)?;
+            Ok(site)
         }
-        None => {
-            if provider_inline_empty {
-                bail!(
-                    "the {provider} block is written as `{provider}: {{}}` on one line; expand it to a block with a models: list first"
-                );
-            }
-            Ok(Site {
-                provider_line,
-                provider_end,
-                models_line: None,
-                models_end: 0,
-                models_indent: provider_indent + step,
-                item_indent: provider_indent + step * 2,
-                step,
-            })
-        }
+        None => Ok(Site {
+            provider_line,
+            provider_end,
+            models_line: None,
+            models_end: 0,
+            models_indent: provider_indent + step,
+            item_indent: provider_indent + step * 2,
+            step,
+        }),
     }
 }
 
@@ -763,7 +854,10 @@ fn llm_pi_ai_entry(lines: &[String]) -> Option<usize> {
         if identifies_llm_pi_ai(head) {
             return Some(*start);
         }
-        if (start + 1..end).any(|i| identifies_llm_pi_ai(lines[i].trim())) {
+        let depth = item_field_indent(lines, *start, indent_of(&lines[*start]));
+        if (start + 1..end)
+            .any(|i| Some(indent_of(&lines[i])) == depth && identifies_llm_pi_ai(lines[i].trim()))
+        {
             return Some(*start);
         }
     }
@@ -771,13 +865,11 @@ fn llm_pi_ai_entry(lines: &[String]) -> Option<usize> {
 }
 
 fn identifies_llm_pi_ai(trimmed: &str) -> bool {
-    matches!(
-        trimmed,
-        "id: llm-pi-ai"
-            | "name: \"@deepseek-ai/dsh-llm-pi-ai\""
-            | "name: '@deepseek-ai/dsh-llm-pi-ai'"
-            | "name: @deepseek-ai/dsh-llm-pi-ai"
-    )
+    key_value(trimmed, "id")
+        .is_some_and(|value| model_scalar(value).is_ok_and(|value| value == "llm-pi-ai"))
+        || key_value(trimmed, "name").is_some_and(|value| {
+            model_scalar(value).is_ok_and(|value| value == "@deepseek-ai/dsh-llm-pi-ai")
+        })
 }
 
 /// The first line after `start` that is indented no deeper than `start`.
@@ -796,11 +888,12 @@ fn block_end(lines: &[String], start: usize) -> usize {
 
 /// A `key:` line (or `key: something`) within `[from, until)`.
 fn find_key(lines: &[String], from: usize, until: usize, key: &str) -> Option<usize> {
+    let depth = (from..until)
+        .filter(|i| !lines[*i].trim().is_empty() && !lines[*i].trim_start().starts_with('#'))
+        .map(|i| indent_of(&lines[i]))
+        .min()?;
     (from..until).find(|i| {
-        let trimmed = lines[*i].trim_start();
-        trimmed
-            .strip_prefix(key)
-            .is_some_and(|rest| rest.starts_with(':') || rest.starts_with(": "))
+        indent_of(&lines[*i]) == depth && key_value(lines[*i].trim_start(), key).is_some()
     })
 }
 
@@ -817,7 +910,7 @@ fn step_after(lines: &[String], start: usize, end: usize) -> Option<usize> {
 
 fn first_item_indent(lines: &[String], from: usize, until: usize) -> Option<usize> {
     (from..until)
-        .find(|i| lines[*i].trim_start().starts_with("- "))
+        .find(|i| item_body(&lines[*i]).is_some())
         .map(|i| indent_of(&lines[i]))
 }
 
@@ -825,9 +918,8 @@ fn first_item_indent(lines: &[String], from: usize, until: usize) -> Option<usiz
 fn last_item_end(lines: &[String], site: &Site) -> Option<usize> {
     let models_line = site.models_line?;
     let models_end = site.models_end.min(lines.len());
-    let last = (models_line + 1..models_end).rfind(|i| {
-        indent_of(&lines[*i]) == site.item_indent && lines[*i].trim_start().starts_with("- ")
-    })?;
+    let last = (models_line + 1..models_end)
+        .rfind(|i| indent_of(&lines[*i]) == site.item_indent && item_body(&lines[*i]).is_some())?;
     Some(block_end(lines, last))
 }
 
@@ -837,7 +929,7 @@ fn item_line(lines: &[String], site: &Site, wanted: &str) -> Option<usize> {
     let end = site.models_end.min(lines.len());
     (models_line + 1..end).find(|i| {
         indent_of(&lines[*i]) == site.item_indent
-            && lines[*i].trim_start().starts_with("- ")
+            && item_body(&lines[*i]).is_some()
             && item_id(lines, *i, site.item_indent).as_deref() == Some(wanted)
     })
 }
@@ -845,8 +937,32 @@ fn item_line(lines: &[String], site: &Site, wanted: &str) -> Option<usize> {
 /// The `name:` line inside one model item.
 fn name_line(lines: &[String], site: &Site, wanted: &str) -> Option<usize> {
     let item = item_line(lines, site, wanted)?;
-    let end = block_end(lines, item);
-    find_key(lines, item + 1, end, "name")
+    item_key_line(lines, item, site.item_indent, "name")
+}
+
+fn item_field_indent(lines: &[String], item: usize, item_indent: usize) -> Option<usize> {
+    let body = item_body(&lines[item])?;
+    if !strip_comment(body).is_empty() {
+        return Some(lines[item].len() - body.len());
+    }
+    (item + 1..block_end(lines, item))
+        .filter(|i| {
+            !lines[*i].trim().is_empty()
+                && !lines[*i].trim_start().starts_with('#')
+                && indent_of(&lines[*i]) > item_indent
+        })
+        .map(|i| indent_of(&lines[i]))
+        .min()
+}
+
+fn item_key_line(lines: &[String], item: usize, item_indent: usize, key: &str) -> Option<usize> {
+    if key_value(item_body(&lines[item])?, key).is_some() {
+        return Some(item);
+    }
+    let depth = item_field_indent(lines, item, item_indent)?;
+    (item + 1..block_end(lines, item)).find(|i| {
+        indent_of(&lines[*i]) == depth && key_value(lines[*i].trim_start(), key).is_some()
+    })
 }
 
 fn existing_ids(lines: &[String], site: &Site) -> Vec<String> {
@@ -855,9 +971,7 @@ fn existing_ids(lines: &[String], site: &Site) -> Vec<String> {
     };
     let end = site.models_end.min(lines.len());
     (models_line + 1..end)
-        .filter(|i| {
-            indent_of(&lines[*i]) == site.item_indent && lines[*i].trim_start().starts_with("- ")
-        })
+        .filter(|i| indent_of(&lines[*i]) == site.item_indent && item_body(&lines[*i]).is_some())
         .filter_map(|i| item_id(lines, i, site.item_indent))
         .collect()
 }
@@ -870,16 +984,15 @@ fn plan_renames(lines: &[String], site: &Site, catalog: &[CatalogModel]) -> Vec<
             continue;
         };
         let Some(index) = name_line(lines, site, &id) else {
+            out.push(Rename {
+                from: id.clone(),
+                id,
+                to: model.name.clone(),
+            });
             continue;
         };
-        let current = unquote(
-            lines[index]
-                .trim_start()
-                .strip_prefix("name")
-                .and_then(|rest| rest.strip_prefix(':'))
-                .unwrap_or("")
-                .trim(),
-        );
+        let body = item_body(&lines[index]).unwrap_or(lines[index].trim_start());
+        let current = model_scalar(key_value(body, "name").unwrap_or("")).unwrap_or_default();
         if current != model.name && !name_already_current(&current, &model.name) {
             out.push(Rename {
                 id,
@@ -911,8 +1024,17 @@ fn name_already_current(current: &str, live: &str) -> bool {
 
 /// The raw value after `key:` on one line, when that line opens with `key:`.
 fn key_value<'a>(line: &'a str, key: &str) -> Option<&'a str> {
-    let body = line.trim_start().strip_prefix(key)?;
-    body.strip_prefix(':').map(str::trim)
+    let colon = key_colon(line, key)?;
+    Some(line[colon + 1..].trim())
+}
+
+fn key_colon(line: &str, key: &str) -> Option<usize> {
+    let colon = line.find(':')?;
+    let candidate = line[..colon].trim();
+    (candidate == key
+        || (candidate.starts_with(['\'', '"'])
+            && model_scalar(candidate).ok().as_deref() == Some(key)))
+    .then_some(colon)
 }
 
 /// A scalar with any trailing YAML comment removed. A `#` inside quotes is
@@ -920,21 +1042,36 @@ fn key_value<'a>(line: &'a str, key: &str) -> Option<&'a str> {
 fn strip_comment(value: &str) -> &str {
     let bytes = value.as_bytes();
     let mut quote = None;
-    for (index, byte) in bytes.iter().enumerate() {
-        match quote {
-            Some(open) => {
-                if *byte == open {
-                    quote = None;
-                }
+    let mut previous = None;
+    let mut index = 0;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if let Some(open) = quote {
+            if open == b'"' && byte == b'\\' {
+                index += 2;
+                continue;
             }
-            None if *byte == b'\'' || *byte == b'"' => quote = Some(*byte),
-            None if *byte == b'#'
-                && (index == 0 || bytes[index - 1] == b' ' || bytes[index - 1] == b'\t') =>
-            {
-                return value[..index].trim_end();
+            if open == b'\'' && byte == b'\'' && bytes.get(index + 1) == Some(&b'\'') {
+                index += 2;
+                continue;
             }
-            None => {}
+            if byte == open {
+                quote = None;
+            }
+        } else if (byte == b'\'' || byte == b'"')
+            && matches!(
+                previous,
+                None | Some(b':') | Some(b',') | Some(b'[') | Some(b'{')
+            )
+        {
+            quote = Some(byte);
+        } else if byte == b'#' && (index == 0 || bytes[index - 1].is_ascii_whitespace()) {
+            return value[..index].trim_end();
         }
+        if !byte.is_ascii_whitespace() {
+            previous = Some(byte);
+        }
+        index += 1;
     }
     value.trim_end()
 }
@@ -943,45 +1080,274 @@ fn strip_comment(value: &str) -> &str {
 /// later line of the item, or is written in flow style. A comment after the
 /// value must not hide the id: a missed id would be appended a second time.
 fn item_id(lines: &[String], item: usize, item_indent: usize) -> Option<String> {
-    let head = lines[item].trim_start().strip_prefix("- ")?;
+    let head = strip_comment(item_body(&lines[item])?);
     if let Some(value) = key_value(head, "id") {
-        return Some(unquote(strip_comment(value)));
+        return model_scalar(value).ok();
     }
-    if let Some(flow) = head
-        .trim()
-        .strip_prefix('{')
-        .and_then(|rest| rest.strip_suffix('}'))
-    {
-        for field in flow.split(',') {
-            if let Some(value) = key_value(field.trim(), "id") {
-                return Some(unquote(strip_comment(value)));
-            }
-        }
+    if head.starts_with('{') {
+        return flow_fields(head)?.into_iter().find_map(|field| {
+            key_value(field.trim(), "id").and_then(|value| model_scalar(value).ok())
+        });
     }
-    let end = block_end(lines, item);
-    let child_indent = (item + 1..end)
-        .find(|i| {
-            let trimmed = lines[*i].trim();
-            !trimmed.is_empty() && !trimmed.starts_with('#') && indent_of(&lines[*i]) > item_indent
-        })
-        .map(|i| indent_of(&lines[i]))?;
-    (item + 1..end).find_map(|i| {
-        if indent_of(&lines[i]) != child_indent {
-            return None;
-        }
-        key_value(lines[i].trim_start(), "id").map(|value| unquote(strip_comment(value)))
-    })
+    let index = item_key_line(lines, item, item_indent, "id")?;
+    let body = item_body(&lines[index]).unwrap_or(lines[index].trim_start());
+    model_scalar(key_value(body, "id")?).ok()
 }
 
-fn existing_max_tokens(lines: &[String], site: &Site) -> Option<u64> {
-    let models_line = site.models_line?;
-    let end = site.models_end.min(lines.len());
-    (models_line + 1..end)
+fn item_body(line: &str) -> Option<&str> {
+    let rest = line.trim_start().strip_prefix('-')?;
+    (rest.is_empty() || rest.starts_with(char::is_whitespace)).then(|| rest.trim_start())
+}
+
+// Decode single-line quoted strings exactly; aliases, tags, structured values
+// and physically multiline strings remain outside this line editor.
+fn model_scalar(value: &str) -> Result<String> {
+    let value = strip_comment(value);
+    if value.starts_with('"') {
+        if let Ok(decoded) = serde_json::from_str::<String>(value) {
+            return Ok(decoded);
+        }
+        let inner = value
+            .strip_prefix('"')
+            .and_then(|value| value.strip_suffix('"'))
+            .context("unsupported or multiline quoted model scalar")?;
+        return decode_yaml_double(inner);
+    }
+    if value.starts_with('\'') {
+        if value.len() < 2 || !value.ends_with('\'') {
+            bail!("unsupported or multiline quoted model scalar");
+        }
+        return Ok(unquote(value));
+    }
+    if value.is_empty()
+        || value
+            .chars()
+            .next()
+            .is_some_and(|ch| matches!(ch, '!' | '&' | '*' | '|' | '>' | '[' | '{'))
+    {
+        bail!("unsupported model scalar; use a single-line string");
+    }
+    Ok(value.to_string())
+}
+
+// Same YAML 1.2 escape alphabet used by the existing provider route reader.
+fn decode_yaml_double(inner: &str) -> Result<String> {
+    let mut out = String::new();
+    let mut chars = inner.chars();
+    while let Some(ch) = chars.next() {
+        if ch != '\\' {
+            if matches!(ch, '"' | '\n' | '\r') {
+                bail!("unsupported quoted scalar");
+            }
+            out.push(ch);
+            continue;
+        }
+        let escape = chars.next().context("incomplete quoted scalar escape")?;
+        let decoded = match escape {
+            '0' => '\0',
+            'a' => '\u{7}',
+            'b' => '\u{8}',
+            't' | '\t' => '\t',
+            'n' => '\n',
+            'v' => '\u{b}',
+            'f' => '\u{c}',
+            'r' => '\r',
+            'e' => '\u{1b}',
+            ' ' => ' ',
+            '"' => '"',
+            '/' => '/',
+            '\\' => '\\',
+            'N' => '\u{85}',
+            '_' => '\u{a0}',
+            'L' => '\u{2028}',
+            'P' => '\u{2029}',
+            'x' | 'u' | 'U' => {
+                let count = match escape {
+                    'x' => 2,
+                    'u' => 4,
+                    _ => 8,
+                };
+                let digits: String = chars.by_ref().take(count).collect();
+                if digits.len() != count || !digits.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                    bail!("invalid quoted scalar Unicode escape");
+                }
+                char::from_u32(u32::from_str_radix(&digits, 16)?)
+                    .context("invalid Unicode scalar")?
+            }
+            _ => bail!("unsupported quoted scalar escape"),
+        };
+        out.push(decoded);
+    }
+    Ok(out)
+}
+
+fn flow_fields(head: &str) -> Option<Vec<&str>> {
+    let body = strip_comment(head).strip_prefix('{')?.strip_suffix('}')?;
+    let mut fields = Vec::new();
+    let mut quote = None;
+    let mut escaped = false;
+    let mut start = 0;
+    for (i, ch) in body.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if quote == Some('"') && ch == '\\' {
+            escaped = true;
+            continue;
+        }
+        if let Some(open) = quote {
+            if ch == open {
+                quote = None;
+            }
+            continue;
+        }
+        match ch {
+            '\'' | '"' => quote = Some(ch),
+            '{' | '}' | '[' | ']' => return None,
+            ',' => {
+                fields.push(body[start..i].trim());
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    if quote.is_some() {
+        return None;
+    }
+    fields.push(body[start..].trim());
+    Some(fields)
+}
+
+fn validate_model_items(lines: &[String], site: &Site) -> Result<()> {
+    let Some(models_line) = site.models_line else {
+        return Ok(());
+    };
+    for i in models_line + 1..site.models_end {
+        let line = lines[i].trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if indent_of(&lines[i]) < site.item_indent
+            || (indent_of(&lines[i]) == site.item_indent && item_body(&lines[i]).is_none())
+        {
+            bail!("models must be an indented block sequence");
+        }
+        let body = item_body(&lines[i]).unwrap_or(lines[i].trim_start());
+        if body.starts_with('{') && indent_of(&lines[i]) == site.item_indent {
+            let fields = flow_fields(body).context("unsupported flow model item")?;
+            for field in fields {
+                for key in ["id", "name"] {
+                    if let Some(value) = key_value(field, key) {
+                        model_scalar(value)?;
+                    }
+                }
+            }
+        } else {
+            for key in ["id", "name"] {
+                if let Some(value) = key_value(body, key) {
+                    model_scalar(value)?;
+                    let key_indent =
+                        indent_of(&lines[i]) + usize::from(item_body(&lines[i]).is_some()) * 2;
+                    if (i + 1..site.models_end)
+                        .find(|j| {
+                            !lines[*j].trim().is_empty() && !lines[*j].trim_start().starts_with('#')
+                        })
+                        .is_some_and(|j| indent_of(&lines[j]) > key_indent)
+                    {
+                        bail!("a multiline model scalar cannot be refreshed safely");
+                    }
+                }
+            }
+        }
+        if indent_of(&lines[i]) == site.item_indent && item_id(lines, i, site.item_indent).is_none()
+        {
+            bail!("model item must carry a supported single-line id");
+        }
+    }
+    Ok(())
+}
+
+fn ensure_rename_supported(lines: &[String], site: &Site) -> Result<()> {
+    if let Some(start) = site.models_line {
+        if (start + 1..site.models_end).any(|i| {
+            indent_of(&lines[i]) == site.item_indent
+                && item_body(&lines[i]).is_some_and(|body| body.starts_with('{'))
+        }) {
+            bail!(
+                "flow model names cannot be refreshed safely; expand the item to a block mapping"
+            );
+        }
+    }
+    Ok(())
+}
+
+fn replace_scalar(line: &mut String, key: &str, replacement: &str) {
+    let body = item_body(line).unwrap_or(line.trim_start());
+    let colon = line.len() - body.len() + key_colon(body, key).expect("validated scalar key");
+    let rest = &line[colon + 1..];
+    let start = colon + 1 + rest.len() - rest.trim_start().len();
+    let end = start + strip_comment(&line[start..]).len();
+    if replacement.is_empty() && line[end..].trim().is_empty() {
+        line.truncate(colon + 1);
+    } else {
+        line.replace_range(start..end, replacement);
+    }
+}
+
+fn existing_max_tokens(lines: &[String], site: &Site) -> Result<Option<u64>> {
+    let Some(start) = site.models_line else {
+        return Ok(None);
+    };
+    (start + 1..site.models_end)
+        .filter(|i| indent_of(&lines[*i]) == site.item_indent && item_body(&lines[*i]).is_some())
         .filter_map(|i| {
-            let value = key_value(lines[i].trim_start(), "maxTokens")?;
-            unquote(strip_comment(value)).parse::<u64>().ok()
+            let body = item_body(&lines[i])?;
+            if body.starts_with('{') {
+                return flow_fields(body)?
+                    .into_iter()
+                    .find_map(|field| key_value(field, "maxTokens").map(max_tokens_scalar));
+            }
+            let index = item_key_line(lines, i, site.item_indent, "maxTokens")?;
+            let body = item_body(&lines[index]).unwrap_or(lines[index].trim_start());
+            Some(max_tokens_scalar(key_value(body, "maxTokens")?))
         })
-        .max()
+        .collect::<Result<Vec<_>>>()
+        .map(|values| values.into_iter().max())
+}
+
+/// DSH's js-yaml JSON schema admits radix integers and integral floats;
+/// llm-pi-ai requires a positive Number.isInteger value. Do not silently fall
+/// back when an explicit cap is a string, alias or unsupported numeric form.
+fn max_tokens_scalar(raw: &str) -> Result<u64> {
+    let raw = strip_comment(raw);
+    let raw = raw
+        .strip_prefix("!!int ")
+        .or_else(|| raw.strip_prefix("!!float "))
+        .unwrap_or(raw)
+        .trim();
+    let unsigned = raw.strip_prefix('+').unwrap_or(raw);
+    let radix = [("0x", 16), ("0o", 8), ("0b", 2)]
+        .into_iter()
+        .find_map(|(prefix, radix)| unsigned.strip_prefix(prefix).map(|digits| (digits, radix)));
+    let value = if let Some((digits, radix)) = radix {
+        if digits.is_empty() || !digits.chars().all(|c| c.is_digit(radix)) {
+            bail!("maxTokens must be a supported positive YAML integer");
+        }
+        u64::from_str_radix(digits, radix).context("maxTokens integer is out of range")? as f64
+    } else {
+        if !raw
+            .bytes()
+            .all(|c| c.is_ascii_digit() || matches!(c, b'+' | b'-' | b'.' | b'e' | b'E'))
+        {
+            bail!("maxTokens must be a supported positive YAML integer");
+        }
+        raw.parse::<f64>().context("unsupported maxTokens scalar")?
+    };
+    if value <= 0.0 || !value.is_finite() || value.fract() != 0.0 || value >= u64::MAX as f64 {
+        bail!("maxTokens must be a positive integer within the supported range");
+    }
+    Ok(value as u64)
 }
 
 fn unquote(value: &str) -> String {
@@ -1001,8 +1367,10 @@ fn indent_of(line: &str) -> usize {
 
 fn format_model(model: &CatalogModel, item_indent: usize, step: usize) -> Vec<String> {
     let item = " ".repeat(item_indent);
-    let key = " ".repeat(item_indent + step);
-    let nested = " ".repeat(item_indent + step * 2);
+    // A compact mapping starts two columns after its dash regardless of the
+    // surrounding profile's indentation step.
+    let key = " ".repeat(item_indent + 2);
+    let nested = " ".repeat(item_indent + 2 + step);
     let mut out = vec![
         format!("{item}- id: {}", yaml_scalar(&model.id)),
         format!("{key}name: {}", yaml_scalar(&model.name)),
@@ -1026,7 +1394,8 @@ fn format_model(model: &CatalogModel, item_indent: usize, step: usize) -> Vec<St
 /// one. Model ids and display names are ordinary words today; quoting keeps a
 /// future name with a colon or a leading digit from breaking the profile.
 fn yaml_scalar(raw: &str) -> String {
-    let plain = !raw.is_empty()
+    let plain = raw.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+        && !matches!(raw.to_ascii_lowercase().as_str(), "true" | "false" | "null")
         && !raw.starts_with(' ')
         && !raw.ends_with(' ')
         && !raw.contains(": ")
@@ -1038,7 +1407,19 @@ fn yaml_scalar(raw: &str) -> String {
     if plain {
         raw.to_string()
     } else {
-        format!("'{}'", raw.replace('\'', "''"))
+        let quoted = serde_json::to_string(raw).expect("a string serializes as JSON");
+        let mut escaped = String::new();
+        for ch in quoted.chars() {
+            if matches!(
+                ch,
+                '\u{7f}'..='\u{9f}' | '\u{2028}' | '\u{2029}' | '\u{fffe}' | '\u{ffff}'
+            ) {
+                escaped.push_str(&format!("\\u{:04x}", ch as u32));
+            } else {
+                escaped.push(ch);
+            }
+        }
+        escaped
     }
 }
 
@@ -1836,9 +2217,9 @@ mod tests {
 ";
         let applied = apply_profile(profile, CODEX_PROVIDER, &catalog(), false).unwrap();
         assert_eq!(applied.added.len(), 2);
-        assert!(applied
-            .text
-            .contains("        models:\n          - id: gpt-6.1-sol\n"));
+        assert!(applied.text.contains(
+            "        models:  # filled by rdsh models sync\n          - id: gpt-6.1-sol\n"
+        ));
         assert!(!applied.text.contains("models: []"));
     }
 
@@ -1878,6 +2259,451 @@ mod tests {
             ]
         );
         assert!(applied.added.is_empty());
+    }
+
+    #[test]
+    fn yaml_regression_nonempty_flow_models_are_refused() {
+        let profile = "- id: llm-pi-ai\n  config:\n    providers:\n      openai-codex:\n        models: [{id: gpt-5.6-sol, name: Custom}] # keep\n";
+        let error = apply_profile(profile, CODEX_PROVIDER, &catalog(), false).unwrap_err();
+        assert!(error.to_string().contains("indented block sequence"));
+    }
+
+    #[test]
+    fn yaml_regression_indentless_models_are_refused() {
+        let profile = "- id: llm-pi-ai\n  config:\n    providers:\n      openai-codex:\n        models:\n        - id: gpt-5.6-sol\n          name: Custom\n";
+        let error = apply_profile(profile, CODEX_PROVIDER, &catalog(), false).unwrap_err();
+        assert!(error.to_string().contains("indented block sequence"));
+    }
+
+    #[test]
+    fn yaml_regression_multiline_names_are_refused_in_either_key_order() {
+        let models = catalog_from_listing(&kimi_listing(), DEFAULT_MAX_TOKENS);
+        for indicator in ["|-", ">-"] {
+            for item in [
+                format!("          - id: kimi-for-coding\n            name: {indicator}\n              Kimi: Legacy\n"),
+                format!("          - name: {indicator}\n              Kimi: Legacy\n            id: kimi-for-coding\n"),
+            ] {
+                let profile = format!("- id: llm-pi-ai\n  config:\n    providers:\n      kimi-coding:\n        models:\n{item}");
+                let error = apply_profile(&profile, KIMI_PROVIDER, &models, true).unwrap_err();
+                assert!(error.to_string().contains("multiline name"));
+            }
+        }
+    }
+
+    #[test]
+    fn yaml_regression_flow_item_trailing_comments_do_not_duplicate_ids() {
+        for item in [
+            "{id: gpt-6.1-sol, name: Custom} # keep this comment",
+            "{name: 'Custom # name', id: gpt-6.1-sol} # keep this comment",
+        ] {
+            let profile = format!("- id: llm-pi-ai\n  config:\n    providers:\n      openai-codex:\n        models:\n          - {item}\n");
+            let applied = apply_profile(&profile, CODEX_PROVIDER, &catalog()[..1], false).unwrap();
+            assert_eq!(applied.listed, vec!["gpt-6.1-sol"]);
+            assert!(applied.added.is_empty());
+            assert_eq!(applied.text, profile);
+        }
+    }
+
+    #[test]
+    fn yaml_regression_crlf_and_trailing_newline_are_preserved() {
+        for trailing_newline in [false, true] {
+            let profile = if trailing_newline {
+                PROFILE
+            } else {
+                PROFILE.trim_end_matches('\n')
+            }
+            .replace('\n', "\r\n");
+            let applied = apply_profile(&profile, CODEX_PROVIDER, &catalog(), false).unwrap();
+            assert_eq!(
+                applied.text.matches('\n').count(),
+                applied.text.matches("\r\n").count()
+            );
+            assert_eq!(applied.text.ends_with('\n'), trailing_newline);
+            assert!(applied
+                .text
+                .contains("          - id: gpt-5.6-sol\r\n            name: GPT-5.6 Sol\r\n"));
+            assert!(applied
+                .text
+                .contains("      opencode-go:\r\n        apiKeyEnv: OPENCODE_GO_API_KEY\r\n"));
+            let again = apply_profile(&applied.text, CODEX_PROVIDER, &catalog(), false).unwrap();
+            assert_eq!(again.text, applied.text);
+            assert!(again.added.is_empty());
+        }
+        let profile = KIMI_PROFILE.replace('\n', "\r\n");
+        let models = catalog_from_listing(&kimi_listing(), DEFAULT_MAX_TOKENS);
+        let applied = apply_profile(&profile, KIMI_PROVIDER, &models, true).unwrap();
+        assert!(applied.text.contains("            name: K2.8 Preview\r\n"));
+        assert_eq!(
+            applied.text.matches('\n').count(),
+            applied.text.matches("\r\n").count()
+        );
+    }
+
+    #[test]
+    fn yaml_regression_mixed_line_endings_are_not_silently_rewritten() {
+        let profile = PROFILE.replacen('\n', "\r\n", 1);
+        assert_eq!(
+            apply_profile(&profile, CODEX_PROVIDER, &[], false)
+                .unwrap()
+                .text,
+            profile
+        );
+        let error = apply_profile(&profile, CODEX_PROVIDER, &catalog(), false).unwrap_err();
+        assert!(error.to_string().contains("mixed line endings"));
+    }
+
+    #[test]
+    fn yaml_regression_unsupported_profiles_are_not_saved() {
+        let dir = std::env::temp_dir().join(format!(
+            "rdsh-models-yaml-{}-{}",
+            std::process::id(),
+            crate::local_http::random_token().unwrap()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("cordis.patch.yml");
+        for (provider, profile, models, refresh_names) in [
+            (CODEX_PROVIDER, "- id: llm-pi-ai\n  config:\n    providers:\n      openai-codex:\n        models: [{id: old}]\n".to_string(), catalog(), false),
+            (CODEX_PROVIDER, "- id: llm-pi-ai\n  config:\n    providers:\n      openai-codex:\n        models:\n        - id: old\n".to_string(), catalog(), false),
+            (KIMI_PROVIDER, KIMI_PROFILE.replace("name: kimi-for-coding", "name: |-\n              Kimi: Legacy"), catalog_from_listing(&kimi_listing(), DEFAULT_MAX_TOKENS), true),
+        ] {
+            std::fs::write(&path, &profile).unwrap();
+            let planned = vec![Planned::Ready(ProviderPlan { provider, models, refresh_names, source: "fixture".to_string() })];
+            let reports = sync_profile_locked("web", &path, &planned, false).unwrap();
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), profile);
+            assert!(reports.iter().all(|r| !r.written && r.skipped.is_some()));
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn review_regression_multiline_and_tagged_names_are_refused() {
+        for value in [
+            "\"Legacy\n              custom\"",
+            "'Legacy\n              custom'",
+            "Legacy\n              custom",
+            "!!str |-\n              Legacy",
+        ] {
+            let profile = KIMI_PROFILE.replace("name: kimi-for-coding", &format!("name: {value}"));
+            let models = catalog_from_listing(&kimi_listing(), DEFAULT_MAX_TOKENS);
+            assert!(apply_profile(&profile, KIMI_PROVIDER, &models, true).is_err());
+        }
+    }
+
+    #[test]
+    fn review_regression_scalar_updates_keep_inline_comments() {
+        let profile =
+            KIMI_PROFILE.replace("name: kimi-for-coding", "name:   kimi-for-coding  # keep");
+        let models = catalog_from_listing(&kimi_listing(), DEFAULT_MAX_TOKENS);
+        let applied = apply_profile(&profile, KIMI_PROVIDER, &models[..1], true).unwrap();
+        assert_eq!(
+            applied.text,
+            profile.replace(
+                "name:   kimi-for-coding  # keep",
+                "name:   K2.8 Preview  # keep"
+            )
+        );
+        let profile = "- id: llm-pi-ai\n  config:\n    providers:\n      openai-codex:\n        models: [] # keep\n";
+        let applied = apply_profile(profile, CODEX_PROVIDER, &catalog(), false).unwrap();
+        assert!(applied.text.contains("        models:  # keep\n"));
+    }
+
+    #[test]
+    fn review_regression_name_first_updates_and_flow_names_are_refused() {
+        let profile = "- id: llm-pi-ai\n  config:\n    providers:\n      kimi-coding:\n        models:\n          - name: kimi-for-coding # keep\n            id: kimi-for-coding\n";
+        let models = catalog_from_listing(&kimi_listing(), DEFAULT_MAX_TOKENS);
+        let applied = apply_profile(profile, KIMI_PROVIDER, &models[..1], true).unwrap();
+        assert_eq!(
+            applied.text,
+            profile.replace("name: kimi-for-coding", "name: K2.8 Preview")
+        );
+        let profile = "- id: llm-pi-ai\n  config:\n    providers:\n      kimi-coding:\n        models:\n          - {id: kimi-for-coding, name: kimi-for-coding}\n";
+        assert!(apply_profile(profile, KIMI_PROVIDER, &models[..1], true).is_err());
+    }
+
+    #[test]
+    fn review_regression_bare_dash_items_are_recognized() {
+        let profile = "- id: llm-pi-ai\n  config:\n    providers:\n      openai-codex:\n        models:\n          -\n            id: gpt-6.1-sol\n            name: Custom\n";
+        let applied = apply_profile(profile, CODEX_PROVIDER, &catalog()[..1], false).unwrap();
+        assert_eq!(applied.listed, vec!["gpt-6.1-sol"]);
+        assert!(applied.added.is_empty());
+        assert_eq!(applied.text, profile);
+    }
+
+    #[test]
+    fn review_regression_escaped_ids_are_decoded_and_aliases_are_refused() {
+        for item in [
+            "id: \"gpt\\u002d6.1\\u002dsol\"",
+            "{id: \"gpt\\u002d6.1\\u002dsol\", name: Custom}",
+        ] {
+            let profile = format!("- id: llm-pi-ai\n  config:\n    providers:\n      openai-codex:\n        models:\n          - {item}\n");
+            let applied = apply_profile(&profile, CODEX_PROVIDER, &catalog()[..1], false).unwrap();
+            assert_eq!(applied.text, profile);
+            assert!(applied.added.is_empty());
+        }
+        let profile = "- id: llm-pi-ai\n  config:\n    providers:\n      openai-codex:\n        models:\n          - id: *model\n";
+        assert!(apply_profile(profile, CODEX_PROVIDER, &catalog()[..1], false).is_err());
+    }
+
+    #[test]
+    fn review_regression_mappings_and_scalar_providers_are_refused() {
+        for profile in ["- id: llm-pi-ai\n  config:\n    providers:\n      openai-codex:\n        models:\n          id: old\n          name: Keep\n", "- id: llm-pi-ai\n  config:\n    providers:\n      openai-codex: custom\n"] {
+            assert!(apply_profile(profile, CODEX_PROVIDER, &catalog(), false).is_err());
+        }
+    }
+
+    #[test]
+    fn ownership_regression_uses_only_direct_profile_keys() {
+        let profile = "- id: llm-pi-ai\n  config:\n    providers:\n      openai-codex:\n        metadata:\n          models:\n            - id: old\n              name: Keep nested\n        models:\n          - id: gpt-6.1-sol\n            name: Already present\n";
+        let applied = apply_profile(profile, CODEX_PROVIDER, &catalog()[..1], false).unwrap();
+        assert_eq!(applied.text, profile);
+        assert_eq!(applied.listed, vec!["gpt-6.1-sol"]);
+        assert!(applied.added.is_empty());
+        let profile = "- id: llm-pi-ai\n  config:\n    providers:\n      auxiliary:\n        openai-codex:\n          models:\n            - id: old\n              name: Keep nested\n      openai-codex:\n        models:\n          - id: gpt-6.1-sol\n            name: Already present\n";
+        let applied = apply_profile(profile, CODEX_PROVIDER, &catalog()[..1], false).unwrap();
+        assert_eq!(applied.text, profile);
+        assert_eq!(applied.listed, vec!["gpt-6.1-sol"]);
+        assert!(applied.added.is_empty());
+        let profile = "- id: another-plugin\n  config:\n    metadata:\n      id: llm-pi-ai\n    providers:\n      openai-codex:\n        models:\n          - id: old\n            name: Other plugin\n- id: llm-pi-ai\n  config:\n    providers:\n      openai-codex:\n        models:\n          - id: gpt-6.1-sol\n            name: Already present\n";
+        let applied = apply_profile(profile, CODEX_PROVIDER, &catalog()[..1], false).unwrap();
+        assert_eq!(applied.text, profile);
+        assert_eq!(applied.listed, vec!["gpt-6.1-sol"]);
+        assert!(applied.added.is_empty());
+        let profile = "- id: llm-pi-ai\n  config:\n    providers:\n      openai-codex:\n        models:\n          - metadata:\n              id: gpt-6.1-sol\n";
+        assert!(apply_profile(profile, CODEX_PROVIDER, &catalog()[..1], false).is_err());
+    }
+
+    #[test]
+    fn ownership_regression_parent_scalars_are_not_mappings() {
+        let profile = "- id: llm-pi-ai\n  config:\n    providers: |\n      openai-codex:\n        models: []\n";
+        assert!(apply_profile(profile, CODEX_PROVIDER, &catalog()[..1], false).is_err());
+        let profile = "- id: llm-pi-ai\n  config: |\n    providers:\n      openai-codex:\n        models: []\n";
+        assert!(apply_profile(profile, CODEX_PROVIDER, &catalog()[..1], false).is_err());
+    }
+
+    #[test]
+    fn ownership_regression_quoted_name_keys_keep_their_spelling() {
+        for (head, name) in [
+            ("id: kimi-for-coding", "\"name\": Legacy # keep"),
+            ("id: kimi-for-coding", "'name': Legacy # keep"),
+            ("\"name\": Legacy # keep", "id: kimi-for-coding"),
+        ] {
+            let profile = format!("- id: llm-pi-ai\n  config:\n    providers:\n      kimi-coding:\n        models:\n          - {head}\n            {name}\n");
+            let models = catalog_from_listing(&kimi_listing(), DEFAULT_MAX_TOKENS);
+            let applied = apply_profile(&profile, KIMI_PROVIDER, &models[..1], true).unwrap();
+            assert_eq!(applied.text, profile.replace("Legacy", "K2.8 Preview"));
+            assert_eq!(applied.renamed[0].from, "Legacy");
+        }
+    }
+
+    #[test]
+    fn ownership_regression_borrows_only_real_model_caps_including_flow() {
+        for (items, expected) in [
+            ("          - {id: old, name: Keep, maxTokens: 8192}\n", 8192),
+            ("          - {id: old, name: Keep, \"maxTokens\": 8192}\n", 8192),
+            ("          - {id: old, maxTokens: 8192}\n          - id: old-block\n            maxTokens: 16384\n            metadata:\n              maxTokens: 999999\n", 16384),
+        ] {
+            let profile = format!("- id: llm-pi-ai\n  config:\n    providers:\n      openai-codex:\n        models:\n{items}");
+            let applied = apply_profile(&profile, CODEX_PROVIDER, &catalog()[..1], false).unwrap();
+            assert!(applied.text.contains(&format!("maxTokens: {expected}\n            input:")));
+        }
+    }
+
+    #[test]
+    fn catalog_regression_compact_item_keys_use_the_dash_column() {
+        for step in 1..=8 {
+            for state in ["block", "empty", "missing"] {
+                let provider = " ".repeat(2 + step * 2);
+                let models = " ".repeat(2 + step * 3);
+                let item = " ".repeat(2 + step * 4);
+                let input = format!("- id: llm-pi-ai\n  config:\n{}providers:\n{provider}openai-codex:\n{models}baseURL: https://127.0.0.1:9\n{}", " ".repeat(2 + step), match state {
+                    "block" => format!("{models}models:\n{item}- id: old\n{item}  name: Keep\n"),
+                    "empty" => format!("{models}models: [] # keep\n"),
+                    _ => String::new(),
+                });
+                let applied =
+                    apply_profile(&input, CODEX_PROVIDER, &catalog()[..1], false).unwrap();
+                assert!(
+                    applied.text.contains(&format!(
+                        "{item}- id: gpt-6.1-sol\n{item}  name: GPT-6.1-Sol\n"
+                    )),
+                    "step {step}/{state}: {}",
+                    applied.text
+                );
+                let again =
+                    apply_profile(&applied.text, CODEX_PROVIDER, &catalog()[..1], false).unwrap();
+                assert_eq!(again.text, applied.text);
+                assert!(again.added.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn catalog_regression_duplicate_ids_are_added_only_once() {
+        for provider in [CODEX_PROVIDER, KIMI_PROVIDER] {
+            let profile = format!("- id: llm-pi-ai\n  config:\n    providers:\n      {provider}:\n        models: []\n");
+            let model = catalog()[0].clone();
+            let models = vec![model.clone(), model];
+            let applied =
+                apply_profile(&profile, provider, &models, provider == KIMI_PROVIDER).unwrap();
+            assert_eq!(applied.added, vec!["gpt-6.1-sol"]);
+            assert_eq!(applied.text.matches("- id: gpt-6.1-sol").count(), 1);
+            let again =
+                apply_profile(&applied.text, provider, &models, provider == KIMI_PROVIDER).unwrap();
+            assert_eq!(again.text, applied.text);
+            assert!(again.added.is_empty() && again.renamed.is_empty());
+        }
+    }
+
+    #[test]
+    fn catalog_regression_max_tokens_follow_dsh_numeric_scalars() {
+        for cap in [
+            "0x2000",
+            "0o20000",
+            "0b10000000000000",
+            "+8192",
+            "8192.0",
+            "8.192e3",
+            "008192",
+            "!!int 0x2000",
+            "8192",
+        ] {
+            for flow in [false, true] {
+                let item = if flow {
+                    format!("          - {{id: old, maxTokens: {cap}}}\n")
+                } else {
+                    format!("          - id: old\n            maxTokens: {cap} # keep\n")
+                };
+                let profile = format!("- id: llm-pi-ai\n  config:\n    providers:\n      openai-codex:\n        models:\n{item}");
+                let applied =
+                    apply_profile(&profile, CODEX_PROVIDER, &catalog()[..1], false).unwrap();
+                assert!(
+                    applied.text.contains("maxTokens: 8192\n            input:"),
+                    "{cap}: {}",
+                    applied.text
+                );
+                assert!(applied.text.contains(&item));
+            }
+        }
+        for cap in [
+            "8_192",
+            "0",
+            "-1",
+            "8192.5",
+            "'8192'",
+            "!!str 8192",
+            ".inf",
+            "*unknown",
+        ] {
+            let profile = format!("- id: llm-pi-ai\n  config:\n    providers:\n      openai-codex:\n        models:\n          - id: old\n            maxTokens: {cap}\n");
+            assert!(
+                apply_profile(&profile, CODEX_PROVIDER, &catalog()[..1], false).is_err(),
+                "{cap}"
+            );
+        }
+    }
+
+    #[test]
+    fn scalar_semantics_regression_catalog_strings_keep_type_and_value() {
+        for value in [
+            "123",
+            "true",
+            "null",
+            "False",
+            "0x2000",
+            ".inf",
+            "First\nSecond",
+            "a\rb",
+            "a\u{85}b",
+            "a\u{2028}b",
+            "a\u{2029}b",
+            " quotes: 'x' ",
+            "a\\b",
+            "a\tb",
+            "日本語",
+        ] {
+            let scalar = yaml_scalar(value);
+            assert!(
+                scalar.starts_with('"') || scalar.starts_with('\''),
+                "{value:?}: {scalar}"
+            );
+            assert!(!scalar.contains(['\n', '\r', '\u{85}', '\u{2028}', '\u{2029}']));
+            assert_eq!(model_scalar(&scalar).unwrap(), value);
+        }
+        for escaped in [r#""gpt\u002d6.1\u002dsol""#, r#""gpt\x2d6.1\x2dsol""#] {
+            assert_eq!(model_scalar(escaped).unwrap(), "gpt-6.1-sol");
+        }
+    }
+
+    #[test]
+    fn scalar_semantics_regression_provider_values_match_yaml() {
+        for (key, value) in [
+            ("apiKeyEnv", "RDSH_FIXTURE_KIMI_KEY # keep"),
+            ("\"apiKeyEnv\"", "\"RDSH_FIXTURE_KIMI_KEY\" # keep"),
+            ("'apiKeyEnv'", "'RDSH_FIXTURE_KIMI_KEY' # keep"),
+            ("apiKeyEnv", r#""RDSH_FIXTURE_KIMI_\x4bEY" # keep"#),
+        ] {
+            let profile = format!("- id: llm-pi-ai\n  config:\n    providers:\n      kimi-coding:\n        {key}: {value}\n        \"baseURL\": \"https://127.0.0.1:9\" # keep\n        models: []\n");
+            let lines: Vec<String> = profile.lines().map(str::to_string).collect();
+            let site = locate_owned(&lines, KIMI_PROVIDER).unwrap();
+            assert_eq!(
+                scalar_in(&lines, &site, "apiKeyEnv"),
+                Some("RDSH_FIXTURE_KIMI_KEY".to_string())
+            );
+            assert_eq!(
+                scalar_in(&lines, &site, "baseURL"),
+                Some("https://127.0.0.1:9".to_string())
+            );
+        }
+        let profile = "- id: \"llm\\u002dpi\\u002dai\"\n  config:\n    providers:\n      kimi-coding:\n        apiKeyEnv: RDSH_FIXTURE_KIMI_KEY\n        models: []\n";
+        let lines: Vec<String> = profile.lines().map(str::to_string).collect();
+        assert!(locate_owned(&lines, KIMI_PROVIDER).is_ok());
+        assert!(configures(profile, KIMI_PROVIDER));
+    }
+
+    #[test]
+    fn scalar_semantics_regression_missing_kimi_names_are_inserted() {
+        let models = catalog_from_listing(&kimi_listing(), DEFAULT_MAX_TOKENS);
+        for item in ["          - id: kimi-for-coding\n", "          -\n            id: kimi-for-coding # keep\n", "          - metadata:\n              sentinel: Keep\n            id: kimi-for-coding\n"] {
+            let profile = format!("- id: llm-pi-ai\n  config:\n    providers:\n      kimi-coding:\n        models:\n{item}");
+            let applied = apply_profile(&profile, KIMI_PROVIDER, &models, true).unwrap();
+            assert!(applied.text.contains("            name: K2.8 Preview\n"));
+            assert_eq!(applied.renamed[0].id, "kimi-for-coding");
+            let again = apply_profile(&applied.text, KIMI_PROVIDER, &models, true).unwrap();
+            assert_eq!(again.text, applied.text);
+            assert!(again.added.is_empty() && again.renamed.is_empty());
+        }
+    }
+
+    #[test]
+    fn scalar_semantics_regression_new_models_preserve_provider_tail() {
+        for scalar in ["|+", ">+", "|", ">-", "|2+"] {
+            for tail in ["\n\n", "\n", ""] {
+                let profile = format!("- id: llm-pi-ai\n  config:\n    providers:\n      openai-codex:\n        displayName: {scalar}\n          Keep{tail}");
+                let applied =
+                    apply_profile(&profile, CODEX_PROVIDER, &catalog()[..1], false).unwrap();
+                assert!(
+                    applied.text.ends_with(&format!(
+                        "        displayName: {scalar}\n          Keep{tail}"
+                    )),
+                    "{scalar}/{tail:?}: {}",
+                    applied.text
+                );
+                let again =
+                    apply_profile(&applied.text, CODEX_PROVIDER, &catalog()[..1], false).unwrap();
+                assert_eq!(again.text, applied.text);
+            }
+        }
+        for field in [
+            "\"display:Name\": |+ # keep: tail",
+            "displayName: >+ # keep: tail",
+            "displayName: !!str |+",
+        ] {
+            let tail = format!("        {field}\n          Keep\n\n");
+            let profile =
+                format!("- id: llm-pi-ai\n  config:\n    providers:\n      openai-codex:\n{tail}");
+            let applied = apply_profile(&profile, CODEX_PROVIDER, &catalog()[..1], false).unwrap();
+            assert!(applied.text.ends_with(&tail));
+        }
     }
 
     #[test]
