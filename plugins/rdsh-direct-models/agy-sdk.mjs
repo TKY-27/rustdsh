@@ -8,7 +8,9 @@ import { fileURLToPath } from 'node:url';
 import { buildTurnPrompt, parseTurnResponse, assertSupportedGenerationOptions } from './json-turn.mjs';
 const SCRIPT = fileURLToPath(new URL('./agy-sdk.py', import.meta.url));
 const LIMIT = 8 * 1024 * 1024;
+const PROXY_ENV_KEYS = ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY'];
 const ENV_KEYS = ['HOME', 'USERPROFILE', 'PATH', 'PATHEXT', 'USER', 'LOGNAME', 'TMPDIR', 'TMP', 'TEMP', 'LANG', 'LC_ALL', 'SystemRoot', 'WINDIR', 'COMSPEC', 'APPDATA', 'LOCALAPPDATA',
+  'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy', 'all_proxy', 'no_proxy', 'SSL_CERT_FILE', 'SSL_CERT_DIR',
   'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'GOOGLE_GENAI_USE_VERTEXAI', 'GOOGLE_GENAI_USE_ENTERPRISE', 'GOOGLE_CLOUD_PROJECT', 'GOOGLE_CLOUD_LOCATION', 'GOOGLE_APPLICATION_CREDENTIALS'];
 export function createPythonRunner({ python = process.env.RDSH_AGY_PYTHON || fileURLToPath(new URL('./.venv/bin/python', import.meta.url)), timeoutMs = 120000, spawnImpl = spawn, env = process.env } = {}) {
   return (payload, { signal, env: requestEnv } = {}) => new Promise((resolve, reject) => {
@@ -16,8 +18,16 @@ export function createPythonRunner({ python = process.env.RDSH_AGY_PYTHON || fil
     const input = JSON.stringify(payload);
     if (Buffer.byteLength(input) > LIMIT) { reject(new Error('Antigravity SDK: input exceeds limit')); return; }
     const childEnv = {};
-    for (const source of [env, requestEnv ?? {}])
+    for (const source of [env, requestEnv ?? {}]) {
       for (const key of ENV_KEYS) if (typeof source[key] === 'string') childEnv[key] = source[key];
+      // Windows spawn collapses case aliases; merge each source before the next.
+      if (process.platform === 'win32') for (const key of PROXY_ENV_KEYS) {
+        const lower = key.toLowerCase();
+        const value = typeof source[key] === 'string' ? source[key] : source[lower];
+        delete childEnv[lower];
+        if (typeof value === 'string') childEnv[key] = value;
+      }
+    }
     let root;
     try { root = mkdtempSync(path.join(tmpdir(), 'rdsh-agy-bridge-')); }
     catch { reject(new Error('Antigravity SDK: temporary workspace could not be created')); return; }

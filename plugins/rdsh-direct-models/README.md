@@ -48,8 +48,10 @@ Antigravityの確認済み組合せは `provider: agy-sdk` / `model: gemini-3.8-
 ## 認証
 
 - Cursor: `CURSOR_API_KEY` または公式SDKが管理する `~/.cursor/sdk/auth.json`。キーの発行・保存はこのプラグインでは行いません。
-- Antigravity: 呼出しごとにDSH credential serviceの `GEMINI_API_KEY`、`GOOGLE_API_KEY` を解決し、SDK子プロセスの環境へ渡します。環境の同名キー、`GOOGLE_GENAI_USE_VERTEXAI` / `GOOGLE_GENAI_USE_ENTERPRISE`、`GOOGLE_CLOUD_PROJECT`、`GOOGLE_CLOUD_LOCATION`、`GOOGLE_APPLICATION_CREDENTIALS` も使用できます。子プロセスへはこれらと必要なOS実行環境だけを渡し、他のプロバイダーのキーやコード注入用の環境設定を継承しません。Antigravity CLIのOAuthやサブスクリプションを引き継ぐ経路ではありません。
+- Antigravity: 呼出しごとにDSH credential serviceの `GEMINI_API_KEY`、`GOOGLE_API_KEY` を解決し、SDK子プロセスの環境へ渡します。環境の同名キー、`GOOGLE_GENAI_USE_VERTEXAI` / `GOOGLE_GENAI_USE_ENTERPRISE`、`GOOGLE_CLOUD_PROJECT`、`GOOGLE_CLOUD_LOCATION`、`GOOGLE_APPLICATION_CREDENTIALS` も使用できます。接続設定の `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY`（小文字名も可）、`SSL_CERT_FILE` / `SSL_CERT_DIR` も保持します。子プロセスへはこれらと必要なOS実行環境だけを渡し、他のプロバイダーのキーやコード注入用の環境設定、TLS秘密の記録設定を継承しません。Antigravity CLIのOAuthやサブスクリプションを引き継ぐ経路ではありません。
 - Devin: CLI自身の既存認証とワークスペース信頼設定を使用します。追加の信頼や権限を自動付与しません。
+
+Windowsではproxy名の大小文字を同一視し、呼出し側の明示設定を優先します。同じ入力に大小両名がある場合は、大文字名の文字列値（空文字を含む）を優先します。Unixでは両名を保持し、優先順位はSDK側のtransportに従います。
 
 キーをpromptや設定例に埋め込まないでください。SDK診断は秘密を含む可能性があるため破棄し、失敗分類だけを返します。Devin出力は既知の秘密とAPIキー形式をマスクしますが、任意の機密情報を完全に除去する仕組みではありません。
 
@@ -63,7 +65,7 @@ python3 -I -B plugins/rdsh-direct-models/agy-sdk.test.py
 node plugins/rdsh-direct-models/sdk-runtime-smoke.mjs
 ```
 
-Nodeの61テストとPythonの4テストでJSON境界、SDK能力の無効化、タイムアウト、キャンセル、出力上限、秘密の切断境界、ワークスペース制限、子環境の制限、生成制御の拒否、Enterprise認証判定、強制終了後の一時領域削除を確認します。実DSH ToolRuntime/Cordisを使い、不正引数の遮断、承認拒否、承認後のファイル読取、結果の履歴反映、Devin拒否時の非起動も検証します。通常テストは外部APIやCLIを呼びません。
+Nodeの66テストとPythonの4テストでJSON境界、SDK能力の無効化、タイムアウト、キャンセル、出力上限、秘密の切断境界、ワークスペース制限、子環境の制限と接続設定の保持、Windowsでの大小文字にまたがるproxy上書き、生成制御の拒否、Enterprise認証判定、強制終了後の一時領域削除を確認します。実DSH ToolRuntime/Cordisを使い、不正引数の遮断、承認拒否、承認後のファイル読取、結果の履歴反映、Devin拒否時の非起動も検証します。通常テストは外部APIやCLIを呼びません。
 
 実Devinを検証する場合は、CLIで信頼済みの検証専用フォルダーを指定してください。通常の信頼設定を迂回しません。検証fixture内の承認サービスは、固定の無害な確認要求1件だけを許可し、本番の承認設定を変更しません。
 
