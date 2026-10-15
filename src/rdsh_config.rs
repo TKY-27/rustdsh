@@ -97,8 +97,13 @@ pub const FEATURES: &[FeatureDef] = &[
     },
     FeatureDef {
         id: "sound",
-        default: false,
-        summary: "allow the DSH sound notifications install (installer SOUND=1)",
+        default: true,
+        summary: "allow the DSH sound notifications install (installer SOUND=0 to skip)",
+    },
+    FeatureDef {
+        id: "gitview",
+        default: true,
+        summary: "allow the DSH git panel install (installer GITVIEW=0 to skip)",
     },
     FeatureDef {
         id: "serve",
@@ -1867,11 +1872,20 @@ mod rdsh_config_tests {
     #[test]
     fn feature_enabled_precedence_and_defaults() {
         let mut c = RdshSettings::default();
-        // 既定値: discord は既定 on、sound は既定 off、未知 id は false。
+        // 既定値: discord/sound/gitview は on、未知 id は false。
         assert!(feature_enabled(&c, "discord"));
-        assert!(!feature_enabled(&c, "sound"));
+        assert!(feature_enabled(&c, "sound"));
+        assert!(feature_enabled(&c, "gitview"));
         assert!(!feature_enabled(&c, "no-such-feature"));
         assert!(!feature_is_explicit(&c, "discord"));
+
+        // 導入の既定値にかかわらず、利用者の明示的な opt-out を維持する。
+        c.features.values.insert("sound".to_string(), false);
+        c.features.values.insert("gitview".to_string(), false);
+        assert!(!feature_enabled(&c, "sound"));
+        assert!(!feature_enabled(&c, "gitview"));
+        assert!(feature_is_explicit(&c, "sound"));
+        assert!(feature_is_explicit(&c, "gitview"));
 
         // features.<id> が未記載なら旧キーを見る。
         c.discord.enabled = false;

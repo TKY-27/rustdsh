@@ -11,6 +11,7 @@ import {
 } from "../human-metrics.mjs";
 import { ProjectStore } from "../state.mjs";
 import { startDashboard } from "../server.mjs";
+import { readRuntime } from "./owner-runtime.mjs";
 
 const iso = (milliseconds) => new Date(milliseconds).toISOString();
 async function temporaryProject(t, prefix) {
@@ -413,9 +414,7 @@ test("metrics API is browser-only and never appears in MCP project state", async
     port: await freePort(),
     tailscale: false,
   });
-  const runtime = JSON.parse(
-    await fs.readFile(path.join(project.directory, "runtime.json"), "utf8"),
-  );
+  const runtime = await readRuntime(project.directory);
   const browserToken = new URL(runtime.browser_url).hash.slice("#key=".length);
   const browserHeaders = {
     "x-rdsh-browser-token": browserToken,

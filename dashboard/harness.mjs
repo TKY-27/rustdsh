@@ -3,6 +3,7 @@ import net from "node:net";
 import { randomUUID } from "node:crypto";
 import { resolveHarnessProvider } from "./harness-providers.mjs";
 import { RunHistory } from "./run-history.mjs";
+import { diagnoseManagedRun } from "./run-health.mjs";
 
 export async function startHarness(port, frontPort, options = {}) {
   const provider = resolveHarnessProvider(options);
@@ -37,6 +38,8 @@ export async function startHarness(port, frontPort, options = {}) {
     throw error;
   }
   const child = owned.child;
+  let processExit = null;
+  let lastOutputAt = null;
   try {
     await history.bindScope(run_id, owned.descriptor);
     await history.bindProcess(
@@ -51,7 +54,12 @@ export async function startHarness(port, frontPort, options = {}) {
     });
     throw error;
   }
-  child.on("exit", () => {
+  child.on("exit", (code, signal) => {
+    processExit = {
+      code: Number.isInteger(code) ? code : null,
+      signal: typeof signal === "string" ? signal : null,
+      observed_at: new Date().toISOString(),
+    };
     void history.processExited(run_id).catch(() => {
       historyError = "history_write_failed";
     });
@@ -104,6 +112,14 @@ export async function startHarness(port, frontPort, options = {}) {
     port,
     timeout: options.startupTimeout ?? 45_000,
   });
+  // #49 run-stall diagnostics: timestamp the last Harness output without
+  // altering provider readiness handling or consuming its stream.
+  child.stdout.on("data", () => {
+    lastOutputAt = new Date().toISOString();
+  });
+  child.stderr.on("data", () => {
+    lastOutputAt = new Date().toISOString();
+  });
   try {
     await owned.release();
     const url = await ready;
@@ -114,16 +130,26 @@ export async function startHarness(port, frontPort, options = {}) {
       port,
       stop,
       run_id,
-      inspect: async () => ({
-        run_id,
-        provider: provider.status,
-        scope:
+      inspect: async ({ browser_poll_gap_ms = null } = {}) => {
+        const scope =
           final ??
           (stopping
             ? { ...owned.state, status: "stopping", confirmed: false }
-            : await provider.health(owned)),
-        stages: structuredClone(stages),
-      }),
+            : await provider.health(owned));
+        return {
+          run_id,
+          provider: provider.status,
+          scope,
+          stages: structuredClone(stages),
+          diagnostic: diagnoseManagedRun({
+            run_id,
+            scope,
+            process_exit: processExit,
+            last_output_at: lastOutputAt,
+            browser_poll_gap_ms,
+          }),
+        };
+      },
       disconnectMonitor: () => owned.disconnectMonitor(),
     };
   } catch (error) {

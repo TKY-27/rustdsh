@@ -36,9 +36,13 @@ operation that replaces the document with defaults.
 | `main.rs` | CLI definition (clap), dispatch, `--dry-run` / `--passthrough` handling |
 | `dsh_args.rs` | dsh-compatible arg parsing, profile / patch / overlay handling |
 | `passthrough.rs` | Verbatim `exec` delegation to the original `dsh` |
+| `executable.rs` | Effective-user executable checks shared by discovery, Desktop and distro diagnostics |
+| `desktop.rs` | Desktop runtime discovery, plugin installation and verification |
+| `distro.rs` | Read-only optional dependency diagnostics for rpm-based hosts |
 | `slim.rs` | Slim env for delegated boot (`NODE_COMPILE_CACHE`, node-tree lookup) |
 | `tokens.rs` | Fast token estimation |
 | `compact.rs` | Context compaction to a token budget |
+| `compute.rs` | Opt-in bounded pure-compute worker over stdio NDJSON |
 | `search.rs` | Fast multi-file recursive grep (hidden/vendor dirs skipped, 2 MB / 2,000,000-byte cap) |
 | `inspect.rs` | Config / session inspection |
 | `serve.rs` | Status page server |
@@ -52,12 +56,17 @@ operation that replaces the document with defaults.
 | `deps.rs` | Static code-dependency graph, persistent index, change impact |
 | `context_hook.rs` | Hook-config wiring for `rdsh context inject` (idempotent) |
 | `context.rs` | Context engine: assembly, memory store, injection, freshness snapshot |
+| `token_handoff.rs` | Protected per-process bearer-token handoff files |
+| `shutdown.rs` | Signal bridge for owned-server cleanup |
+| `file_lock.rs` | Serialized configuration writes and platform lock ownership |
+| `file_security.rs` | No-follow, directory-relative file reads within the selected root |
+| `tool_security.rs` | Opt-in audited tool boundary and delegated runtime checks |
 
 ## Optional Node dashboard (`dashboard/`)
 
 Separate from the Rust launcher. Two modes, both loopback-bound:
 
-- `project`: project metrics / tasks / Q&A via six project-scoped MCP tools.
+- `project`: project metrics / tasks / Q&A / structured UI via seven project-scoped MCP tools.
 - `harness`: launches the original Harness Web UI in a managed child process.
 
 Phone access goes through Tailscale Serve (QR holds the access key).
@@ -100,9 +109,12 @@ value wins, `RDSH_NODE_COMPILE_CACHE=0` opts out).
 - Search: sequential walk fixes order, files are grepped in parallel, hits merge
   back in walk order. Trees under 32 files keep the sequential path.
 - `sessions --tokens`: Unix uses no-follow session opens and parallel zstd
-  expansion. Windows omits compressed histories until parent junctions can be
-  rejected through safe handle-relative opens, so totals remain inexact.
-- Release profile: `opt-level=3`, LTO, `strip`, `panic=abort` (~1.8-2.3MB per platform).
+  expansion (same numbers, order kept). Windows omits compressed histories
+  until parent junctions can be rejected through safe handle-relative opens,
+  so totals remain inexact.
+- Release profile: `opt-level=3`, fat LTO, `strip`, `panic=abort`; published
+  archives are roughly 1.8-2.3MB per platform. Binary size depends on target
+  and build; `Cargo.toml` is the source of truth.
 
 ## Invariants for contributors
 
@@ -110,6 +122,11 @@ value wins, `RDSH_NODE_COMPILE_CACHE=0` opts out).
 2. Delegation stays byte-identical (`--passthrough` is the reference).
 3. Every optimization ships with a before/after output diff.
 4. `doctor` must stay truthful: wrappers, shadowing, and auth state.
+
+`doctor --json` has a narrower metadata-only contract: it shares runtime discovery
+with delegation, reports the first effective PATH match, and neither reads
+credentials nor launches external programs. See [the JSON contract](DOCTOR.md).
+The plain-text command retains its auth summary and a bounded DSH version probe.
 
 ## Maintaining the diagrams
 

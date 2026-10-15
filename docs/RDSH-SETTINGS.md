@@ -24,6 +24,21 @@ PROFILE=web ./plugins/install.sh
 
 で入ります。`headless` の場合は `PROFILE=headless`（初期値）で同じです。
 
+## 表示言語を日本語にする
+
+言語パックに対応したDSHでは、同梱の `rdsh-settings` が日本語を登録します。
+Settings → General → Language で **日本語** を選ぶと、設定画面の一般項目と共通操作が日本語になります。
+翻訳のない項目は英語で表示されます。画面全体の翻訳ではありません。
+
+ローカルのWeb UIでは、選択した言語はDSHの設定として保存され、再起動後も反映されます。
+DSHが非ループバックのページとして扱う接続では、DSHの仕様により言語の選択はそのページを開いている間だけ有効です。
+この選択は `rdsh.json` の設定とは別です。
+
+日本語が表示されない場合は、言語パックAPI（`locale.addLanguage`）に対応したDSHへ更新し、
+同梱プラグインを入れ直して画面を再読み込みしてください。
+旧DSHでは従来の言語メニューとrdsh設定を引き続き使えます。
+別のプラグインがすでに日本語を登録している場合は、そのプラグインの翻訳を使います。
+
 ## コマンドから見る
 
 ```sh
@@ -67,7 +82,8 @@ rdsh context status   # 有効化後に記憶の状態を見る
 | discord | on | Discord Rich Presence（DSH Web が動いているときだけ表示） |
 | update_check | on | 更新確認と更新バナーの表示 |
 | update_notifications | on | 更新が見つかったときの通知 |
-| sound | off | DSH サウンド通知の導入（インストーラの SOUND=1） |
+| sound | on | DSH サウンド通知の導入（不要ならインストーラの SOUND=0／`features.sound=false`） |
+| gitview | on | DSH Git パネルの導入（不要ならインストーラの GITVIEW=0／`features.gitview=false`） |
 | serve | off | ローカル閲覧画面（rdsh serve） |
 | search-web | off | SearXNG 経由の Web 検索 |
 | context_engine | off | 実験的なコンテキストエンジン |
@@ -89,7 +105,7 @@ rdsh context status   # 有効化後に記憶の状態を見る
 
 - ネイティブ側（`serve` / `search-web` / `context_engine` / `setup_web`）は、無効なコマンドを実行すると理由と有効化方法を表示して終了します。
 - slim のヒント（`slim_lazy_plugins` / `slim_disable_voice` / `slim_disable_auto_review`）と `node_compile_cache` は、委譲して起動する DSH プロセスの環境変数に反映されます。
-- プラグイン側（`discord` / `sound` / `compute` / `budget_guard` / `answer_guard` / `release_probe` / `update_check` / `update_notifications`）は `rdsh.json` を読み込んで動作を停止します。DSH を再起動すると反映されます。
+- プラグイン側（`discord` / `sound` / `gitview` / `compute` / `budget_guard` / `answer_guard` / `release_probe` / `update_check` / `update_notifications`）は `rdsh.json` を読み込んで動作を停止します。DSH を再起動すると反映されます。
 
 ## context engine（実験的、既定OFF）
 

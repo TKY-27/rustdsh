@@ -34,6 +34,9 @@ pass=0
 ok() { pass=$((pass+1)); echo "ok: $1"; }
 # Keep the default diagnostic/delegation probe inside this test's sandbox.
 # A developer's primary override must not win over later legacy fixtures.
+# Use our own default stub even on hosts with no installed DSH. Individual
+# delegation checks override the legacy variable; a developer's live primary
+# override must not take precedence over those fixtures.
 unset RDSH_ORIG_BIN DSH_ORIG_BIN
 mkdir -p "$RR_SANDBOX/original"
 printf '#!/bin/sh\necho stub-dsh "$@"\n' > "$RR_SANDBOX/original/dsh"

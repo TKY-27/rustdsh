@@ -11,7 +11,7 @@ import {
   CLIENT_INFO_META_KEY,
   CLIENT_CAPABILITIES_META_KEY,
 } from "@modelcontextprotocol/server";
-import { identity, ProjectStore, applyOperation, publicState, writeJson } from "../state.mjs";
+import { identity, ProjectStore, applyOperation, publicState, resealStoredState, writeJson } from "../state.mjs";
 import { buildHandoff } from "../handoffs.mjs";
 import { startDashboard } from "../server.mjs";
 
@@ -150,7 +150,7 @@ async function sizedState(project, targetBytes) {
   const plain = make(0);
   const state = make(targetBytes - predictedBytes(plain));
   assert.equal(predictedBytes(state), targetBytes);
-  return state;
+  return await resealStoredState(project, state);
 }
 
 for (const offset of [-1, 0, 1]) {
