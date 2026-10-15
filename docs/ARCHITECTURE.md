@@ -39,17 +39,19 @@ operation that replaces the document with defaults.
 | `slim.rs` | Slim env for delegated boot (`NODE_COMPILE_CACHE`, node-tree lookup) |
 | `tokens.rs` | Fast token estimation |
 | `compact.rs` | Context compaction to a token budget |
-| `search.rs` | Fast multi-file search (`estimate_tokens`) |
+| `search.rs` | Fast multi-file recursive grep (hidden/vendor dirs skipped, 2 MB / 2,000,000-byte cap) |
 | `inspect.rs` | Config / session inspection |
 | `serve.rs` | Status page server |
-| `guard.rs` | Stdin command guard (`--deny` patterns) |
+| `guard.rs` | Stdin hook guard (`--deny` patterns and opt-in structured file policy) |
 | `auth.rs` | OAuth state detection (`provider_needs()`), credential import |
 | `setup_web.rs` + `setup.html` | First-run setup flow |
 | `websearch.rs` | SearXNG-backed web search |
 | `ui.html` | Native status dashboard UI |
 | `rdsh_config.rs` | Unified settings, defaults, validation, legacy fallback |
 | `local_http.rs` | Local HTTP framing, trust checks, and per-launch token |
-| `context.rs` | Experimental context engine, disabled by default |
+| `deps.rs` | Static code-dependency graph, persistent index, change impact |
+| `context_hook.rs` | Hook-config wiring for `rdsh context inject` (idempotent) |
+| `context.rs` | Context engine: assembly, memory store, injection, freshness snapshot |
 
 ## Optional Node dashboard (`dashboard/`)
 
@@ -66,6 +68,12 @@ See `dashboard/README.md`.
 - `install.sh` (Linux/macOS/WSL), `install.ps1` (Windows, incl. `-Wsl`).
 - `sync-dsh.sh` + `systemd/rdsh-sync.*`: keep the upstream Harness in sync.
 - `plugins/`: Smart-DSH compat bundle, update banner, skill installer.
+
+The optional [MCP exposure bundle](../plugins/rdsh-mcp-exposure/README.md)
+adapts registration and prompt declarations in an authorized original DSH
+composition. Connections and execution remain owned by the original MCP client
+and ToolRuntime. The current guarded launcher rejects this bundle before any
+registration or connection; its audited Native boundary is unchanged.
 
 ## Original-binary discovery (`dsh` name)
 
@@ -88,7 +96,7 @@ value wins, `RDSH_NODE_COMPILE_CACHE=0` opts out).
 - `sessions --tokens`: Unix uses no-follow session opens and parallel zstd
   expansion. Windows omits compressed histories until parent junctions can be
   rejected through safe handle-relative opens, so totals remain inexact.
-- Release profile: `opt-level=z`, LTO, `strip`, `panic=abort` (~806KB).
+- Release profile: `opt-level=3`, LTO, `strip`, `panic=abort` (~1.8-2.3MB per platform).
 
 ## Invariants for contributors
 
