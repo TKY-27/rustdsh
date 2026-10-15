@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile, mkdtemp, writeFile, rm } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
@@ -199,7 +199,9 @@ test('translation preview: config authentication precedes method and file access
 });
 
 test('translation preview: recommended installation includes web/desktop, excludes headless, and can be disabled', async () => {
-  const shell = process.platform === 'win32' ? 'E:/Git/bin/sh.exe' : 'sh';
+  const shell = process.platform === 'win32'
+    ? resolve((await executeFile('git', ['--exec-path'], { timeout: 10000 })).stdout.trim(), '../../../bin/sh.exe')
+    : 'sh';
   for (const [profile, enabled, expected] of [['web', undefined, true], ['desktop', undefined, true], ['headless', undefined, false], ['web', '0', false]]) {
     const env = { ...process.env, PROFILE: profile, DRY_RUN: '1', SOUND: '0', GITVIEW: '0', RDSH_BIN: process.execPath };
     if (enabled === undefined) delete env.TRANSLATION; else env.TRANSLATION = enabled;
