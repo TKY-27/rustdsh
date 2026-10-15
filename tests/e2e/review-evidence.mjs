@@ -11,6 +11,7 @@ import { chromium } from "playwright";
 import { identity } from "../../dashboard/state.mjs";
 import { startDashboard } from "../../dashboard/server.mjs";
 import { WorkerWorkspaces } from "../../dashboard/workers.mjs";
+import { readLocalRuntime } from "../../dashboard/private-runtime.mjs";
 
 const exec = promisify(execFile);
 const run = async (command, args, options = {}) =>
@@ -91,9 +92,7 @@ try {
     port: await freePort(),
     tailscale: false,
   });
-  const runtime = JSON.parse(
-    await fs.readFile(path.join(project.directory, "runtime.json"), "utf8"),
-  );
+  const runtime = await readLocalRuntime(project.directory);
   client = new Client({ name: "review-evidence-e2e", version: "1.0.0" }, { capabilities: {} });
   await client.connect(
     new StreamableHTTPClientTransport(new URL(runtime.local_url + "mcp"), {

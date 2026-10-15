@@ -6,14 +6,49 @@ import os from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { ProjectStore, identity } from "../state.mjs";
 import { ReviewEvidenceStore } from "../review-evidence.mjs";
 import { WorkerWorkspaces } from "../workers.mjs";
+import { startDashboard } from "../server.mjs";
+import { readLocalRuntime } from "../private-runtime.mjs";
 
 const exec = promisify(execFile);
 const git = async (cwd, ...args) =>
   (await exec("git", ["-C", cwd, ...args], { windowsHide: true })).stdout.trim();
 const error = (code) => (value) => value.message === `Review evidence: ${code}`;
+
+// A live view is a long-lived SSE response. The review broadcast must write to
+// the response itself, so keep one connected while the MCP tool records.
+async function openLiveStream(url) {
+  const controller = new AbortController();
+  const response = await fetch(url, { signal: controller.signal });
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get("content-type") || "", /^text\/event-stream/);
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  const next = async () => {
+    const { value, done } = await reader.read();
+    if (done) throw new Error("Live stream closed before the changed event");
+    buffer += decoder.decode(value, { stream: true });
+    return buffer;
+  };
+  await next();
+  return { next, text: () => buffer, close: () => controller.abort() };
+}
+
+const withTimeout = (promise, ms, message) => {
+  let timer;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(message)), ms);
+      timer.unref();
+    }),
+  ]).finally(() => clearTimeout(timer));
+};
 
 async function setup(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "rdsh-review-evidence-"));
@@ -206,4 +241,51 @@ test("unavailable reports remain unknown and duplicate IDs cannot replace eviden
     error("review_id_conflict"),
   );
   assert.equal(result.revision, 1);
+});
+
+test("a connected live view receives the review broadcast and the report is stored", async (t) => {
+  const f = await setup(t);
+  const dashboard = await startDashboard({
+    project: f.project,
+    port: 0,
+    tailscale: false,
+  });
+  let stream;
+  let client;
+  try {
+    const runtime = await readLocalRuntime(f.project.directory);
+    stream = await openLiveStream(
+      `${dashboard.localUrl}api/live?key=${runtime.browser_token}`,
+    );
+    client = new Client(
+      { name: "review-evidence-live", version: "1.0.0" },
+      { capabilities: {} },
+    );
+    await client.connect(
+      new StreamableHTTPClientTransport(new URL(dashboard.localUrl + "mcp"), {
+        requestInit: {
+          headers: { authorization: `Bearer ${runtime.mcp_token}` },
+        },
+      }),
+    );
+    const result = await client.callTool({
+      name: "dashboard_record_review",
+      arguments: f.input,
+    });
+    assert.notEqual(result.isError, true, result.content[0]?.text);
+    assert.equal(
+      JSON.parse(result.content[0].text).report.review_status,
+      "clear",
+    );
+    await withTimeout(
+      stream.next(),
+      10000,
+      "Live view did not receive the changed event",
+    );
+    assert.match(stream.text(), /event: changed/);
+  } finally {
+    stream?.close();
+    await client?.close();
+    await dashboard.close();
+  }
 });
