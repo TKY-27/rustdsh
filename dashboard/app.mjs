@@ -16,6 +16,7 @@ import { renderModelRouting } from "./model-routing-ui.mjs";
 import { renderReviewEvidence } from "./review-evidence-ui.mjs";
 import { renderManagedRunHealth } from "./run-health-ui.mjs";
 import { createPlanPanel } from "./execution-plan-ui.mjs";
+import { createTimelinePanel } from "./causal-timeline-ui.mjs";
 import { createTaskOutcomesPanel } from "./task-outcomes-ui.mjs";
 import { createHumanAnnotationPanel } from "./human-annotations-ui.mjs";
 import { createHumanMetricsPanel } from "./human-metrics-ui.mjs";
@@ -353,6 +354,10 @@ function focusCurrentSource() {
 window.addEventListener("hashchange", focusCurrentSource);
 let renderedRevision = -1;
 let latestState = null;
+const timeline = createTimelinePanel($("causal-timeline"), { api, node });
+setInterval(() => {
+  if (latestState?.project) void timeline.refresh();
+}, 5000);
 let selectedTask = "";
 let selectionKey = "";
 let observedCli = null;
@@ -889,6 +894,7 @@ function render(state) {
   if (state.revision < renderedRevision) return;
   renderedRevision = state.revision;
   latestState = state;
+  void timeline.refresh();
   observedCli?.render(state);
   renderHumanMetrics.render(state);
   if (state.revision !== humanMetricsRevision) {

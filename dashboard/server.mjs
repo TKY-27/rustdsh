@@ -37,6 +37,7 @@ import { createArtifactPreview } from "./artifact-preview.mjs";
 import { AcceptanceStore } from "./acceptance.mjs";
 import { modelRoutingViews } from "./model-routing-view.mjs";
 import { ExecutionPlans } from "./execution-plan.mjs";
+import { readCausalTimeline } from "./causal-timeline.mjs";
 import { inspectTaskOutcomes } from "./task-outcomes-view.mjs";
 import { ObservedCliStore } from "./observed-cli.mjs";
 import { ReviewEvidenceStore } from "./review-evidence.mjs";
@@ -77,6 +78,7 @@ const dashboardAssets = new Set([
   "/run-health-ui.mjs",
   "/execution-plan-ui.mjs",
   "/contract-view.mjs",
+  "/causal-timeline-ui.mjs",
   "/decision-log-ui.mjs",
   "/human-annotations-ui.mjs",
   "/annotation-identifiers.mjs",
@@ -1105,6 +1107,7 @@ export async function startDashboard(options) {
           "/github-status-ui.mjs",
           "/answer-applications-ui.mjs",
           "/instruction-queue-ui.mjs",
+          "/causal-timeline-ui.mjs",
           "/cost-ledger-ui.mjs",
           "/budget-ui.mjs",
           "/update-summary.mjs",
@@ -1567,6 +1570,7 @@ export async function startDashboard(options) {
             return json(res, 404, {
               error: "Cross-project search is not configured",
             });
+
           try {
             return json(
               res,
@@ -1577,6 +1581,33 @@ export async function startDashboard(options) {
             return json(res, 400, { error: error.message });
           }
         }
+        if (req.method === "GET" && route === "/api/timeline") {
+          if (!humanAuthorized && !adminAuthorized)
+            return json(res, 403, {
+              error: "Human or administrator credential required",
+            });
+          if (
+            [...url.searchParams.keys()].some(
+              (key) => !["after", "limit", "trace_id"].includes(key),
+            )
+          )
+            return json(res, 400, { error: "Unknown timeline parameter" });
+
+          try {
+            return json(
+              res,
+              200,
+              await readCausalTimeline(project, store.clone(), {
+                after: Number(url.searchParams.get("after") || 0),
+                limit: Number(url.searchParams.get("limit") || 10),
+                trace_id: url.searchParams.get("trace_id"),
+              }),
+            );
+          } catch (error) {
+            return json(res, error.status || 400, { error: error.message });
+          }
+        }
+
         if (req.method === "GET" && route === "/api/handoff") {
           if (!mcpAuthorized)
             return json(res, 403, { error: "MCP bearer credential required" });
