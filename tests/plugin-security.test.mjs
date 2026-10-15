@@ -83,8 +83,10 @@ test('plugin security boundary and settings preservation', async (t) => {
   };
   assert.deepEqual(settings.inject, []);
   assert.ok(updates.inject.includes('connection'));
+  const updaterScript = join(home, 'test-updater.sh');
+  await writeFile(updaterScript, '#!/bin/sh\nprintf "test updater\\n"\n', { mode: 0o600 });
   const disposeSettings = settings.apply(ctx, {});
-  const disposeUpdates = updates.apply(ctx, { demo: true });
+  const disposeUpdates = updates.apply(ctx, { demo: true, syncScript: updaterScript });
   t.after(async () => { await disposeSettings(); disposeUpdates(); });
 
   async function request(path, { rejection, method = 'GET', body = '{}' } = {}) {
@@ -141,8 +143,21 @@ test('plugin security boundary and settings preservation', async (t) => {
     const saved = await request('/api/rdsh-context/save', { method: 'POST', body: JSON.stringify({ goal: 'new legacy goal' }) });
     assert.equal(saved.status, 200);
     assert.equal(JSON.parse(await readFile(contextFile, 'utf8')).goal, 'new legacy goal');
-    assert.equal((await request('/api/rdsh-update/run', { method: 'POST' })).status, 200);
-    assert.equal(updateCalls, 1);
+    // The updater checks Unix ownership before execFile. Supply the fixture's
+    // owner on platforms without getuid so the stubbed invocation is exercised.
+    const getuid = process.getuid;
+    if (getuid === undefined) {
+      const owner = (await stat(updaterScript)).uid;
+      process.getuid = () => owner;
+    }
+    try {
+      const updated = await request('/api/rdsh-update/run', { method: 'POST' });
+      assert.equal(updated.status, 200);
+      assert.equal(updated.body.ok, true);
+      assert.equal(updateCalls, 1);
+    } finally {
+      if (getuid === undefined) delete process.getuid;
+    }
   });
 
   await t.test('the authenticated icon serves the supplied PNG exactly and supports HEAD', async () => {

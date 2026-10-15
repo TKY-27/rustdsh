@@ -7,6 +7,7 @@
     "test:harness": "node harness-settings.mjs",
     "test:language": "node harness-language.mjs",
     "test:answer-guard": "node answer-guard-native.mjs",
+    "test:translation": "node translation-native.mjs",
     "test:muse": "node muse-subscription.mjs",
     "test:review": "node review-evidence.mjs",
     "test:updates": "node update-banner.mjs",

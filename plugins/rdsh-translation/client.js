@@ -27,9 +27,13 @@ window.__ModuleLoader__.load({
       const data = props.useChat((snapshot) => [...snapshot.nodes.values()].find((node) => node.kind === 'assistant-step' && node.data?.finalNode?.messageId === props.messageId)?.data);
       const [limit, setLimit] = React.useState(null);
       const [state, setState] = React.useState(null);
+      const preview = React.useRef(null);
       const active = React.useRef({ messageId: props.messageId, pending: null });
       if (active.current.messageId !== props.messageId) active.current = { messageId: props.messageId, pending: null };
       React.useEffect(() => { let mounted = true; threshold().then((value) => { if (mounted) setLimit(value); }); return () => { mounted = false; active.current.pending = null; }; }, []);
+      React.useEffect(() => {
+        if (state?.messageId === props.messageId && (state.text || state.error) && preview.current && !preview.current.open) preview.current.showModal();
+      }, [state, props.messageId]);
       if (limit === null || !eligible(data, props.messageId, limit)) return null;
       const view = state?.messageId === props.messageId ? state : null;
       const run = async () => {
@@ -51,12 +55,13 @@ window.__ModuleLoader__.load({
       return h('div', { className: 'rdsh-translation-preview', style: { maxWidth: '100%', minWidth: 0 } },
         h('button', { type: 'button', disabled: Boolean(view?.busy), onClick: run, 'aria-label': '回答の日本語訳を表示', 'data-testid': 'rdsh-translate-action', style: { cursor: view?.busy ? 'wait' : 'pointer', font: 'inherit' } }, view?.busy ? '和訳中…' : view?.text ? 'もう一度和訳する' : '日本語訳を表示'),
         view?.busy ? h('span', { role: 'status', 'aria-live': 'polite' }, ' 翻訳しています…') : null,
-        view?.error ? h('p', { role: 'alert' }, view.error) : null,
-        view?.text ? h('section', { 'aria-label': '日本語訳（表示のみ）', style: { marginTop: 8, padding: 12, border: '1px solid currentColor', borderRadius: 8 } },
-          h('strong', null, '日本語訳'), h('p', { style: { fontSize: '0.85em' } }, '原文と会話履歴は変更していません。訳文はこの画面でのみ表示します。'),
-          h('pre', { style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', font: 'inherit', marginBottom: 0 } }, view.text)) : null);
+        view?.text || view?.error ? h('dialog', { ref: preview, 'aria-label': '回答の日本語訳', style: { width: 'min(42rem, calc(100vw - 3rem))', maxHeight: '80vh', overflow: 'auto', boxSizing: 'border-box', padding: 16, border: '1px solid currentColor', borderRadius: 8, font: 'inherit' } },
+          h('button', { type: 'button', onClick: () => preview.current?.close(), style: { float: 'right', font: 'inherit' } }, '閉じる'),
+          view.error ? h('p', { role: 'alert' }, view.error) : h('section', { 'aria-label': '日本語訳（表示のみ）' },
+            h('strong', null, '日本語訳'), h('p', { style: { fontSize: '0.85em' } }, '原文と会話履歴は変更していません。訳文はこの画面でのみ表示します。'),
+            h('pre', { style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', font: 'inherit', marginBottom: 0 } }, view.text))) : null);
     }
-    return { inject: ['slots', 'remote.commands'], apply(ctx) {
+    return { inject: ['slots', 'remote', 'remote.commands'], apply(ctx) {
       ctx.slots.inject('conversation.chat.assistant-actions', () => ctx.slots.register({ name: 'conversation.chat.assistant-actions', id: 'rdsh-translation-preview', order: 35,
         inject: (sessionId) => ({ execute: (messageId) => ctx.remote.commands.execute(sessionId, `/ja-preview ${messageId}`, []) }) }, TranslateAction));
     } };

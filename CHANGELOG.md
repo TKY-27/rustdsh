@@ -7,6 +7,10 @@ Format follows Keep a Changelog, versioning follows Semantic Versioning.
 
 ### Added
 
+- 完了した英語・中国語回答に「日本語訳を表示」ボタンを追加。現在のモデルへ
+  独立した翻訳リクエストを送り、コード・パスと原文・会話履歴を保持して訳文を表示します。
+  Web／Desktop向けの導入と、失敗時の再試行に対応します（#448 Step 1）。
+
 - `plugins/rdsh-answer-guard` recovers a turn whose reply was emitted only into
   the reasoning channel: DSH closes such a turn as `completed` (its
   `EMPTY_RESPONSE` check only sees a fully empty message) and the Web UI folds

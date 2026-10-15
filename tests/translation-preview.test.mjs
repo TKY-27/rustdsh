@@ -44,7 +44,16 @@ function uiHost(execute, { data = chatData(), kanaThreshold = 0.08, responseOk =
     useRef(initial) { const i = cursor++; return cells[i] ||= { current: initial }; },
     useEffect(effect) { const i = cursor++; if (!(i in cells)) { cells[i] = true; effects.push(effect()); } } };
   const ctx = { slots: { inject: (_slot, register) => register(), register(options, view) { registration = options; component = view; } }, remote: { commands: { execute } } };
-  vm.runInNewContext(client, { fetch: async () => ({ ok: responseOk, json: async () => ({ ok: responseOk, kana_threshold: kanaThreshold }) }), window: { __ModuleLoader__: { load(module) { module.factory((name) => { assert.equal(name, 'react'); return React; }).apply(ctx); } } } });
+  vm.runInNewContext(client, { fetch: async () => ({ ok: responseOk, json: async () => ({ ok: responseOk, kana_threshold: kanaThreshold }) }), window: { __ModuleLoader__: { load(module) {
+    const plugin = module.factory((name) => { assert.equal(name, 'react'); return React; });
+    // Cordis validates the root service independently of its dotted children.
+    // Match the real Web host's admission so a missing `remote` cannot be hidden.
+    const scoped = new Proxy(ctx, { get(target, key) {
+      if (['slots', 'remote'].includes(key) && !plugin.inject.includes(key)) throw new Error(`cannot get property "${key}" without inject`);
+      return Reflect.get(target, key);
+    } });
+    plugin.apply(scoped);
+  } } } });
   return { registration, async settle() { await new Promise((done) => setImmediate(done)); },
     render(messageId = 'answer-1') { cursor = 0; return component({ messageId, useChat: (select) => select({ nodes: new Map([['answer', { kind: 'assistant-step', data: current }]]) }), ...registration.inject('session-1') }); },
     setData(data) { current = data; }, dispose() { for (const off of effects) off?.(); } };

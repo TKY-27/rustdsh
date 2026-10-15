@@ -4,7 +4,7 @@ Issue #448 Step 1。規模: 中（既存のDSHコマンドとWeb UIスロット�
 DSHが所有する会話・モデル実行のホストアダプタとして実装し、独自のエージェントループは追加しません。
 
 完了した英語・中国語回答のアクション行で「日本語訳を表示」を押すと、
-現在の会話で直近に使ったprovider/modelへ独立した翻訳リクエストを1回送り、回答の横に訳文を表示します。
+現在の会話で直近に使ったprovider/modelへ独立した翻訳リクエストを1回送り、訳文ダイアログを開きます。
 生成中の表示、二重クリック防止、失敗時の再試行に対応します。
 日本語・コードだけ・中断された回答にはボタンを出しません。
 かな比率による判定なので、日本語の漢字だけの文章などを誤判定する場合があります。
@@ -36,3 +36,15 @@ Desktopでは`rdsh desktop install --package /絶対パス/plugins/rdsh-translat
 原文とsession不変、二重起動、失敗・取消・上限、導入リストを確認します。
 同じテストはCIの既存プラグイン検証入口からも読み込みます。
 実providerを使った翻訳の品質・実DSH全体での受入は、合成境界の成功とは区別します。
+
+隔離したDSHを用意した場合は、次のコマンドで実AgentLoop・LLM・CommandRuntimeと
+実sessionの境界を確認できます。providerだけが固定応答で、モデルAPIを呼びません。
+
+```sh
+RDSH_NATIVE_MODULES=/path/to/dsh/node_modules npm run test:translation --prefix tests/e2e
+```
+
+画面確認とは別の試験です。実行方法は[受入試験](../../tests/e2e/README.md)を参照してください。
+
+実Webプロファイルでの操作前後のPNG・操作GIFと検証範囲は、
+[画面の受入記録](../../docs/evidence/issue448-translation-preview/README.md)を参照してください。
