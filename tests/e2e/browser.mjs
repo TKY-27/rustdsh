@@ -56,12 +56,13 @@ try{
  await native.close();await stop(serve.child);await rm(serve.tokenFile,{force:true});report.flows.push('native serve: protected token handoff -> tokens -> prune -> sessions -> reload retained');
 
  const {identity}=await import(pathToFileURL(path.join(repo,'dashboard/state.mjs')));
+ const {readLocalRuntime}=await import(pathToFileURL(path.join(repo,'dashboard/private-runtime.mjs')));
  process.env.RDSH_DASHBOARD_HOME=env.RDSH_DASHBOARD_HOME;
  const {Client}=await import(pathToFileURL(path.join(repo,'dashboard/node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js')));
  const {StreamableHTTPClientTransport}=await import(pathToFileURL(path.join(repo,'dashboard/node_modules/@modelcontextprotocol/sdk/dist/esm/client/streamableHttp.js')));
  const project=path.join(root,'alpha');await mkdir(project);const identityAlpha=await identity(project);
  const dashboard=await launch(process.execPath,[path.join(repo,'dashboard/cli.mjs'),'project','--project',project,'--port',await freePort(),'--no-tailscale'],/project: (http:\/\/127\.0\.0\.1:\d+\/)/);
- const runtime=JSON.parse(await readFile(path.join(identityAlpha.directory,'runtime.json'),'utf8'));
+ const runtime=await readLocalRuntime(identityAlpha.directory);
  const client=new Client({name:'browser-e2e',version:'1.0.0'},{capabilities:{}});
  await client.connect(new StreamableHTTPClientTransport(new URL(runtime.local_url+'mcp'),{requestInit:{headers:{authorization:`Bearer ${runtime.mcp_token}`}}}));
  try{
@@ -69,6 +70,8 @@ try{
  await call('dashboard_upsert_task',{id:'T1',title:'E2E task',status:'doing'});
  await call('dashboard_ask_question',{id:'Q1',question:'E2E: choose an answer',urgency:'high'});
  const projectPage=await pageFor(browser,runtime.browser_url);await projectPage.locator('#question-Q1 textarea').waitFor();await check(projectPage,/dashboard/i);
+ const updateSummary=projectPage.locator('#update-summary');
+ await projectPage.waitForFunction(()=>document.querySelector('#update-summary-status')?.textContent.includes('初回確認'));
  await projectPage.evaluate(async()=>{
   const {createHumanMetricsPanel}=await import(new URL('/human-metrics-ui.mjs',location.href).href);
   const root=document.createElement('section');root.id='human-metrics-ui-regression';document.body.append(root);
@@ -98,6 +101,31 @@ try{
   {action:'mark_instruction_resend',command_id:'C1'},
  ]);
  await metricsPanel.evaluate(element=>element.remove());report.flows.push('human metrics UI: selecting each action target enables its button and submits the selected id');
+ await projectPage.context().grantPermissions(['clipboard-read','clipboard-write'],{origin:new URL(runtime.local_url).origin});
+ await projectPage.locator('#tasks-detail').evaluate(e=>e.open=true);
+ await projectPage.locator('#task-T1').getByRole('button',{name:/認証情報を含まないリンクをコピー/}).click();
+ await projectPage.locator('#task-T1').getByText('リンクをコピーしました。認証情報は含まれません。').waitFor();
+ const taskLink=await projectPage.evaluate(()=>navigator.clipboard.readText());
+ const taskLinkUrl=new URL(taskLink);assert.equal(taskLinkUrl.searchParams.get('rdsh_project'),identityAlpha.id);assert.equal(taskLinkUrl.searchParams.get('rdsh_kind'),'task');assert.equal(taskLinkUrl.searchParams.get('rdsh_id'),'T1');assert.equal(taskLinkUrl.hash,'');assert.equal(taskLinkUrl.searchParams.has('key'),false);
+ await projectPage.locator('#question-Q1').getByRole('button',{name:/認証情報を含まないリンクをコピー/}).click();
+ await projectPage.locator('#question-Q1').getByText('リンクをコピーしました。認証情報は含まれません。').waitFor();
+ const questionLink=await projectPage.evaluate(()=>navigator.clipboard.readText());
+ const questionLinkUrl=new URL(questionLink);assert.equal(questionLinkUrl.searchParams.get('rdsh_kind'),'question');assert.equal(questionLinkUrl.searchParams.get('rdsh_id'),'Q1');assert.equal(questionLinkUrl.hash,'');
+ // Open the shareable target before pairing, then authenticate in another tab
+ // on the same project origin. The navigation hint is restored from localStorage;
+ // the copied URL itself contains no browser credential.
+ const pairedContext=await browser.newContext({viewport:report.viewports[0],locale:'ja-JP'});contexts.push(pairedContext);
+ const unauthenticatedPage=await pairedContext.newPage();await unauthenticatedPage.goto(taskLink);
+ await unauthenticatedPage.waitForFunction(()=>localStorage.getItem('rdsh_pending_project_deep_link_v1')!==null);
+ const pairedPage=await pairedContext.newPage();await pairedPage.goto(runtime.browser_url);await pairedPage.locator('#task-T1').waitFor();
+ await pairedPage.waitForFunction(()=>document.querySelector('#tasks-detail')?.open&&document.activeElement?.id==='task-T1');
+ await pairedPage.waitForTimeout(5200);assert.equal(await pairedPage.evaluate(()=>document.activeElement?.id==='task-T1'),true,'a same-revision refresh must preserve deep-link focus');
+ assert.equal(new URL(pairedPage.url()).hash,'');assert.equal(new URL(pairedPage.url()).searchParams.has('rdsh_id'),false);
+ assert.equal(await pairedPage.evaluate(()=>localStorage.getItem('rdsh_pending_project_deep_link_v1')),null);
+ await pairedPage.setViewportSize(report.viewports[1]);await pairedPage.goto(questionLink);await pairedPage.locator('#question-Q1').waitFor();
+ await pairedPage.waitForFunction(()=>document.activeElement?.id==='question-Q1');await check(pairedPage,/dashboard/i);
+ assert.equal(new URL(pairedPage.url()).hash,'');assert.equal(new URL(pairedPage.url()).searchParams.has('rdsh_id'),false);
+ report.flows.push('project deep links: task/question URLs omit auth key; unauthenticated target resumes after pairing and opens exact task; mobile returns to exact question');
  const observedCli=projectPage.locator('#observed-cli-panel');
  assert.equal(await observedCli.count(),1,'the read-only CLI observation panel should remain in a workspace pane');
  assert.equal(await observedCli.locator('#observed-cli-form').count(),1,'the observation registration form should remain available');
@@ -124,6 +152,23 @@ try{
  assert.equal(mobileColumns,1,'narrow layouts should use one column');
  await check(projectPage,/dashboard/i);
  await projectPage.setViewportSize(report.viewports[0]);
+ await projectPage.locator('#device-detail').evaluate(e=>e.open=true);
+ await projectPage.locator('#device-name').fill('E2E viewer');await projectPage.locator('#device-create').click();
+ await projectPage.waitForFunction(()=>document.querySelector('#device-link')?.value.includes('#key=rdsh_dev_'));
+ const viewerLink=await projectPage.locator('#device-link').inputValue();const viewerPage=await pageFor(browser,viewerLink);
+ await viewerPage.locator('#question-Q1 textarea').waitFor();await viewerPage.locator('#device-access-notice').filter({hasText:'閲覧'}).waitFor();
+ assert.equal(await viewerPage.locator('#question-Q1 textarea').isDisabled(),true);assert.equal(await viewerPage.locator('#question-Q1 button[type=submit]').isDisabled(),true);
+ assert.equal(await viewerPage.locator('#share-toggle').isHidden(),true);assert.equal(await viewerPage.locator('#device-detail').isHidden(),true);
+ await viewerPage.setViewportSize(report.viewports[1]);await check(viewerPage,/dashboard/i);
+ const viewerToken=await viewerPage.evaluate(()=>sessionStorage.getItem('rdsh_project_browser_token'));
+ const deniedAnswer=await fetch(new URL('api/update/answer',viewerPage.url()),{method:'POST',headers:{'x-rdsh-browser-token':viewerToken,'content-type':'application/json'},body:JSON.stringify({id:'Q1',answer:'forged'})});
+ assert.equal(deniedAnswer.status,403);
+ await projectPage.locator('#device-list article').filter({hasText:'E2E viewer'}).getByRole('button',{name:'この端末を失効'}).waitFor();
+ projectPage.once('dialog',dialog=>dialog.accept());await projectPage.locator('#device-list article').filter({hasText:'E2E viewer'}).getByRole('button',{name:'この端末を失効'}).click();
+ await projectPage.locator('#device-list article').filter({hasText:'失効済み'}).waitFor();
+ const revokedState=await fetch(new URL('api/state',viewerPage.url()),{headers:{'x-rdsh-browser-token':viewerToken}});
+ assert.equal(revokedState.status,401);
+ await viewerPage.close();
  await projectPage.locator('#question-Q1 textarea').fill('Keep this draft');
  beginQaCase('desktop.sse-draft');
  assert.equal(await projectPage.evaluate(()=>document.activeElement===document.querySelector('#question-Q1 textarea')),true);
@@ -131,6 +176,24 @@ try{
  await call('dashboard_update_metrics',{input_tokens:1000,cached_input_tokens:500,tool_calls:10,tool_errors:0});await stateUpdate;
  assert.equal(await projectPage.locator('#question-Q1 textarea').inputValue(),'Keep this draft');
  assert.equal(await projectPage.evaluate(()=>document.activeElement===document.querySelector('#question-Q1 textarea')),true);
+ await projectPage.waitForFunction(()=>document.querySelector('#update-summary-status')?.textContent.includes('1 件'));
+ assert.match(await updateSummary.innerText(),/数値レポートが更新/);
+ const browserToken=new URL(runtime.browser_url).hash.slice('#key='.length);
+ const metricState=await fetch(runtime.local_url+'api/changes?after_revision=2',{headers:{'x-rdsh-browser-token':browserToken}}).then(r=>r.json());
+ const metricRecord=metricState.records.findLast(record=>record.name==='dashboard.metrics.updated');
+ assert.ok(metricRecord,'cursor endpoint should expose a redacted source record');
+ assert.equal(metricState.revision,3);
+ assert.equal('summary' in metricRecord,false,'raw free text must stay private');
+ await updateSummary.locator('#update-summary-items button').filter({hasText:'元記録を開く'}).waitFor();
+ await updateSummary.locator('#update-summary-items li').filter({hasText:'数値レポートが更新'}).getByRole('button',{name:'元記録を開く'}).click();
+ assert.equal(await projectPage.locator('#change-records-detail').evaluate(e=>e.open),true);
+ assert.equal(await projectPage.evaluate(id=>document.getElementById(`change-${id}`)?.textContent.includes(id),metricRecord.event_id),true,'summary source should navigate to the matching update event');
+ await updateSummary.locator('#update-summary-mark-read').focus();
+ const summaryFocusUpdate=projectPage.waitForResponse(r=>r.url().endsWith('/api/state')&&r.status()===200);
+ await call('dashboard_update_metrics',{input_tokens:1500,cached_input_tokens:600,tool_calls:11,tool_errors:0});await summaryFocusUpdate;
+ await projectPage.waitForFunction(()=>document.querySelector('#update-summary-status')?.textContent.includes('現在版 4'));
+ assert.equal(await projectPage.evaluate(()=>document.activeElement.id),'update-summary-mark-read','summary refresh must preserve its active control');
+ assert.match(await updateSummary.innerText(),/数値レポートが更新/);
  passQaCase('desktop.sse-draft','browser-results.json#qa_results.desktop.sse-draft');
 
  beginQaCase('desktop.command-palette');
@@ -203,6 +266,13 @@ try{
  passQaCase('desktop.command-palette','browser-results.json#qa_results.desktop.command-palette');
  await projectPage.locator('#question-Q1 textarea').fill('E2E saved answer');await projectPage.locator('#question-Q1').getByRole('button',{name:'回答を返す'}).click();
  await projectPage.locator('#questions').filter({hasText:'未回答の質問はありません'}).waitFor();await projectPage.locator('#answered').evaluate(e=>e.open=true);await projectPage.locator('#answers').filter({hasText:'E2E saved answer'}).waitFor();
+ await projectPage.waitForFunction(()=>document.querySelector('#update-summary-items')?.textContent.includes('質問への回答が保存'));
+ await updateSummary.locator('#update-summary-mark-read').click();
+ await projectPage.waitForFunction(()=>document.querySelector('#update-summary-status')?.textContent.includes('変更はありません'));
+ assert.equal(await projectPage.evaluate(()=>document.activeElement.id),'update-summary-status');
+ const summaryCheckpoint=await projectPage.evaluate(id=>JSON.parse(localStorage.getItem(`rdsh.update-summary.v1.${id}`)),identityAlpha.id);
+ assert.deepEqual(Object.keys(summaryCheckpoint).sort(),['eventSequence','metricRecords','revision','schema','taskStates','timestamp']);
+ assert.equal(summaryCheckpoint.revision,(await (await fetch(runtime.local_url+'api/state',{headers:{authorization:`Bearer ${runtime.token}`}})).json()).revision);
  const feedback=await client.callTool({name:'dashboard_get_feedback',arguments:{}});assert.notEqual(feedback.isError,true);assert.ok(feedback.content[0].text.includes('E2E saved answer'));
  const state=await fetch(runtime.local_url+'api/state',{headers:{authorization:`Bearer ${runtime.token}`}});assert.equal((await state.json()).questions[0].answer,'E2E saved answer');
  const readState=async()=>{const response=await fetch(runtime.local_url+'api/state',{headers:{authorization:`Bearer ${runtime.token}`}});assert.equal(response.status,200);return response.json();};
@@ -263,13 +333,13 @@ try{
  await screenshot(projectPage,'project-desktop');await projectPage.setViewportSize(report.viewports[1]);await check(projectPage,/dashboard/i);passQaCase('mobile.viewport','project-mobile.png');await screenshot(projectPage,'project-mobile');
  await projectPage.close();await client.close();await stop(dashboard.child);
  const restarted=await launch(process.execPath,[path.join(repo,'dashboard/cli.mjs'),'project','--project',project,'--port',await freePort(),'--no-tailscale'],/project: (http:\/\/127\.0\.0\.1:\d+\/)/);
- const fresh=JSON.parse(await readFile(path.join(identityAlpha.directory,'runtime.json'),'utf8'));
+ const fresh=await readLocalRuntime(identityAlpha.directory);
  assert.notEqual(fresh.browser_url,runtime.browser_url);
  const staleToken=new URL(runtime.browser_url).hash.slice('#key='.length);assert.equal((await fetch(fresh.local_url+'api/state',{headers:{'x-rdsh-browser-token':staleToken}})).status,401);
  const newPage=await pageFor(browser,fresh.browser_url);await newPage.locator('#tasks-detail').evaluate(e=>e.open=true);await newPage.locator('#task-T1').waitFor();await newPage.locator('#answered').evaluate(e=>e.open=true);await newPage.locator('#answers').filter({hasText:'E2E saved answer'}).waitFor();await check(newPage,/dashboard/i);
  const persisted=await fetch(fresh.local_url+'api/state',{headers:{authorization:`Bearer ${fresh.token}`}});assert.equal(persisted.status,200);const persistedState=await persisted.json();assert.equal(persistedState.questions.find(item=>item.id==='Q1').answer,'E2E saved answer');assert.equal(persistedState.feedback.filter(item=>item.question_id==='Q1'&&item.type==='question_answered').length,1);
  passQaCase('desktop.answer-reload','browser-results.json#qa_results.desktop.answer-reload');await stop(restarted.child);
- report.flows.push('project CLI: real MCP task/question -> preserved read-only CLI observation panel -> project-specific pane layout persistence, keyboard navigation and mobile one-column -> browser draft and focus preserved on SSE -> command palette English/Japanese search, arrows, Enter, Escape, ARIA state and SSE resilience -> browser answer -> MCP/file readback -> process restart retained answer and revoked old key');
+ report.flows.push('project CLI: real MCP task/question -> preserved read-only CLI observation panel -> project-specific pane layout persistence, keyboard navigation and mobile one-column -> browser draft and focus preserved on SSE plus change summary -> command palette English/Japanese search, arrows, Enter, Escape, ARIA state and SSE resilience -> browser answer -> per-project summary checkpoint, MCP/file readback -> process restart retained answer and revoked old key');
  }finally{await client.close();}
  assert.deepEqual(report.page_errors,[]);assert.deepEqual(report.console_errors,[]);
  report.result='PASS';

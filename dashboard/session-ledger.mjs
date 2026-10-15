@@ -13,11 +13,13 @@ import { readProcessIdentity } from "./process-identity.mjs";
 import { trackAdapter } from "./tracked-adapter.mjs";
 import { prepareGpuAttachment } from "./gpu-attachment.mjs";
 import { runGpuRequest } from "./gpu-leases.mjs";
+import { dockerWorkerLaunch } from "./process-scope.mjs";
 import { ModelRouting } from "./model-routing.mjs";
 import { prepareBudgetAttachment } from "./budget-client.mjs";
 import { prepareModelAttachment } from "./model-runtime.mjs";
 
 export const gpuLeaseProtocol = "rdsh-gpu-leases/1";
+import { preparePlanAttachment } from "./plan-runtime.mjs";
 
 const exec = promisify(execFile);
 const scopeKeys = [
@@ -91,7 +93,7 @@ async function canonical(file, cwd = process.cwd()) {
     }
   }
 }
-async function context(cwd, command, env) {
+async function context(cwd, command, env, dockerWorker = null) {
   const root = await fs.realpath(path.resolve(cwd));
   if (!(await fs.stat(root)).isDirectory())
     throw new LedgerError("cwd_unavailable");
@@ -157,7 +159,15 @@ async function context(cwd, command, env) {
     )
       throw new LedgerError("invalid_launch");
     const paths = [];
-    for (const arg of command) {
+    let dockerLaunch = null;
+    if (dockerWorker !== null) {
+      dockerLaunch = await dockerWorkerLaunch({ command, cwd: root, dockerWorker });
+      // The Linux image owns this executable. Only the mounted entrypoint is
+      // a host file; keeping these identities distinct prevents later native
+      // PID/path observation from being mistaken for remote workload proof.
+      paths.push(command[0]);
+      if (command[1]) paths.push(await fs.realpath(command[1]));
+    } else for (const arg of command) {
       // Paths only: never persist shell strings, arbitrary flags or secrets in argv.
       if (!path.isAbsolute(arg))
         throw new LedgerError("absolute_executable_required");
@@ -179,6 +189,14 @@ async function context(cwd, command, env) {
     scope = { effective_home: await canonical(effectiveHome, root) };
     for (const key of scopeKeys)
       scope[key] = env[key] ? await canonical(env[key], root) : null;
+    scope.execution_backend = dockerWorker === null ? null : {
+      kind: "docker_linux_worker", image: dockerLaunch.image,
+      transport: "colima_docker", context: "colima", workspace: "/workspace",
+      docker_bin: dockerLaunch.dockerBin,
+      endpoint: dockerLaunch.endpoint,
+      engine_id: dockerLaunch.engine_id,
+      mount_roots: dockerLaunch.mountRoots,
+    };
   }
   return { cwd: root, branch, git, launch, scope };
 }
@@ -231,7 +249,7 @@ function validateRecord(record, projectId) {
     valid(launch.entrypoint === null || path.isAbsolute(launch.entrypoint));
     valid(
       object(record.scope) &&
-        Object.keys(record.scope).length === scopeKeys.length + 1 &&
+        [scopeKeys.length + 1, scopeKeys.length + 2].includes(Object.keys(record.scope).length) &&
         text(record.scope.effective_home, 4096) &&
         path.isAbsolute(record.scope.effective_home),
     );
@@ -241,6 +259,10 @@ function validateRecord(record, projectId) {
           optional(record.scope[key], 4096) &&
           (record.scope[key] === null || path.isAbsolute(record.scope[key])),
       );
+    if (Object.hasOwn(record.scope, "execution_backend")) {
+      const backend = record.scope.execution_backend;
+      valid(backend === null || (object(backend) && Object.keys(backend).length === 9 && backend.kind === "docker_linux_worker" && text(backend.image, 256) && backend.transport === "colima_docker" && backend.context === "colima" && backend.workspace === "/workspace" && text(backend.docker_bin, 4096) && path.isAbsolute(backend.docker_bin) && text(backend.endpoint, 4096) && backend.endpoint.startsWith("unix://") && text(backend.engine_id, 256) && Array.isArray(backend.mount_roots) && backend.mount_roots.length > 0 && backend.mount_roots.every((item) => text(item, 4096) && path.isAbsolute(item))));
+    }
   } else valid(record.scope === null);
 }
 function validateFile(value, project) {
@@ -371,6 +393,7 @@ export class SessionLedger {
     command = null,
     env = process.env,
     provider = null,
+    dockerWorker = null,
   } = {}) {
     const record = {
       run_id: "run_" + randomUUID(),
@@ -380,7 +403,7 @@ export class SessionLedger {
       cli,
       cli_session_id,
       binding: cli_session_id === null ? "unknown" : "reported",
-      ...(await context(cwd, command, env)),
+      ...(await context(cwd, command, env, dockerWorker)),
       provider,
       cli_version: null,
       created_at: new Date().toISOString(),
@@ -412,10 +435,18 @@ export async function verifyRecordedContext(
   record,
   command,
   env = process.env,
+  dockerWorker = null,
 ) {
   if (record.cli !== "dsh" || record.launch === null)
     throw new LedgerError("launch_unknown_or_unsupported");
-  const current = await context(record.cwd, command, env);
+  const recordedBackend = Object.hasOwn(record.scope, "execution_backend") ? record.scope.execution_backend : null;
+  if (!Object.hasOwn(record.scope, "execution_backend") && dockerWorker !== null)
+    throw new LedgerError("execution_backend_changed");
+  if ((recordedBackend === null) !== (dockerWorker === null))
+    throw new LedgerError("execution_backend_changed");
+  const current = await context(record.cwd, command, env, dockerWorker);
+  if (JSON.stringify(recordedBackend) !== JSON.stringify(current.scope.execution_backend))
+    throw new LedgerError("execution_backend_changed");
   const equalLaunch =
     current.launch &&
     Object.keys(record.launch).every((key) =>
@@ -436,7 +467,7 @@ export async function verifyRecordedContext(
   )
     throw new LedgerError("repository_context_changed");
   if (
-    !Object.keys(record.scope).every((key) =>
+    !scopeKeys.concat("effective_home").every((key) =>
       record.scope[key] === null
         ? current.scope[key] === null
         : samePath(record.scope[key], current.scope[key]),
@@ -466,6 +497,7 @@ export async function attachRecordedSession({
   gpu = null,
   gpuLeases = null,
   onRecord = null,
+  dockerWorker = null,
 } = {}) {
   if (typeof retryStart !== "boolean" || (retryStart && run_id === null))
     throw new LedgerError("pending_gpu_start_required");
@@ -494,6 +526,7 @@ export async function attachRecordedSession({
       task_id,
       label,
       provider,
+      dockerWorker,
     });
   else {
     record = await ledger.resolve(run_id);
@@ -501,7 +534,7 @@ export async function attachRecordedSession({
       throw new LedgerError("session_id_unknown");
     if (retryStart && record.cli_session_id !== null)
       throw new LedgerError("pending_gpu_start_required");
-    await verifyRecordedContext(record, command, env);
+    await verifyRecordedContext(record, command, env, dockerWorker);
   }
   if (record.git.status === "unavailable")
     throw new LedgerError("repository_context_unknown");
@@ -525,6 +558,8 @@ export async function attachRecordedSession({
         (await runGpuRequest(ledger.project, record.run_id)) === null)
     )
       throw new LedgerError("pending_gpu_start_required");
+    if (previous?.scope && !previous.process && previous.scope_observation.status !== "exit_confirmed")
+      throw new HistoryError("run_descendants_unconfirmed");
     if (previous?.process) {
       const status = previous.process_observation.status;
       if (
@@ -552,7 +587,25 @@ export async function attachRecordedSession({
           env,
         );
   if (budgetGuard) env = budgetGuard.env;
+  let planGuard;
   let modelGuard;
+  try {
+    planGuard = await preparePlanAttachment(ledger.project, record, env);
+    if (planGuard) env = planGuard.env;
+  } catch (error) {
+    await budgetGuard?.close();
+    throw error;
+  }
+  const closeGuards = async () => {
+    const results = await Promise.allSettled([
+      budgetGuard?.close(),
+      planGuard?.close(),
+      modelGuard?.close(),
+      gpuGuard?.close(),
+    ]);
+    const failure = results.find((result) => result.status === "rejected");
+    if (failure) throw failure.reason;
+  };
   try {
     modelGuard = await prepareModelAttachment(ledger.project, record, env);
     if (modelGuard) env = modelGuard.env;
@@ -586,16 +639,16 @@ export async function attachRecordedSession({
     await history.transition(record.run_id, "starting", "request_recorded");
     await history.commandPhase(commandId, "dispatched");
   } catch (error) {
-    await closeAttachments();
-    await gpuGuard?.close();
+    await closeGuards();
     throw error;
   }
   let processBound = false;
   const exitWrites = {
     pending: [],
+    activityPending: new Set(),
     error: null,
     async flush() {
-      await Promise.all(this.pending);
+      await Promise.all([...this.pending, ...this.activityPending]);
     },
   };
   let adapter;
@@ -609,6 +662,7 @@ export async function attachRecordedSession({
       requestTimeout,
       stopTimeout,
       owner_id: history.owner_id,
+      dockerWorker,
       onStopStage: async (stage) => {
         try {
           await history.stopStage(record.run_id, stage);
@@ -631,6 +685,11 @@ export async function attachRecordedSession({
       onOwnedSpawn: async (pid, scope) => {
         if (gpuGuard) await gpuGuard.bind(scope);
         await history.bindScope(record.run_id, scope);
+        // Docker transport PIDs belong to macOS and are never recorded as the
+        // Linux workload. The typed remote scope remains the durable identity.
+        if (scope.execution_platform === "linux" && scope.transport === "colima_docker") {
+          return;
+        }
         const observed = scope.root_identity
           ? { status: "observed", identity: scope.root_identity }
           : await readProcessIdentity(pid);
@@ -645,11 +704,10 @@ export async function attachRecordedSession({
     });
     gpuGuard?.connect(adapter);
   } catch (error) {
-    await closeAttachments();
-    await gpuGuard?.close();
+    await closeGuards();
     throw error;
   }
-  if (budgetGuard || modelGuard || gpuGuard) {
+  if (budgetGuard || modelGuard || gpuGuard || planGuard) {
     const originalStop = adapter.stop.bind(adapter);
     adapter.stop = async () => {
       let stopError;
@@ -661,6 +719,7 @@ export async function attachRecordedSession({
       } finally {
         const closed = await Promise.allSettled([
           budgetGuard?.close(),
+          planGuard?.close(),
           modelGuard?.close(),
           gpuGuard?.close(),
         ]);
@@ -673,16 +732,44 @@ export async function attachRecordedSession({
       }
     };
   }
+  let lastActivityAt = 0;
+  let trackedSessionId = null;
+  const activityKinds = {
+    agent_message_chunk: "agent_message",
+    tool_call: "tool_call",
+    tool_call_update: "tool_update",
+    usage_update: "usage",
+    plan: "plan",
+    current_mode_update: "mode",
+  };
   adapter.on("event", (event) => {
+    if (
+      event.type === "session_update" &&
+      event.session_id === trackedSessionId
+    ) {
+      const updateType = event.update?.sessionUpdate;
+      const kind = activityKinds[updateType] || "other";
+      const now = Date.now();
+      if (now - lastActivityAt >= 60000) {
+        lastActivityAt = now;
+        const write = history
+          .recordActivity(record.run_id, kind)
+          .catch((error) => {
+            exitWrites.error ||= error;
+          });
+        exitWrites.activityPending.add(write);
+        void write.finally(() => exitWrites.activityPending.delete(write));
+      }
+    }
     if (event.type === "process_exit" && gpuGuard)
       exitWrites.pending.push(
         gpuGuard.observe().catch((error) => {
           gpuGuard.lastError = error.code || "gpu_release_unconfirmed";
         }),
       );
-    if (event.type === "process_exit" && (budgetGuard || modelGuard))
+    if (event.type === "process_exit" && (budgetGuard || modelGuard || planGuard))
       exitWrites.pending.push(
-        closeAttachments().catch((error) => {
+        closeGuards().catch((error) => {
           exitWrites.error ||= error;
         }),
       );
@@ -706,9 +793,11 @@ export async function attachRecordedSession({
       run_id === null || retryStart
         ? await adapter.start()
         : await adapter.resume(record.cli_session_id);
+    trackedSessionId = attached.session_id;
     await history.bindSession(record.run_id, attached.session_id);
     if (budgetGuard) adapter.nativeBudgetGuard = await budgetGuard.ready();
     if (modelGuard) adapter.nativeModelGuard = await modelGuard.ready(adapter);
+    if (planGuard) adapter.nativePlanGuard = await planGuard.ready(adapter);
     await history.commandPhase(commandId, "acknowledged", "session_attached");
     const confirmed = await ledger.confirm(
       record.run_id,
@@ -733,6 +822,7 @@ export async function attachRecordedSession({
             throw new LedgerError("native_session_changed");
           if (budgetGuard) await budgetGuard.ready();
           if (gpuGuard) await gpuGuard.ready();
+          if (planGuard) await planGuard.ready(adapter);
           return ModelRouting.open(ledger.project).guard(confirmed, adapter);
         },
       ),

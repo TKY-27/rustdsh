@@ -16,6 +16,7 @@ import {
 import { identity } from "../state.mjs";
 import { startDashboard } from "../server.mjs";
 import { tools } from "../mcp.mjs";
+import { readRuntime } from "./owner-runtime.mjs";
 
 async function freePort() {
   const server = net.createServer();
@@ -69,9 +70,7 @@ test("attention metadata has the same durable contract on HTTP, legacy MCP, stdi
       port: await freePort(),
       tailscale: false,
     });
-    runtime = JSON.parse(
-      await fs.readFile(path.join(project.directory, "runtime.json"), "utf8"),
-    );
+    runtime = await readRuntime(project.directory);
   }
   await start();
   const adminHeaders = () => ({
@@ -185,6 +184,7 @@ test("attention metadata has the same durable contract on HTTP, legacy MCP, stdi
       await stdio.listTools(),
       await modernRequest("tools/list"),
     ]) {
+      assert.equal(catalog.tools.length, 19);
       const names = catalog.tools.map((tool) => tool.name).sort();
       assert.deepEqual(names, registeredNames);
       assert.equal(new Set(names).size, names.length, "tool names remain unique");

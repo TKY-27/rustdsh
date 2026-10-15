@@ -7,6 +7,7 @@ import net from "node:net";
 import { ProjectStore, publicState } from "../state.mjs";
 import { executeTool, feedbackSince, tools } from "../mcp.mjs";
 import { startDashboard } from "../server.mjs";
+import { readLocalRuntime } from "../private-runtime.mjs";
 import { draftReviewState } from "../question-cards-ui.mjs";
 
 function approval(max = 5, action = "publish-fixture", revision = "target-v1") {
@@ -167,7 +168,47 @@ test("legacy consultations retain their field shapes and a default action grants
     "answer",
     "created_at",
   ]);
-  assert.equal(tools.length, 8);
+  assert.equal(tools.length, 19);
+});
+
+test("question revisions retain explicit causal evidence references and the MCP schema documents them", async (t) => {
+  const f = await setup(t),
+    firstId = "evi_11111111-1111-1111-1111-111111111111",
+    secondId = "evi_22222222-2222-2222-2222-222222222222",
+    schema = tools.find(
+      (tool) => tool.name === "dashboard_ask_question",
+    ).inputSchema.properties.decision.properties.causal_source_evidence_ids;
+  assert.equal(schema.minItems, 1);
+  assert.equal(schema.maxItems, 20);
+  assert.equal(schema.uniqueItems, true);
+  await f.store.mutate(
+    "question",
+    ask({ ...approval(), causal_source_evidence_ids: [firstId] }),
+  );
+  const original = structuredClone(f.card());
+  assert.deepEqual(
+    original.snapshot.decision.causal_source_evidence_ids,
+    [firstId],
+  );
+  await f.store.mutate(
+    "question",
+    ask(
+      { ...approval(), causal_source_evidence_ids: [secondId] },
+      { action: "revise", expected_revision: 1 },
+    ),
+  );
+  assert.notEqual(f.card().fingerprint, original.fingerprint);
+  assert.deepEqual(
+    f.card().history[0].snapshot.decision.causal_source_evidence_ids,
+    [firstId],
+  );
+  await assert.rejects(
+    f.store.mutate(
+      "question",
+      ask({ ...approval(), causal_source_evidence_ids: ["not-an-evidence-id"] }),
+    ),
+    /Invalid causal_source_evidence_ids/,
+  );
 });
 
 test("typed choices, fixed target and a human answer persist atomically without creating execution authority", async (t) => {
@@ -340,11 +381,11 @@ test("incomplete approvals, duplicate choices, forged fields and corrupt persist
   state.question_contracts.cards.Q1.snapshot.decision.cost.max = 999;
   const corrupt = JSON.stringify(state);
   await fs.writeFile(f.file, corrupt);
-  await assert.rejects(ProjectStore.open(f.project), /corrupt/);
+  await assert.rejects(ProjectStore.open(f.project), /integrity check failed/);
   assert.equal(await fs.readFile(f.file, "utf8"), corrupt);
   state.question_contracts.schema = 2;
   await fs.writeFile(f.file, JSON.stringify(state));
-  await assert.rejects(ProjectStore.open(f.project), /Unsupported/);
+  await assert.rejects(ProjectStore.open(f.project), /integrity check failed/);
 });
 
 test("authenticated human HTTP answers bind the seen revision; MCP/admin cannot forge an answer or a human cancellation", async (t) => {
@@ -359,9 +400,7 @@ test("authenticated human HTTP answers bind the seen revision; MCP/admin cannot 
     tailscale: false,
   });
   t.after(() => dashboard.close());
-  const runtime = JSON.parse(
-    await fs.readFile(path.join(f.project.directory, "runtime.json"), "utf8"),
-  );
+  const runtime = await readLocalRuntime(f.project.directory);
   const human = {
     "x-rdsh-browser-token": new URL(runtime.browser_url).hash.slice(5),
   };

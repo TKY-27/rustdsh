@@ -16,12 +16,16 @@ import { observationSchema } from "./observations.mjs";
 import { feedbackValidity } from "./question-contracts.mjs";
 import { costScopeSchema, costReportSchema } from "./cost-ledger.mjs";
 import { outcomeSchema, milestoneSchema } from "./task-outcomes.mjs";
+import { providerStatusSchema } from "./provider-status.mjs";
 
 // Bucket E (MCP) diagnostics — Issues #63 and #76-#79:
 // The source-linked handoff contract (#63) shares project-scoped state,
 // feedback, and acceptance resources. Exposure control (#76), remote OAuth
-// (#77), diagnostics (#78), and binary resource handling (#79) remain in the
-// outer MCP layers.
+// (#77), single-screen server diagnostics (#78), and binary resource handling
+// (#79) live in the outer MCP layers, not in this dashboard server. Changes
+// here stay limited to diagnostic wording and comments so callers can tell
+// which name/URI failed, what exists, and what to do next. Security-sensitive
+// execution stays behind the separate approval and sandbox adapters below.
 
 const string = { type: "string", minLength: 1, maxLength: 8000 };
 const object = (properties, required = []) => ({
@@ -30,6 +34,18 @@ const object = (properties, required = []) => ({
   required,
   additionalProperties: false,
 });
+const operationSchema = object({
+  schema: { const: "rdsh.operation.v1" },
+  tool_name: { enum: ["file.read", "file.write", "process.exec", "network.request"] },
+  tool_input: { type: "object" },
+}, ["schema", "tool_name", "tool_input"]);
+const boundOperation = { task_id: string, contract_version: { type: "integer", minimum: 1 }, repository: string, operation: operationSchema };
+const approvalUseSchema = object({
+  ...boundOperation, id: string, request_version: { type: "integer", minimum: 1 },
+  run_id: string, command_id: string, worker_role: { enum: ["review", "implementation"] },
+  attempt: { type: "integer", minimum: 1 },
+  cost_usd: { type: "number", minimum: 0, maximum: 1000000 },
+}, ["id", "request_version", "task_id", "contract_version", "repository", "run_id", "command_id", "operation", "attempt", "cost_usd"]);
 const decision = object(
   {
     kind: { enum: ["consultation", "approval"] },
@@ -66,10 +82,34 @@ const decision = object(
     ),
     expires_at: { type: "string", format: "date-time" },
     consumer_id: string,
+    causal_source_evidence_ids: {
+      type: "array",
+      minItems: 1,
+      maxItems: 20,
+      uniqueItems: true,
+      items: {
+        type: "string",
+        pattern:
+          "^evi_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      },
+    },
   },
   ["kind"],
 );
 export const tools = [
+  {
+    name: "dashboard_report_provider_status",
+    description:
+      "Record one provider/CLI status report for this project. Reports are stored as agent-reported; the dashboard validates their shape and age but does not authenticate provider origin. Use explicit provider evidence; classify rate_limited, quota_exhausted, authentication_failed, or unknown. Include the actual observed_at, a safe source label, a stable event_id and a strictly increasing per-scope sequence. Add quota counts or retry_after only when the provider explicitly supplies them; omit unavailable values. Reports expire by max_age_seconds. This only stores observations: it does not scrape providers, retry requests, log in, or change credentials/budgets.",
+    inputSchema: providerStatusSchema,
+  },
+  {
+    name: "dashboard_check_worker_start",
+    description: "Check the live Linux sandbox profile for a review/implementation worker. This does not start an LLM worker or authorize direct DSH filesystem tools; approved operations must use dashboard_execute_approved_operation. Unsupported environments stay on hold with no fallback.",
+    inputSchema: object({ task_id: string, contract_version: { type: "integer", minimum: 1 },
+      repository: string, run_id: string, worker_role: { enum: ["review", "implementation"] } },
+    ["task_id", "contract_version", "repository", "run_id", "worker_role"]),
+  },
   {
     name: "dashboard_update_metrics",
     description:
@@ -90,7 +130,7 @@ export const tools = [
   {
     name: "dashboard_upsert_task",
     description:
-      "Create or update a project task. Optional outcome reports purpose, owner, latest_outcome, next_step and an acceptance_task_id (omitted fields retain earlier reports; null clears one). Optional milestone_contract fixes criterion references and descriptions under a stable ID; changed criteria require a new ID. Task status is a report, never proof of verification. Actual checks remain in the explicit acceptance CLI. Create or update a project task. A blocked task appears with its blocker as an unclassified stop. Optional attention reports failure/dependency, deadline, impact and next_action; use cause_id only when a shared cause is known. Omit to preserve it; null or status done resolves it. It never authorizes or executes an action.",
+      "Create or update a project task. Optional outcome reports purpose, owner, latest_outcome, next_step and an acceptance_task_id (omitted fields retain earlier reports; null clears one). Optional milestone_contract fixes criterion references and descriptions under a stable ID; changed criteria require a new ID. Task status is a report, never proof of verification. Actual checks remain in the explicit acceptance CLI. Optionally set policy_decision_id to a human decision in the decision log; references to replaced, held or withdrawn decisions are flagged for confirmation and are never rewritten automatically. A blocked task appears with its blocker as an unclassified stop. Optional attention reports failure/dependency, deadline, impact and next_action; use cause_id only when a shared cause is known. Omit to preserve it; null or status done resolves it. It never authorizes or executes an action.",
     inputSchema: object(
       {
         id: string,
@@ -102,6 +142,7 @@ export const tools = [
         outcome: outcomeSchema,
         milestone_contract: milestoneSchema,
         observation: observationSchema,
+        policy_decision_id: { type: ["string", "null"] },
       },
       ["id", "title", "status"],
     ),
@@ -109,7 +150,7 @@ export const tools = [
   {
     name: "dashboard_ask_question",
     description:
-      "Place a legacy consultation or a typed decision card for a human. Typed approval requires a versioned action, choices, diff, impact, conditions and explicit USD limit (null means unknown). Use action revise/cancel with expected_revision for an existing typed question; cancellation needs cancel_reason. No reply grants execution authority. default_action is informational. Read answers and their current validity with dashboard_get_feedback.",
+      "Place a legacy consultation or a typed decision card for a human. Typed approval requires a versioned action, choices, diff, impact, conditions and explicit USD limit (null means unknown). causal_source_evidence_ids records explicit references to acceptance evidence; it does not prove the evidence caused the question. Use action revise/cancel with expected_revision for an existing typed question; cancellation needs cancel_reason. No reply grants execution authority. default_action is informational. Read answers and their current validity with dashboard_get_feedback.",
     inputSchema: object(
       {
         id: string,
@@ -141,16 +182,86 @@ export const tools = [
     ),
   },
   {
+    name: "dashboard_present_ui",
+    description:
+      "Present structured UI (cards, tables, charts, choices, forms, diffs, approvals) in the project dashboard so a human can read and act on it. Send one message_id per turn and reuse surface_id to update the same surface. Blocks are validated against a fixed kind allow-list; unknown kinds and type mismatches degrade to text. A block may carry actions; the server issues their ids and a human click returns to this session as ui_action feedback readable with dashboard_get_feedback. Presenting UI and answering it never grant execution authority: request-type actions (request_tool, apply_patch, delete, publish, charge, interrupt) are recorded as requests, and the agent must still run its own gated flow. Values that are unknown must be null, never zero.",
+    inputSchema: object(
+      {
+        message_id: string,
+        session_id: string,
+        surface_id: string,
+        blocks: {
+          type: "array",
+          minItems: 1,
+          maxItems: 200,
+          items: { type: "object" },
+        },
+        observation: observationSchema,
+      },
+      ["message_id", "blocks"],
+    ),
+  },
+  {
     name: "dashboard_get_feedback",
     description:
-      "Read durable human answers after a sequence cursor. Pass next_cursor on the next call. Reads never consume, acknowledge or apply feedback. A consumer-bound reply has a stable reply_command_id; application acknowledgements require its separate run/session credential. Poll at appropriate workflow checkpoints if resource subscriptions are unavailable.",
+      "Read durable human answers after a sequence cursor. Pass next_cursor on the next call. Reads never consume, acknowledge or apply feedback. A consumer-bound reply has a stable reply_command_id; application acknowledgements require its separate run/session credential. Presented-UI actions arrive as type ui_action with the surface/block/action ids and execution_authorized false. Poll at appropriate workflow checkpoints if resource subscriptions are unavailable.",
     inputSchema: object({ after: { type: "integer", minimum: 0 } }),
   },
   {
     name: "dashboard_get_state",
     description:
-      "Read this project’s metrics, tasks, questions, recent events and optional source-aware cost ledger. Ledger totals are per declared period/source/currency; missing workers remain unknown and invoice amounts are never used to correct estimates.",
+      "Read this project’s provider status reports, metrics, tasks, questions, recent events, optional human decision log and source-aware cost ledger. Tasks referencing replaced, held or withdrawn decisions include a confirmation_required decision_reference; the server does not rewrite their policy. Provider retry hints remain provider-reported and expire by observation age. Ledger totals are per declared period/source/currency; missing workers remain unknown and invoice amounts are never used to correct estimates.",
     inputSchema: object({}),
+  },
+  {
+    name: "dashboard_check_task_contract",
+    description:
+      "Check declared repository, cwd and write paths against the current task contract before an operation. Only within_scope passes this preflight; block and unparsed must stop. This does not grant approval, parse commands, or enforce an OS sandbox. Recheck immediately before use; contracts can change.",
+    inputSchema: object({
+      task_id: string,
+      contract_version: { type: "integer", minimum: 1 },
+      repository: string,
+      cwd: string,
+      write_paths: { type: "array", maxItems: 100, items: string },
+    }, ["task_id", "contract_version", "repository", "cwd", "write_paths"]),
+  },
+  {
+    name: "dashboard_check_operation",
+    description:
+      "Parse and audit a declared rdsh.operation.v1 tool operation against the task contract. Supported schemas: file.read, file.write, process.exec with direct argv, network.request. Unknown tools, fields and shell syntax are unparsed. within_policy is only structural preflight; execution requires a human approval and the sandbox executor.",
+    inputSchema: object({
+      task_id: string, contract_version: { type: "integer", minimum: 1 }, repository: string,
+      operation: object({
+        schema: { const: "rdsh.operation.v1" },
+        tool_name: { enum: ["file.read", "file.write", "process.exec", "network.request"] },
+        tool_input: { type: "object" },
+      }, ["schema", "tool_name", "tool_input"]),
+    }, ["task_id", "contract_version", "repository", "operation"]),
+  },
+  {
+    name: "dashboard_request_approval",
+    description: "Create a pending versioned approval request bound to the current parsed operation, worker role, run, command, cost/retry limits and expiry. worker_role defaults to review, which permits file.read only. This cannot grant human approval. Raw bodies, URL queries and argv values are represented by digests.",
+    inputSchema: object({
+      ...boundOperation, id: string, expected_version: { type: "integer", minimum: 0 },
+      run_id: string, command_id: string, worker_role: { enum: ["review", "implementation"] },
+      source_ref: string, expires_at: string,
+      limits: object({ max_cost_usd: { type: "number", minimum: 0, maximum: 1000000 }, max_attempts: { type: "integer", minimum: 1, maximum: 10 } }, ["max_cost_usd", "max_attempts"]),
+    }, ["id", "expected_version", "task_id", "contract_version", "repository", "run_id", "command_id", "source_ref", "expires_at", "limits", "operation"]),
+  },
+  {
+    name: "dashboard_check_approval",
+    description: "Check an existing human approval against the exact current operation and next retry/cost reservation. This does not reserve an attempt or execute anything; execution remains on hold without enforcement.",
+    inputSchema: approvalUseSchema,
+  },
+  {
+    name: "dashboard_claim_approval",
+    description: "Atomically reserve one approved attempt and declared cost. Prevents duplicate/replayed reservations. It does not execute the operation or prove billing/enforcement; execution remains on hold.",
+    inputSchema: approvalUseSchema,
+  },
+  {
+    name: "dashboard_execute_approved_operation",
+    description: "Atomically consume the approved attempt before executing its exact operation in the probed OS sandbox. Review permits only file.read; implementation rights remain bounded by the contract roots, origin, and exact executable arguments. Output is returned to this call, but sensitive body, query, and stdout/stderr contents are not stored in the approval ledger. Direct DSH tools and unsupported platforms remain denied.",
+    inputSchema: approvalUseSchema,
   },
   {
     name: "dashboard_create_handoff",
@@ -166,8 +277,73 @@ export const tools = [
       "Read the latest durable handoff packet and compare its source references with current task, decision, artifact, and acceptance state.",
     inputSchema: object({}),
   },
+  {
+    name: "dashboard_record_review",
+    description:
+      "Record a caller-submitted report for a separately prepared edit worker and read-only review worker. The exact project HEAD must be clean and match both worker checkouts; base/head bind the binary diff digest. Findings, missing checks, and unavailable reviews stay distinct. This does not invoke or authenticate a reviewer, prove OS sandbox enforcement, grant permissions, or approve task completion.",
+    inputSchema: object(
+      {
+        review_id: { type: "string", minLength: 1, maxLength: 128 },
+        task_id: string,
+        implementation_worker_id: { type: "string", minLength: 1, maxLength: 40 },
+        reviewer_worker_id: { type: "string", minLength: 1, maxLength: 40 },
+        base_sha: { type: "string", pattern: "^[0-9a-f]{40,64}$" },
+        head_sha: { type: "string", pattern: "^[0-9a-f]{40,64}$" },
+        availability: { enum: ["complete", "partial", "unavailable"] },
+        findings: {
+          type: "array",
+          maxItems: 100,
+          items: object(
+            {
+              severity: { enum: ["critical", "major", "minor", "info"] },
+              title: { type: "string", minLength: 1, maxLength: 300 },
+              detail: { type: "string", minLength: 1, maxLength: 4000 },
+              path: { type: "string", minLength: 1, maxLength: 512 },
+              line: { type: "integer", minimum: 1 },
+            },
+            ["severity", "title", "detail"],
+          ),
+        },
+        unverified: {
+          type: "array",
+          maxItems: 100,
+          items: { type: "string", minLength: 1, maxLength: 1000 },
+        },
+        evidence_refs: {
+          type: "array",
+          maxItems: 100,
+          items: object(
+            {
+              label: { type: "string", minLength: 1, maxLength: 200 },
+              reference: { type: "string", minLength: 1, maxLength: 1000 },
+            },
+            ["label", "reference"],
+          ),
+        },
+      },
+      [
+        "review_id",
+        "task_id",
+        "implementation_worker_id",
+        "reviewer_worker_id",
+        "base_sha",
+        "head_sha",
+        "availability",
+        "findings",
+        "unverified",
+        "evidence_refs",
+      ],
+    ),
+  },
+  {
+    name: "dashboard_get_review_evidence",
+    description:
+      "Read stored independent-review reports and their current/stale/unknown status. A clear report is only eligible for a human completion decision; it is not an approval or correctness guarantee.",
+    inputSchema: object({ task_id: string }),
+  },
 ];
 const routes = {
+  dashboard_report_provider_status: "provider_status",
   dashboard_update_metrics: "metrics",
   dashboard_upsert_task: "task",
   dashboard_ask_question: "question",
@@ -191,9 +367,32 @@ export function diagnoseUnknownTool(name) {
 }
 export async function executeTool(api, name, args = {}) {
   if (name === "dashboard_get_state") return await api.getState();
+  if (name === "dashboard_check_worker_start") return await api.checkWorkerStart(args);
+  if (name === "dashboard_check_task_contract") return await api.checkContract(args);
+  if (name === "dashboard_check_operation") return await api.checkOperation(args);
+  if (name === "dashboard_request_approval") return await api.requestApproval(args);
+  if (name === "dashboard_check_approval") return await api.checkApproval(args);
+  if (name === "dashboard_claim_approval") return await api.claimApproval(args);
+  if (name === "dashboard_execute_approved_operation") return await api.executeApproval(args);
   if (name === "dashboard_create_handoff")
     return await api.createHandoff(args.task_id);
   if (name === "dashboard_get_handoff") return await api.getHandoff();
+  if (name === "dashboard_present_ui") return await api.presentUi(args);
+  if (name === "dashboard_record_review") {
+    if (typeof api.recordReview !== "function")
+      throw new Error("Review evidence reporting is unavailable");
+    return await api.recordReview(args);
+  }
+  if (name === "dashboard_get_review_evidence") {
+    const state = await api.getState();
+    const evidence = state.review_evidence || { revision: 0, reports: [] };
+    return {
+      revision: evidence.revision,
+      reports: args.task_id
+        ? evidence.reports.filter((report) => report.task_id === args.task_id)
+        : evidence.reports,
+    };
+  }
   if (name === "dashboard_get_feedback")
     return feedbackSince(await api.getState(), args.after ?? 0);
   if (routes[name]) {
@@ -345,16 +544,24 @@ export async function runStdio(project) {
         "content-type": "application/json",
       },
       body: input ? JSON.stringify(input) : undefined,
-      signal: AbortSignal.timeout(10000),
+      signal: AbortSignal.timeout(route === "api/approvals/execute" ? 6 * 60 * 1000 : 10000),
     });
     const result = await response.json();
-    if (!response.ok)
+    if (!response.ok && !(["api/contracts/check", "api/policy/check", "api/approvals/check", "api/approvals/claim", "api/approvals/execute", "api/workers/check"].includes(route) && response.status === 409))
       throw new Error(result.error || `HTTP ${response.status}`);
     return result;
   }
   const mcp = createMcpServer({
     getState: () => request("api/state"),
+    presentUi: (input) => request("api/update/ui_surface", input),
     mutate: (operation, input) => request(`api/update/${operation}`, input),
+    checkContract: (input) => request("api/contracts/check", input),
+    checkOperation: (input) => request("api/policy/check", input),
+    requestApproval: (input) => request("api/approvals/request", input),
+    checkApproval: (input) => request("api/approvals/check", input),
+    claimApproval: (input) => request("api/approvals/claim", input),
+    executeApproval: (input) => request("api/approvals/execute", input),
+    checkWorkerStart: (input) => request("api/workers/check", input),
     createHandoff: (taskId) =>
       request("api/handoff/create", { task_id: taskId }),
     getHandoff: () => request("api/handoff"),

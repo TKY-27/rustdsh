@@ -728,7 +728,7 @@ fn scalar_key(line: &str, key: &str) -> std::result::Result<Option<String>, Stri
 /// keys of the entry itself count: a nested `id:` (inside `insert`, say) does
 /// not. `Err` when an entry cannot be read safely or the plugin is declared
 /// twice (a later entry replaces the whole config in Cordis).
-fn llm_pi_ai_entry(lines: &[String]) -> std::result::Result<Option<usize>, String> {
+pub(crate) fn llm_pi_ai_entry(lines: &[String]) -> std::result::Result<Option<usize>, String> {
     inspect_patch_entries(lines, false).map_err(|error| error.to_string())
 }
 

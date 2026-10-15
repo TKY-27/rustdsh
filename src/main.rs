@@ -48,7 +48,9 @@ mod context_hook;
 mod cost_ledger;
 mod deps;
 mod desktop;
+mod distro;
 mod dsh_args;
+mod executable;
 mod file_lock;
 mod file_security;
 mod guard;
@@ -56,6 +58,7 @@ mod inspect;
 mod instruction_queue;
 mod js_json;
 mod local_http;
+mod models;
 mod opencode_header;
 mod passthrough;
 mod providers;
@@ -82,7 +85,7 @@ mod worker_scopes;
     name = "rdsh",
     version,
     about = "Rust fast launcher for dsh (safe: native fast-paths + passthrough)",
-    after_help = "USAGE:\n  rdsh [profile] [--profile <name>] [--patch <yml>...] [app-args...]\n  rdsh <native-subcommand> ...   (tokens|prune|search|search-web|compact|doctor|bench|serve|sessions|profiles|skills|logs|guard|compute|desktop|auth|setup|context|deps|settings|features|subagents|provider|task-outcomes|budget-admission|cost-ledger|question-contracts|answer-applications|instruction-queue|update|worker-scope|dump-config|boot|serial-proxy)\n\nEXAMPLES:\n  rdsh tui                        boot tui profile (slim env ON, delegates to dsh)\n  rdsh --profile web --patch x.yml boot web with overlay\n  rdsh dump-config --profile tui  delegate exact dump to dsh\n  rdsh tokens ./AGENTS.md         estimate input tokens natively\n  rdsh auth --import --provider openai-codex   import only the selected provider\n  rdsh setup                      first-run connect: import, login flow, next steps\n  rdsh provider add hai --model deepseek-v4-flash   register HAI as a dsh route\n  rdsh provider add sarashina    register Sarashina (SARASHINA_API_KEY; mini and nano built in)\n  rdsh provider add local-openai --base-url http://host:8080/v1 --discover --no-key\n  rdsh provider list              presets and per-profile route/key status\n  rdsh search hello --dir .       fast file search without Node\n  rdsh search-web \"rust async\"      web search via SearXNG (no API key)\n  rdsh desktop status             detect the Desktop (Electron) app and its reserved profile\n  rdsh desktop install            attach the bundled rdsh plugins to that profile\n  rdsh --passthrough tui          no slim env; only rdsh_inspect stays isolated\n  rdsh --dry-run tui -- --resume abc   show what would exec"
+    after_help = "USAGE:\n  rdsh [profile] [--profile <name>] [--patch <yml>...] [app-args...]\n  rdsh <native-subcommand> ...   (tokens|prune|search|search-web|compact|doctor|bench|serve|sessions|profiles|skills|logs|guard|compute|desktop|auth|setup|context|deps|settings|features|subagents|provider|task-outcomes|budget-admission|cost-ledger|models|question-contracts|answer-applications|instruction-queue|update|worker-scope|dump-config|boot|serial-proxy)\n\nEXAMPLES:\n  rdsh tui                        boot tui profile (slim env ON, delegates to dsh)\n  rdsh --profile web --patch x.yml boot web with overlay\n  rdsh dump-config --profile tui  delegate exact dump to dsh\n  rdsh tokens ./AGENTS.md         estimate input tokens natively\n  rdsh auth --import --provider openai-codex   import only the selected provider\n  rdsh setup                      first-run connect: import, login flow, next steps\n  rdsh provider add hai --model deepseek-v4-flash   register HAI as a dsh route\n  rdsh provider add sarashina    register Sarashina (SARASHINA_API_KEY; mini and nano built in)\n  rdsh provider add local-openai --base-url http://host:8080/v1 --discover --no-key\n  rdsh provider list              presets and per-profile route/key status\n  rdsh search hello --dir .       fast file search without Node\n  rdsh search-web \"rust async\"      web search via SearXNG (no API key)\n  rdsh models                     list the models a profile is missing or names stale\n  rdsh models sync                add them and refresh stale names\n  rdsh desktop status             detect the Desktop (Electron) app and its reserved profile\n  rdsh desktop install            attach the bundled rdsh plugins to that profile\n  rdsh --passthrough tui          no slim env; only rdsh_inspect stays isolated\n  rdsh --dry-run tui -- --resume abc   show what would exec"
 )]
 struct Cli {
     /// Explicitly share a project file with isolated model tools (repeatable).
@@ -207,7 +210,12 @@ enum Commands {
         #[arg(long = "max-tokens")]
         max_tokens: Option<usize>,
     },
-    Doctor,
+    /// Diagnose the local DSH installation without changing settings.
+    Doctor {
+        /// Metadata-only JSON; does not read credentials or launch DSH/Node.
+        #[arg(long)]
+        json: bool,
+    },
     /// List sessions under $DSH_HOME (newest first, Node-free)
     Sessions {
         #[arg(long = "project")]
@@ -437,6 +445,36 @@ enum Commands {
         #[arg(long = "json")]
         json: bool,
     },
+    /// Keep a CLI-backed provider's model list in step with the local CLI
+    /// catalog (Codex today), so a model released after the harness was built
+    /// still reaches the model picker
+    Models {
+        #[command(subcommand)]
+        action: Option<ModelsAction>,
+        /// Restrict to one provider (default: every source this build reads)
+        #[arg(long = "provider")]
+        provider: Option<String>,
+        /// Machine-readable output
+        #[arg(long = "json")]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum ModelsAction {
+    /// Append the models the local CLI advertises that the profile lacks
+    Sync {
+        #[arg(long = "profile")]
+        profile: Option<String>,
+        /// Restrict to one provider (default: every source this build reads)
+        #[arg(long = "provider")]
+        provider: Option<String>,
+        /// Print what would change without writing the profile
+        #[arg(long = "dry-run")]
+        dry_run: bool,
+        #[arg(long = "json")]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -465,6 +503,12 @@ enum DesktopAction {
         /// Also install rdsh-compute (resident compute bridge)
         #[arg(long = "compute")]
         compute: bool,
+        /// Skip the default sound notifications (github:cwd514/dsh-sound-notifications)
+        #[arg(long = "no-sound")]
+        no_sound: bool,
+        /// Skip the default Git panel (github:yugapor/dsh-gitview)
+        #[arg(long = "no-gitview")]
+        no_gitview: bool,
         /// Extra package spec to add (name, git URL, or path; repeatable)
         #[arg(long = "package")]
         package: Vec<String>,
@@ -749,6 +793,7 @@ const NATIVE_FIRST: &[&str] = &[
     "settings",
     "features",
     "cost-ledger",
+    "models",
     "update",
     "serial-proxy",
     "worker-git",
@@ -895,7 +940,8 @@ fn main() {
         Some(Commands::Compact { file, max_tokens }) => {
             compact::cmd_compact(&file, max_tokens.unwrap_or(cfg.compact.max_tokens))
         }
-        Some(Commands::Doctor) => doctor(),
+        Some(Commands::Doctor { json: true }) => doctor_json(),
+        Some(Commands::Doctor { json: false }) => doctor(),
         Some(Commands::Sessions {
             project,
             limit,
@@ -1167,17 +1213,21 @@ fn main() {
                 dry_run,
                 plugins_dir,
                 compute,
+                no_sound,
+                no_gitview,
                 package,
                 no_bundled,
                 json: inner,
-            }) => desktop::cmd_install(
-                plugins_dir.as_deref(),
-                &package,
+            }) => desktop::cmd_install(desktop::InstallOptions {
+                plugins_dir,
+                packages: package,
                 no_bundled,
                 dry_run,
                 compute,
-                json || inner,
-            ),
+                no_sound: no_sound || !rdsh_config::feature_enabled(&cfg, "sound"),
+                no_gitview: no_gitview || !rdsh_config::feature_enabled(&cfg, "gitview"),
+                json: json || inner,
+            }),
             Some(DesktopAction::Verify {
                 require,
                 json: inner,
@@ -1278,6 +1328,24 @@ fn main() {
                 } => deps::cmd_impact(target, depth.unwrap_or(3).clamp(1, 8), json),
             }
         }
+        Some(Commands::Models {
+            action,
+            provider,
+            json,
+        }) => match action {
+            None => models::cmd_models_show(cli.profile.as_deref(), provider.as_deref(), json),
+            Some(ModelsAction::Sync {
+                profile,
+                provider: sync_provider,
+                dry_run,
+                json: sync_json,
+            }) => models::cmd_models_sync(
+                profile.or(cli.profile).as_deref(),
+                sync_provider.or(provider).as_deref(),
+                dry_run || dry,
+                sync_json || json,
+            ),
+        },
         Some(Commands::Auth(args)) => auth::cmd_auth(args, dry),
         Some(Commands::Provider { action }) => match action {
             ProviderAction::List { json } => providers::cmd_list(json),
@@ -1587,6 +1655,74 @@ fn extra_disabled(id: &str) -> anyhow::Result<()> {
     ))
 }
 
+fn profile_count(home: &str) -> std::io::Result<usize> {
+    Ok(
+        std::fs::read_dir(std::path::Path::new(home).join("profiles"))?
+            .filter_map(Result::ok)
+            .filter(|entry| entry.path().is_dir())
+            .count(),
+    )
+}
+
+fn doctor_json() -> anyhow::Result<()> {
+    use std::io::Write;
+    let original = passthrough::find_original_dsh();
+    let node = match original.as_deref() {
+        Some(original) => passthrough::selected_node(original),
+        None => passthrough::find_node_bin(),
+    };
+    let node_required = original
+        .as_deref()
+        .is_some_and(|path| path.ends_with(".js"));
+    let original_found = original.as_deref().is_some_and(|path| {
+        let path = std::path::Path::new(path);
+        if node_required {
+            path.is_file()
+        } else {
+            executable::is_executable(path)
+        }
+    });
+    let ok = original_found && (!node_required || node.is_some());
+    let home = crate::inspect::dsh_home();
+    let profiles = profile_count(&home);
+    let env = desktop::OsEnv::from_process();
+    let profile = desktop::read_profile(&env.profile_dir());
+    let enabled: Vec<&str> = desktop::BUNDLED_PLUGINS
+        .iter()
+        .copied()
+        .filter(|name| profile.enabled(name))
+        .collect();
+    let shadowed = shadowing_original();
+    let mut warnings = wrapper_warnings(shadowed);
+    if profiles.is_err() {
+        warnings.push("local profiles directory is unreadable or absent".to_string());
+    }
+    let report = serde_json::json!({
+        "schema": 1,
+        "ok": ok,
+        "rdsh_version": env!("CARGO_PKG_VERSION"),
+        "dsh_home": home,
+        "original": { "found": original_found, "path": original, "probed": false },
+        "node": { "required": node_required, "found": node.is_some(), "path": node },
+        "profiles": { "readable": profiles.is_ok(), "count": profiles.ok() },
+        "desktop": {
+            "app": desktop::find_app(&env),
+            "profile_initialized": profile.initialized,
+            "enabled_bundled_plugins": enabled,
+        },
+        "path_shadowed": shadowed,
+        "warnings": warnings,
+    });
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+    serde_json::to_writer(&mut out, &report)?;
+    writeln!(out)?;
+    if !ok {
+        anyhow::bail!("local DSH prerequisites are missing; see the JSON report");
+    }
+    Ok(())
+}
+
 fn doctor() -> anyhow::Result<()> {
     use std::io::Write;
     let stdout = std::io::stdout();
@@ -1603,8 +1739,8 @@ fn doctor() -> anyhow::Result<()> {
     ));
     let home = crate::inspect::dsh_home();
     say(format!("[rdsh] DSH_HOME: {home}"));
-    match std::fs::read_dir(format!("{home}/profiles")) {
-        Ok(d) => say(format!("[rdsh] profiles: {} local profile(s)", d.count())),
+    match profile_count(&home) {
+        Ok(count) => say(format!("[rdsh] profiles: {count} local profile(s)")),
         Err(e) => say(format!("[rdsh] profiles: (unreadable: {e})")),
     }
     // Desktop (Electron) shares $DSH_HOME but keeps its own reserved profile;
@@ -1638,6 +1774,10 @@ fn doctor() -> anyhow::Result<()> {
                 enabled.join(", ")
             }
         ));
+    }
+    // Host-specific optional dependencies (rpm-based hosts only).
+    for line in distro::doctor_notes() {
+        say(line);
     }
     say(format!("[rdsh] slim env: {}", slim::describe()));
     say(format!("[rdsh] auth: {}", auth::summary_line()));
@@ -1673,27 +1813,61 @@ fn doctor() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Best-effort `dsh --version` readout for doctor (never fails the command).
+/// Best-effort, bounded `dsh --version` readout. Only the owned child is killed.
 fn original_version(orig: &str) -> Option<String> {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
     if orig.is_empty() {
         return None;
     }
-    let out = if orig.ends_with(".js") {
-        std::process::Command::new("node")
-            .arg(orig)
-            .arg("--version")
-            .output()
-            .ok()?
+    let mut command = if orig.ends_with(".js") {
+        let mut command = Command::new(passthrough::selected_node(orig)?);
+        command.arg(orig);
+        command
     } else {
-        std::process::Command::new(orig)
-            .arg("--version")
-            .output()
-            .ok()?
+        Command::new(orig)
     };
-    if !out.status.success() {
-        return None;
+    let mut child = command
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let stdout = child.stdout.take()?;
+    let (sender, receiver) = std::sync::mpsc::channel();
+    // Bound memory even if a launcher prints endlessly. A descendant retaining
+    // the pipe must not extend the command deadline, so do not join this reader.
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let result = stdout.take(4096).read_to_end(&mut bytes).map(|_| bytes);
+        let _ = sender.send(result);
+    });
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                if !status.success() {
+                    return None;
+                }
+                break;
+            }
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
     }
-    String::from_utf8_lossy(&out.stdout)
+    let bytes = receiver
+        .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+        .ok()?
+        .ok()?;
+    String::from_utf8_lossy(&bytes)
         .lines()
         .next()
         .map(|s| s.trim().to_string())
@@ -2404,16 +2578,32 @@ fn shadowing_original() -> bool {
 }
 
 fn path_shadows_current(path: &std::ffi::OsStr, me: &std::path::Path) -> bool {
-    #[cfg(windows)]
-    const NAMES: &[&str] = &["dsh", "dsh.exe"];
-    #[cfg(not(windows))]
-    const NAMES: &[&str] = &["dsh"];
+    path_executable(path, "dsh")
+        .and_then(|candidate| std::fs::canonicalize(candidate).ok())
+        .is_some_and(|candidate| candidate == me)
+}
 
-    std::env::split_paths(path).any(|dir| {
-        NAMES.iter().any(|name| {
-            std::fs::canonicalize(dir.join(name)).is_ok_and(|candidate| candidate.as_path() == me)
-        })
-    })
+fn path_executable(path: &std::ffi::OsStr, name: &str) -> Option<std::path::PathBuf> {
+    #[cfg(windows)]
+    let names: Vec<String> = std::env::var("PATHEXT")
+        .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string())
+        .split(';')
+        .filter(|ext| ext.starts_with('.') && !ext.contains(['/', '\\']))
+        .map(|ext| format!("{name}{ext}"))
+        .chain(std::iter::once(name.to_string()))
+        .collect();
+    #[cfg(not(windows))]
+    let names = [name];
+
+    for dir in std::env::split_paths(path) {
+        for candidate_name in &names {
+            let candidate = dir.join(candidate_name);
+            if executable::is_executable(&candidate) {
+                return Some(candidate);
+            }
+        }
+    }
+    None
 }
 
 fn bench(n: u32) -> anyhow::Result<()> {
@@ -2624,19 +2814,21 @@ mod shadowing_original_tests {
         #[cfg(not(windows))]
         const TEST_NAMES: &[&str] = &["dsh"];
 
+        let path = std::env::join_paths([decoy.as_os_str(), binary_dir.as_os_str()]).unwrap();
         for binary_name in TEST_NAMES {
             let candidate = binary_dir.join(*binary_name);
             fs::write(&candidate, b"test executable path").unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(&candidate, fs::Permissions::from_mode(0o755)).unwrap();
+            }
+            let current = fs::canonicalize(&candidate).unwrap();
+            assert!(path_shadows_current(&path, &current), "{binary_name}");
+            let path_without_candidate = std::env::join_paths([decoy.as_os_str()]).unwrap();
+            assert!(!path_shadows_current(&path_without_candidate, &current));
+            fs::remove_file(candidate).unwrap();
         }
-        let current = fs::canonicalize(binary_dir.join(TEST_NAMES[0])).unwrap();
-        let path = std::env::join_paths([decoy.as_os_str(), binary_dir.as_os_str()]).unwrap();
-        for binary_name in TEST_NAMES {
-            let candidate = fs::canonicalize(binary_dir.join(*binary_name)).unwrap();
-            assert!(path_shadows_current(&path, &candidate), "{binary_name}");
-        }
-
-        let path_without_candidate = std::env::join_paths([decoy.as_os_str()]).unwrap();
-        assert!(!path_shadows_current(&path_without_candidate, &current));
         fs::remove_dir_all(root).unwrap();
     }
 }

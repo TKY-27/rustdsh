@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { Releases } from "../releases.mjs";
@@ -103,6 +103,20 @@ async function fixture(t) {
   return { root, releases, projects, env, stage, attach };
 }
 
+test("managed snapshots include UI modules needed to load the pinned state store", async (t) => {
+  const { releases, stage } = await fixture(t);
+  const release = await stage("ui-runtime");
+  const artifact = await verifyRelease(releases.home, release.release_id);
+  assert.ok(artifact.manifest.files.some((file) => file.path === "adapter/dashboard/ui/surface.mjs"));
+  assert.ok(!artifact.manifest.files.some((file) => file.path.startsWith("adapter/dashboard/test/")));
+  const module = await import(pathToFileURL(path.join(artifact.slot, "adapter/dashboard/state.mjs")).href);
+  assert.equal(typeof module.ProjectStore.open, "function");
+  const uiModule = path.join(artifact.slot, "adapter/dashboard/ui/registry.mjs");
+  await fs.chmod(uiModule, 0o600);
+  await fs.appendFile(uiModule, "\n// changed after capture\n");
+  await assert.rejects(verifyRelease(releases.home, release.release_id), code("artifact_changed_wait_restore_pinned_bytes"));
+});
+
 test("a captured pre-GPU adapter cannot silently ignore an explicit or restored run GPU request", async (t) => {
   const {
     root,
@@ -133,6 +147,16 @@ test("a captured pre-GPU adapter cannot silently ignore an explicit or restored 
     path.join(repo, "dashboard/node_modules"),
     path.join(legacy, "dashboard/node_modules"),
     { recursive: true, dereference: false },
+  );
+  // The captured manifest includes the dashboard UI modules and the seccomp
+  // profile, so a legacy adapter fixture has to provide them too.
+  await fs.cp(path.join(repo, "dashboard/ui"), path.join(legacy, "dashboard/ui"), {
+    recursive: true,
+  });
+  await fs.mkdir(path.join(legacy, "security"), { recursive: true });
+  await fs.copyFile(
+    path.join(repo, "security/seccomp.mjs"),
+    path.join(legacy, "security/seccomp.mjs"),
   );
   for (const plugin of ["rdsh-budget-guard", "rdsh-release-probe"])
     await fs.cp(

@@ -50,6 +50,11 @@
 
 ## クイックスタート
 
+**Claude Code／Codex／Cursor／VS Code Copilot／OpenCode／Gemini CLI を利用中の方へ**：
+今のエージェントを使いながら、
+[MCP でダッシュボードを追加](docs/MCP-CLIENTS.md)できます。
+タスク・質問・構造化 UI の共有には Node.js 22 以上が必要です。DSH 本体と Rust は任意です。
+
 ### 1. インストール（ビルド済みバイナリ）
 
 **Linux / macOS / WSL**:
@@ -254,6 +259,28 @@ rdsh provider list                                           # プリセット�
 
 詳細は [docs/PROVIDERS.md](docs/PROVIDERS.md)（英語）を参照してください。
 
+### モデル一覧の同期 (`rdsh models`)
+
+DeepSeek Harness は「このプロバイダはどのモデルを扱えるか」を、依存パッケージ
+`@earendil-works/pi-ai` に同梱されたカタログから答えます。このカタログはパッケージの
+公開時に生成されるため、それ以降にプロバイダが変えた内容はモデル選択に出てきません
+（例: Codex の `gpt-6.1-sol` が丸ごと欠落、Kimi Code の `kimi-for-coding` が
+"K2.8 Preview" に昇格済みなのに古い表示名のまま）。プロファイルが `models:` を
+明示していれば、その一覧が同梱カタログを置き換えるため、なおさらです。
+`rdsh models` はプロバイダ自身のカタログ（ローカルの Codex CLI、または Kimi Code の
+`/v1/models` をプロファイルのAPIキーで取得）を読んでプロファイルへ反映します：
+
+```sh
+rdsh models                              # 読み取り専用：不足IDと古い表示名を表示
+rdsh models --provider kimi-coding       # プロバイダを限定
+rdsh models sync                         # 不足分を追記し、古い表示名を更新
+rdsh models sync --profile web --dry-run # 書き込まずに確認
+```
+
+削除は行いません。既存エントリは他の行をそのまま保ち、プロバイダの現行名を既に含む
+表示名は書き換えません。構造を認識できないプロファイルは書き換えずに拒否します。
+反映は次回の設定リロードまたは再起動時です。
+
 ### エージェント実行の安全な隔離
 
 委譲したエージェントツールは既定で通常のファイル読み書きができます。`--share-file` で隔離されるのは **`rdsh_inspect` だけ**です。Linux（bubblewrap と prlimit がある環境）では、このツールから見えるのは明示的に共有したファイルだけになります：
@@ -402,6 +429,8 @@ rdsh serve                             # 起動（ローカルホスト限定、
 rdsh-dashboard project --project <ディレクトリ>
 ```
 
+`project --include-project <ディレクトリ>` を追加すると、その起動時に明示したprojectだけの稼働・待ち・要確認件数を横断表示します。詳細は各project専用dashboardに残り、読取不能時は前回観測時刻と不明状態を表示します。
+
 ※ Windows ネイティブではタスクトレイに常駐し、タスクバーから簡単に開閉できます（端末起動したい場合は `--no-tray` を指定）。詳細は [dashboard/README.md](dashboard/README.md) をご覧ください。外部エージェント CLI（cursor-agent、devin）を監視付きジョブとして実行できます（[docs/AGENT-RUNNERS.md](docs/AGENT-RUNNERS.md)、英語）。
 
 ## デスクトップアプリ (Electron)
@@ -410,8 +439,9 @@ DeepSeek Harness Desktop は、Web アプリケーション全体を内包した
 
 ```sh
 rdsh desktop status                 # アプリ、コマンドランタイム、プロファイル、プラグインの状態（読み取り専用）
-rdsh desktop install --plugins-dir .   # desktop プロファイルに rdsh-settings を組み込み
+rdsh desktop install --plugins-dir .   # rdsh-settings＋標準サードパーティ（sound、gitview）を組み込み
 rdsh desktop install --plugins-dir . --compute   # 常駐 compute bridge もあわせて追加
+rdsh desktop install --plugins-dir . --no-sound --no-gitview  # サードパーティを省く場合
 rdsh desktop verify                 # プロファイルに rdsh プラグインがない場合は 0 以外で終了
 ```
 
@@ -495,6 +525,7 @@ Linux x86_64 環境での測定値です：
 | [docs/BENCHMARKS.md](docs/BENCHMARKS.md) | ベンチマークの詳細と再現手順 |
 | [docs/RDSH-SETTINGS.md](docs/RDSH-SETTINGS.md) | 設定画面の機能と CLI キー一覧 |
 | [docs/DESKTOP-INTEGRATION.md](docs/DESKTOP-INTEGRATION.md) | デスクトップアプリ (Electron) との連携 |
+| [docs/FEDORA.md](docs/FEDORA.md) | Fedora / RHEL 向けパッケージ・任意ツール・Linux でのデスクトップ事情 |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | 今後の開発ロードマップ |
 | [docs/RELEASING.md](docs/RELEASING.md) | リリース手順 |
 | [docs/SERIAL-PROXY.md](docs/SERIAL-PROXY.md) | 同時リクエスト数制限プロキシ |
@@ -516,6 +547,7 @@ Linux x86_64 環境での測定値です：
 - セキュリティレビュー・脆弱性報告: [GrEarl](https://github.com/GrEarl)、[PENTACoXIAN](https://x.com/PENTACoXIAN)
 - 実装・改善・検証協力: [StudioYebisu](https://github.com/yebisu0529-ship-it)、[RNA4219](https://github.com/RNA4219)、[eightman999](https://github.com/eightman999),[cyrne1-7208](https://github.com/cyrne1-7208)
 - アイディア・製品提案: [@remydre8](https://x.com/remydre8)
+- 標準搭載の Web UI プラグイン（許諾済み、MIT）：[cwd514](https://github.com/cwd514) さんの [dsh-sound-notifications](https://github.com/cwd514/dsh-sound-notifications)（(c) 2026、効果音・デスクトップ通知）、[yugapor](https://github.com/yugapor) さんの [dsh-gitview](https://github.com/yugapor/dsh-gitview)（(c) 2026、差分・履歴・CI付き Git パネル）。どちらもインストール時に上流 GitHub から取得します（詳細は `plugins/recommended.md`）。
 
 rdsh が利用・改変・推薦している第三者製 DSH プラグインです（いずれも MIT、著作権は各作者に帰属します）:
 

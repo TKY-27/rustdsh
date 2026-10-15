@@ -23,6 +23,8 @@ It ports frequently used CLI operations (token calculation, code search, session
 - 🔄 **100% Drop-in Compatible**: Subcommands that are not rdsh-native are passed straight to upstream `dsh`. Existing scripts and workflows keep running unchanged.
 - 🛠 **Fast Native Utilities**: Estimate tokens, search code, list sessions, and run health diagnostics (`rdsh doctor`) instantly without starting Node.js.
 - 🛡 **Safe by Default**: Read-only commands never modify source files, credentials are never automatically synced or exported, and `rdsh_inspect` can be confined to explicitly shared files on Linux.
+- 🛠 **Fast Native Utilities**: Estimate tokens, search code, list sessions, and inspect local prerequisites (`rdsh doctor --json`) without starting Node.js.
+- 🛡 **Safe by Default**: Read-only commands never modify source files, credentials are never automatically synced or exported, and agent tools can be confined to explicitly shared files on Linux.
 
 ## Table of Contents
 
@@ -48,6 +50,11 @@ It ports frequently used CLI operations (token calculation, code search, session
 - [License](#license)
 
 ## Quick Start
+
+Already using **Claude Code, Codex, Cursor, VS Code Copilot, OpenCode or Gemini CLI**?
+[Connect the project dashboard through MCP](docs/MCP-CLIENTS.md)
+to share tasks, questions and structured UI while keeping your current coding agent.
+This entry point requires Node.js 22+; DSH and Rust are optional.
 
 ### 1. Install (Prebuilt Binary)
 
@@ -148,6 +155,7 @@ rdsh search TODO --dir . --max 100  # fast parallel text search
 rdsh sessions --limit 20 --tokens   # list sessions and unpacked token estimates
 rdsh compact ./s.jsonl              # compact session JSONL (source remains untouched)
 rdsh doctor                         # check health of dsh, environment, and paths
+rdsh doctor --json                  # read-only metadata for scripts; no DSH/Node launch
 rdsh profiles / rdsh skills         # list available profiles and skills
 rdsh desktop status                 # detect the DeepSeek Harness Desktop app and profile
 rdsh bench --n 5                    # benchmark startup speed between rdsh and dsh
@@ -250,6 +258,29 @@ rdsh provider list                                           # presets, per-prof
 ```
 
 Details: [docs/PROVIDERS.md](docs/PROVIDERS.md).
+
+### Model Catalog (`rdsh models`)
+
+DeepSeek Harness answers "which models can this provider serve?" from the
+catalog bundled in its `@earendil-works/pi-ai` dependency, which is generated
+when that package is published. Anything a provider changes afterwards is
+absent from the picker until that dependency is upgraded — and a profile that
+lists `models:` explicitly replaces the bundled catalog for the route anyway.
+`rdsh models` reads the provider's own catalog (the local Codex CLI, or Kimi
+Code's `/v1/models` endpoint with the profile's API key) and folds it into the
+profile:
+
+```sh
+rdsh models                              # read-only: missing ids and stale names
+rdsh models --provider kimi-coding       # one provider only
+rdsh models sync                         # add missing entries, refresh stale names
+rdsh models sync --profile web --dry-run # preview one profile
+```
+
+Nothing is deleted, an existing entry keeps every other byte (a name the
+provider's current one already contains is left as written), and a profile the
+command does not recognize is refused instead of rewritten. The harness picks
+the changes up on the next config reload or restart.
 
 ### Agent Tool Isolation
 
@@ -437,8 +468,9 @@ rewrites the profile:
 
 ```sh
 rdsh desktop status                 # app, command runtime, profile, plugin state (read-only)
-rdsh desktop install --plugins-dir .   # attach rdsh-settings to the desktop profile
+rdsh desktop install --plugins-dir .   # rdsh-settings + default third-party (sound, gitview)
 rdsh desktop install --plugins-dir . --compute   # + the resident compute bridge
+rdsh desktop install --plugins-dir . --no-sound --no-gitview  # skip third-party
 rdsh desktop verify                 # exit nonzero when the profile has no rdsh plugin
 ```
 
@@ -454,6 +486,25 @@ Plugins page installs the same packages without any command. The Electron
 runtime itself is never replaced: in-app delegation stays limited to the
 opt-in, fail-open compute bridge. See
 [DESKTOP-INTEGRATION.md](docs/DESKTOP-INTEGRATION.md).*
+
+Two optional plugins extend the existing Desktop/Web runtime:
+
+- [File organization](plugins/rdsh-easy-work/README.md): select a folder, preview
+  extension-based categories, copy after confirmation, and archive the copies
+  to undo. Originals stay in place. Execution currently requires Linux;
+  Windows and macOS support preview only. No AI connection is needed.
+- [Bounded exploration subagents](plugins/rdsh-subagent-optimizer/README.md):
+  fresh context, bounded concurrency and output, and active duplicate suppression
+  through the native DSH `spawn` provider (0.2.0-rc.2).
+
+Use the app's Plugins page to add the corresponding directory, or enable
+`EASY_WORK=1` / `SUBAGENTS=1` in `plugins/install.sh`. These are opt-in features
+being prepared for 0.4.0. See the [acceptance evidence](docs/reviews/2026-10-14-easy-work.md).
+
+[Desktop SDK and upstream preparation](desktop/README.md) provide a pinned
+official SDK, an isolated fork home, bundled Rust launcher, and a dedicated
+rustdsh update channel. Source preparation and SDK transport are tested;
+signed Desktop installers and update acceptance still require platform builds.
 
 ## Using with Smart-DSH
 
@@ -501,6 +552,10 @@ Q&A, and phone access, use the optional [Node.js dashboard](dashboard/README.md)
 `rdsh-dashboard harness` for the original Harness Web UI. On native Windows
 the launcher can live in the tray (right-click Open / Exit,
 double-click opens; `--no-tray` stays in the terminal).
+Add `--include-project <directory>` to a project launch to show read-only
+active, waiting, and needs-attention counts for only the projects explicitly
+listed at startup. Details stay in each project's dashboard; unreadable
+projects show their last successful observation time and an unknown state.
 
 The original Harness update banner appears right after an update is recorded,
 every two hours from its update time, and on every full page reload.
@@ -566,6 +621,7 @@ Measurements conducted on Linux x86_64:
 | [docs/RDSH-SETTINGS.md](docs/RDSH-SETTINGS.md) | Settings UI and CLI options |
 | [docs/PROVIDERS.md](docs/PROVIDERS.md) | `rdsh provider`: HAI, Sarashina and home LLM server routes |
 | [docs/DESKTOP-INTEGRATION.md](docs/DESKTOP-INTEGRATION.md) | DeepSeek Harness Desktop (Electron) integration |
+| [docs/FEDORA.md](docs/FEDORA.md) | Fedora / RHEL packages, optional tools, and the Linux desktop reality |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | Project roadmap and planned capabilities |
 | [docs/RELEASING.md](docs/RELEASING.md) | Release procedures |
 | [docs/SERIAL-PROXY.md](docs/SERIAL-PROXY.md) | Concurrency-limiting proxy for single-slot providers |
@@ -588,6 +644,7 @@ Thanks to the upstream developers and everyone contributing code, reviews, tests
 - Security reports & review: [GrEarl](https://github.com/GrEarl), [PENTACoXIAN](https://x.com/PENTACoXIAN)
 - Contributions & validation: [StudioYebisu](https://github.com/yebisu0529-ship-it), [RNA4219](https://github.com/RNA4219), [eightman999](https://github.com/eightman999)
 - Ideas & feedback: [@remydre8](https://x.com/remydre8)
+- Default Web UI plugins (used with upstream permission, MIT): [dsh-sound-notifications](https://github.com/cwd514/dsh-sound-notifications) by [cwd514](https://github.com/cwd514) ((c) 2026) — synthesized tones and desktop notifications; [dsh-gitview](https://github.com/yugapor/dsh-gitview) by [yugapor](https://github.com/yugapor) ((c) 2026) — Git panel with diffs, history, and CI status. Both are fetched from upstream GitHub at install time (see `plugins/recommended.md`).
 
 Third-party DSH plugins that rdsh uses, adapts or recommends (MIT, by their
 authors):

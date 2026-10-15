@@ -59,7 +59,7 @@ async function fingerprintFiles(names) {
 async function sourceFingerprint() {
   return fingerprintFiles(["fault-simulator.mjs", ...fixtureFiles, "adapters.mjs",
     "tracked-adapter.mjs", "session-ledger.mjs", "run-history.mjs", "process-scope.mjs",
-    "process-scope-backends.mjs", "process-identity.mjs", "retry.mjs", "package-lock.json"]);
+    "process-scope-backends.mjs", "process-identity.mjs", "process-identity-windows.mjs", "retry.mjs", "package-lock.json"]);
 }
 async function targetSnapshot() {
   try {
@@ -322,7 +322,7 @@ export async function runFaultSimulation({ outputDirectory, scenario = "all", se
     reproducibility_manifest: { path: "reproducibility.json",
       sha256: createHash("sha256").update(reproducibilityBytes).digest("hex") },
     runtime: { platform: process.platform, node: process.versions.node },
-    source_fingerprint_scope: "simulator, fixtures, adapters, session-ledger, run-history, process-scope, process identity, retry and dashboard package-lock",
+    source_fingerprint_scope: "simulator files, fixtures, adapters, tracked-adapter, session-ledger, run-history, process identity (including Windows), process-scope, process-scope-backends, retry and dashboard package-lock",
     verification_scope: "offline_control_plane_with_mock_CLI_and_mock_GPU; no_real_model_or_GPU_verification",
     passed: results.every((r) => r.passed), results };
   await fs.writeFile(path.join(directory, "report.json"), json(report), { flag: "wx", mode: 0o600 });

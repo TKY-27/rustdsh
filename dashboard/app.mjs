@@ -1,5 +1,6 @@
 import { renderAttention } from "./attention-view.mjs";
 import { renderReports } from "./reports-view.mjs";
+import { renderTaskContract, renderOperations } from "./contract-view.mjs";
 import { renderQuestionCards } from "./question-cards-ui.mjs";
 import { renderAnswerApplications } from "./answer-applications-ui.mjs";
 import { renderOverview } from "./project-overview.mjs";
@@ -8,31 +9,78 @@ import { renderGitHubStatus } from "./github-status-ui.mjs";
 import { createInstructionPanel } from "./instruction-queue-ui.mjs";
 import { createCostPanel } from "./cost-ledger-ui.mjs";
 import { createModelCatalogPanel } from "./model-catalog-ui.mjs";
+import { renderSurface } from "./ui/blocks.mjs";
 import { renderBudget } from "./budget-ui.mjs";
+import {
+  clearPendingProjectDeepLink,
+  clearProjectDeepLinkUrl,
+  createProjectDeepLink,
+  parseProjectDeepLink,
+  pendingProjectDeepLink,
+  rememberProjectDeepLink,
+  resolveProjectDeepLink,
+} from "./deep-links.mjs";
+import { deepLinkButton } from "./deep-link-ui.mjs";
+import { createUpdateSummary } from "./update-summary.mjs";
 import { renderModelRouting } from "./model-routing-ui.mjs";
+import { renderReviewEvidence } from "./review-evidence-ui.mjs";
+import { renderManagedRunHealth } from "./run-health-ui.mjs";
+import { createPlanPanel } from "./execution-plan-ui.mjs";
+import { createTimelinePanel } from "./causal-timeline-ui.mjs";
+import { createNotificationPanel } from "./notifications-ui.mjs";
 import { createTaskOutcomesPanel } from "./task-outcomes-ui.mjs";
 import { createHumanAnnotationPanel } from "./human-annotations-ui.mjs";
 import { createHumanMetricsPanel } from "./human-metrics-ui.mjs";
+import { createDecisionLogPanel } from "./decision-log-ui.mjs";
 import { setupObservedCli } from "./observed-cli-ui.mjs";
+import { setupDeviceAccess } from "./devices-ui.mjs";
+import { renderProviderStatuses } from "./provider-status-ui.mjs";
 
 const $ = (id) => document.getElementById(id);
+const SVG_NS = "http://www.w3.org/2000/svg";
 const base = location.pathname.startsWith("/_rdsh") ? "/_rdsh/" : "/";
+let deviceAccess = null;
+let deepLinkStorage = null;
+try {
+  deepLinkStorage = localStorage;
+} catch {}
+const urlDeepLink = parseProjectDeepLink(location.href);
+if (urlDeepLink.status === "target")
+  rememberProjectDeepLink(deepLinkStorage, urlDeepLink);
+const requestedDeepLink =
+  urlDeepLink.status === "none"
+    ? pendingProjectDeepLink(deepLinkStorage)
+    : urlDeepLink;
 const suppliedBrowserToken =
   base === "/" ? new URLSearchParams(location.hash.slice(1)).get("key") : null;
+const browserTokenKey =
+  base === "/" ? "rdsh_project_browser_token" : "rdsh_harness_browser_token";
 const browserToken =
-  base === "/"
-    ? suppliedBrowserToken ||
-      sessionStorage.getItem("rdsh_project_browser_token") ||
-      ""
-    : "";
+  suppliedBrowserToken || sessionStorage.getItem(browserTokenKey) || "";
 if (browserToken) {
-  sessionStorage.setItem("rdsh_project_browser_token", browserToken);
+  sessionStorage.setItem(browserTokenKey, browserToken);
   if (suppliedBrowserToken !== null)
     history.replaceState(null, "", location.pathname + location.search);
+}
+function deviceMayCall(route, method) {
+  if (deviceAccess?.role !== "device" || method === "GET") return true;
+  const capabilities = new Set(deviceAccess.capabilities);
+  if (
+    ["update/answer", "instructions/resolve"].includes(route) &&
+    capabilities.has("reply")
+  )
+    return true;
+  return (
+    ["decision/cancel", "instructions/submit", "managed-stop"].includes(
+      route,
+    ) && capabilities.has("control")
+  );
 }
 async function api(route, body, method) {
   const headers = browserToken ? { "x-rdsh-browser-token": browserToken } : {};
   const requestMethod = method || (body === undefined ? "GET" : "POST");
+  if (!deviceMayCall(route, requestMethod))
+    throw new Error("この端末にはその操作権限がありません");
   const options = { method: requestMethod, headers };
   if (body !== undefined) {
     options.headers = { ...headers, "content-type": "application/json" };
@@ -43,12 +91,182 @@ async function api(route, body, method) {
   if (!response.ok) throw new Error(result.error || "接続できません");
   return result;
 }
+function formatObservedAt(value) {
+  const parsed = value ? Date.parse(value) : NaN;
+  return Number.isFinite(parsed)
+    ? new Date(parsed).toLocaleString("ja-JP")
+    : "観測履歴なし";
+}
+async function refreshProjectCrossOverview() {
+  const list = $("cross-project-rows");
+  try {
+    const value = await api("projects/overview");
+    const projectFilter = $("cross-project-search-project");
+    const selectedProject = projectFilter.value;
+    projectFilter.replaceChildren(node("option", "すべてのproject"));
+    projectFilter.firstElementChild.value = "";
+    for (const project of value.projects) {
+      const option = node("option", project.name);
+      option.value = project.project_id;
+      projectFilter.append(option);
+    }
+    projectFilter.value = value.projects.some(
+      (project) => project.project_id === selectedProject,
+    )
+      ? selectedProject
+      : "";
+    list.replaceChildren(
+      ...value.projects.map((project) => {
+        const item = node("li", undefined, "event");
+        item.append(node("strong", project.name));
+        if (project.status === "observed" && project.counts) {
+          item.append(
+            node(
+              "p",
+              `稼働 ${project.counts.active} · 待ち ${project.counts.waiting} · 要確認 ${project.counts.needs_attention}`,
+            ),
+            node(
+              "p",
+              `最終観測: ${formatObservedAt(project.last_observed_at)}`,
+              "sub",
+            ),
+          );
+        } else {
+          item.append(
+            node("p", "稼働・待ち・要確認: 不明"),
+            node(
+              "p",
+              `最終観測: ${formatObservedAt(project.last_observed_at)}`,
+              "sub",
+            ),
+          );
+        }
+        if (project.detail_url) {
+          const link = node("a", "元projectの詳細を開く");
+          link.href = project.detail_url;
+          link.target = "_blank";
+          link.rel = "noopener noreferrer";
+          item.append(link);
+        } else if (project.status === "observed") {
+          item.append(
+            node(
+              "p",
+              "詳細画面は停止中です。元projectのdashboard起動後に開けます。",
+              "sub",
+            ),
+          );
+        }
+        return item;
+      }),
+    );
+    $("cross-project-observed").textContent =
+      `この一覧の最終取得: ${formatObservedAt(value.observed_at)}`;
+  } catch {
+    list.replaceChildren();
+    $("cross-project-observed").textContent =
+      "横断情報を取得できません · 状態は不明です";
+  }
+}
+const searchKindNames = {
+  task: "task",
+  decision: "判断",
+  log: "log",
+  artifact: "artifact参照",
+};
+function renderProjectCrossSearch(value) {
+  const list = $("cross-project-search-results");
+  list.replaceChildren(
+    ...(value.results || []).map((result) => {
+      const item = node("li", undefined, "event");
+      item.append(
+        node(
+          "strong",
+          `${result.project_name} · ${searchKindNames[result.kind] || result.kind} · ${result.title}`,
+        ),
+        node("p", result.snippet),
+        node(
+          "p",
+          `${result.kind}:${result.record_id} · ${formatObservedAt(result.time)} · ${result.search_scope === "reference_only" ? "参照情報のみを検索" : "記録本文を検索"}`,
+          "sub",
+        ),
+      );
+      if (result.reference_status) {
+        const labels = {
+          available: "参照ファイルの存在を確認",
+          stale: "参照先なし · 古い参照",
+          external: "外部参照 · 取得状態は未確認",
+          unknown: "参照先の状態は未確認",
+        };
+        item.append(
+          node(
+            "p",
+            labels[result.reference_status] || "参照先の状態は未確認",
+            result.reference_status === "stale" ? "warn" : "sub",
+          ),
+        );
+      }
+      if (result.source_url) {
+        const link = node("a", "元の記録を開く");
+        link.href = result.source_url;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        item.append(link);
+      } else {
+        item.append(node("p", "元projectのdashboardは停止中です", "sub"));
+      }
+      return item;
+    }),
+  );
+  const unavailable = value.unavailable_projects?.length || 0;
+  $("cross-project-search-status").textContent =
+    `一致 ${value.matched_count}件${value.truncated ? " · 表示上限に達しました" : ""}${unavailable ? ` · 状態不明 ${unavailable} project（検索結果なし）` : ""}`;
+}
 function node(tag, text, className) {
   const result = document.createElement(tag);
   if (text !== undefined) result.textContent = text;
   if (className) result.className = className;
   return result;
 }
+  // SVG shapes need the SVG namespace or they render as inert HTML nodes.
+  node.svg = (tag) => document.createElementNS(SVG_NS, tag);
+// Theme: the boot script picks the palette before paint; this keeps the
+// toggle label, aria state and storage in sync afterwards.
+const themeQuery = window.matchMedia("(prefers-color-scheme: dark)");
+const storedTheme = () => {
+  try {
+    return localStorage.getItem("rdsh_dashboard_theme");
+  } catch {
+    return null;
+  }
+};
+const currentTheme = () =>
+  document.documentElement.dataset.theme === "dark" ? "dark" : "light";
+function renderThemeToggle() {
+  const dark = currentTheme() === "dark";
+  const button = $("theme-toggle");
+  button.textContent = dark ? "ライト表示" : "ダーク表示";
+  button.setAttribute("aria-pressed", String(dark));
+}
+function setTheme(theme, persist) {
+  document.documentElement.dataset.theme = theme;
+  if (persist) {
+    try {
+      localStorage.setItem("rdsh_dashboard_theme", theme);
+    } catch {}
+  }
+  renderThemeToggle();
+}
+$("theme-toggle").addEventListener("click", () => {
+  setTheme(currentTheme() === "dark" ? "light" : "dark", true);
+});
+themeQuery.addEventListener("change", (event) => {
+  // An explicit operator choice outranks the system preference.
+  const stored = storedTheme();
+  if (stored === "dark" || stored === "light") return;
+  setTheme(event.matches ? "dark" : "light", false);
+});
+renderThemeToggle();
+
 let artifactPreviewUrl = null;
 let artifactPreviewRequest = 0;
 let artifactPreviewRevision = -1;
@@ -124,10 +342,58 @@ $("artifact-preview").addEventListener("close", () => {
   if (artifactPreviewUrl) URL.revokeObjectURL(artifactPreviewUrl);
   artifactPreviewUrl = null;
 });
+$("cross-project-search-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const button = event.currentTarget.querySelector('button[type="submit"]');
+  button.disabled = true;
+  $("cross-project-search-status").textContent = "検索中…";
+  $("cross-project-search-results").replaceChildren();
+  const projectId = $("cross-project-search-project").value;
+  try {
+    const value = await api("projects/search", {
+      query: $("cross-project-search-query").value,
+      ...(projectId ? { project_ids: [projectId] } : {}),
+      kind: $("cross-project-search-kind").value,
+      since: $("cross-project-search-since").value,
+      until: $("cross-project-search-until").value,
+    });
+    renderProjectCrossSearch(value);
+  } catch (error) {
+    $("cross-project-search-status").textContent =
+      `検索できませんでした: ${error.message}`;
+  } finally {
+    button.disabled = false;
+  }
+});
+function focusCurrentSource() {
+  let target;
+  try {
+    target = decodeURIComponent(location.hash.slice(1));
+  } catch {
+    return;
+  }
+  if (/^(?:task|question|decision|event)-/.test(target)) navigateTo(target);
+}
+window.addEventListener("hashchange", focusCurrentSource);
 let renderedRevision = -1;
 let latestState = null;
+const timeline = createTimelinePanel($("causal-timeline"), { api, node });
+setInterval(() => {
+  if (latestState?.project) void timeline.refresh();
+}, 5000);
 let selectedTask = "";
 let selectionKey = "";
+let deepLinkHandled = false;
+function makeDeepLink(kind, id, runId) {
+  if (!latestState?.project?.id) throw new Error("Project state is unavailable");
+  return createProjectDeepLink(
+    location.href,
+    latestState.project.id,
+    kind,
+    id,
+    runId,
+  );
+}
 let observedCli = null;
 let workspaceLayoutStorageKey = null;
 const workspaceLayouts = ["1", "2", "3"];
@@ -178,9 +444,50 @@ function navigateTo(id) {
   if (!target) return;
   for (let parent = target.parentElement; parent; parent = parent.parentElement)
     if (parent.tagName === "DETAILS") parent.open = true;
+  if (target.tagName === "DETAILS") target.open = true;
   target.tabIndex = -1;
   target.focus();
   target.scrollIntoView({ block: "start" });
+}
+function applyDeepLink(state) {
+  if (deepLinkHandled || requestedDeepLink.status === "none") return;
+  deepLinkHandled = true;
+  const status = $("deep-link-status");
+  if (requestedDeepLink.status === "invalid") {
+    status.textContent =
+      "リンクの対象情報を読み取れません。project・対象・IDを確認してください。";
+  } else {
+    const target = resolveProjectDeepLink(requestedDeepLink, state);
+    if (target.status === "wrong_project") {
+      status.textContent =
+        "このリンクは別projectの対象です。対象projectの認証済み画面から開いてください。";
+    } else if (target.status === "not_found") {
+      status.textContent =
+        "リンク先はこのprojectの現在の状態にありません。削除済みか、接続先が異なる可能性があります。";
+    } else if (target.status === "ambiguous") {
+      status.textContent =
+        "同じrun/sessionの対象を一意に確認できません。元の画面でリンクを作り直してください。";
+    } else if (target.status === "found" && target.kind === "session") {
+      if (renderInstructions.selectTarget(target.consumerId)) {
+        navigateTo("instruction-detail");
+        status.textContent = `登録済みのrun/session ${requestedDeepLink.runId} / ${requestedDeepLink.id} を表示しました。現在の接続状態は未確認です。`;
+      } else {
+        status.textContent =
+          "session対象を確認しましたが、追指示の保存処理中です。処理後にリンクを開き直してください。";
+      }
+    } else if (target.status === "found") {
+      navigateTo(target.elementId);
+      status.textContent = `${target.kind} ${target.id} を表示しました。`;
+    } else {
+      status.textContent = "リンク先を確認できません。対象情報を確認してください。";
+    }
+  }
+  clearPendingProjectDeepLink(deepLinkStorage);
+  history.replaceState(
+    null,
+    "",
+    clearProjectDeepLinkUrl(location.href),
+  );
 }
 function updateOverview(state) {
   const select = $("overview-task");
@@ -262,6 +569,166 @@ $("diagnostics-refresh").onclick = async () => {
     $("diagnostics-refresh").disabled = false;
   }
 };
+function renderRunDiagnostics(report) {
+  const target = $("run-diagnostics-result");
+  const classNames = {
+    active: "活動を観測",
+    api_wait_possible: "応答待ちの可能性",
+    stall_suspected: "停滞の疑い（未確定）",
+    resource_wait: "資源待ち",
+    process_exited: "プロセス終了を観測",
+    waiting_human: "人の確認待ち",
+    succeeded: "完了記録",
+    failed: "失敗記録",
+    insufficient_evidence: "根拠不足・状態未確認",
+  };
+  const signalNames = {
+    process: "プロセス",
+    agent_activity: "ACP活動heartbeat",
+    api_wait: "応答要求",
+    resource_wait: "資源待ち",
+    cpu_activity: "CPU活動",
+    gpu_activity: "GPU活動",
+    browser_connection: "ブラウザー接続",
+  };
+  const statusNames = {
+    alive: "稼働を観測",
+    exit_confirmed: "終了を確認",
+    absence_observed: "不在を観測",
+    gone: "終了を観測",
+    pid_reused: "PID再利用を観測",
+    unknown: "未確認",
+    recent: "最近の活動あり",
+    delayed: "heartbeat遅延",
+    unverified: "時刻を検証できず",
+    unavailable: "取得できず",
+    request_pending: "送信応答待ち（推定）",
+    not_observed: "待機なし／未報告",
+    waiting: "待機中",
+    available: "利用可能",
+    connected: "接続中",
+    disconnected: "切断を観測",
+  };
+  const basisNames = {
+    measured: "実測・記録",
+    inferred: "推定",
+    unavailable: "欠測",
+    unknown: "未確認",
+  };
+  const reasonNames = {
+    recorded_terminal_result: "run履歴に終端結果が記録されています",
+    owned_process_exit_observed: "所有プロセスの終了を観測しました",
+    run_recorded_waiting_for_resource: "run状態が資源待ちです",
+    explicit_resource_wait_observed: "資源providerが待機を報告しました",
+    resource_observation_conflicts_with_run_state: "run状態と資源providerの観測が一致しません",
+    run_recorded_waiting_for_human: "run状態が人の確認待ちです",
+    recent_acp_activity_heartbeat: "ACPから最近の活動通知を受けています",
+    send_command_pending_without_recent_activity: "送信要求が未完了で、最近のACP活動がありません",
+    long_pending_send_without_recent_activity: "送信要求とプロセスは残っていますが、活動heartbeatが長時間ありません",
+    browser_disconnected_run_health_unconfirmed: "ブラウザー切断だけではrun状態を判定できません",
+    independent_activity_or_resource_observation_missing: "活動や資源の独立した観測がありません",
+  };
+  const recommendationNames = {
+    reconnect_dashboard: "ダッシュボードへ再接続する",
+    inspect_resource_readiness: "待機中の資源・leaseを確認する",
+    check_provider_and_cli_status: "provider/APIとCLIの状態を確認する",
+    collect_another_observation: "時間を置いて追加観測する",
+    collect_process_and_activity_observations: "プロセスとACP heartbeatを再確認する",
+    review_recorded_run_state: "記録済みのrun状態を確認する",
+  };
+  const when = (value) =>
+    value && Number.isFinite(Date.parse(value))
+      ? new Date(value).toLocaleString("ja-JP")
+      : "未取得";
+  const age = (value) =>
+    value === null || value === undefined
+      ? "経過時間未計測"
+      : value < 60000
+        ? `${Math.floor(value / 1000)}秒前`
+        : `${Math.floor(value / 60000)}分前`;
+  const cards = (report.runs || []).map((run) => {
+    const diagnosis = run.stall_diagnosis;
+    const classification =
+      classNames[diagnosis.classification] || diagnosis.classification;
+    const article = node("article", undefined, "event");
+    article.append(
+      node("strong", `${run.run_id} · ${classification}`),
+      node(
+        "p",
+        [
+          `記録状態 ${run.recorded_state}`,
+          `根拠 ${basisNames[diagnosis.confidence] || diagnosis.confidence}`,
+          reasonNames[diagnosis.reason] || diagnosis.reason,
+        ].join(" · "),
+      ),
+      node(
+        "p",
+        `観測時刻 ${when(diagnosis.observed_at)} · 自動停止なし`,
+      ),
+    );
+    const evidence = node("ul");
+    for (const signal of diagnosis.signals) {
+      const signalName = signalNames[signal.name] || signal.name;
+      const signalStatus = statusNames[signal.status] || signal.status;
+      const detail = [
+        `${signalName}: ${signalStatus}`,
+        basisNames[signal.basis] || signal.basis,
+        signal.resource_kind ? `種別 ${signal.resource_kind}` : null,
+        signal.age_ms === undefined ? null : age(signal.age_ms),
+        `観測 ${when(signal.observed_at)}`,
+        `確認 ${when(signal.checked_at)}`,
+      ]
+        .filter(Boolean)
+        .join(" · ");
+      evidence.append(node("li", detail));
+    }
+    article.append(evidence);
+    const next = (diagnosis.recommendations || [])
+      .map((item) => recommendationNames[item] || item)
+      .join(" · ");
+    article.append(
+      node("p", `次の確認: ${next || "追加操作は不要です"}`),
+    );
+    if (diagnosis.limitations?.length)
+      article.append(
+        node(
+          "p",
+          `未確認: ${diagnosis.limitations.join(" · ")}`,
+          "sub",
+        ),
+      );
+    return article;
+  });
+  target.replaceChildren(
+    ...(cards.length ? cards : [node("p", "run履歴がありません。", "sub")]),
+  );
+}
+$("run-diagnostics-refresh").onclick = async () => {
+  $("run-diagnostics-refresh").disabled = true;
+  $("run-diagnostics-status").textContent = "プロセスとrun履歴を確認中…";
+  try {
+    const report = await api("run-diagnostics");
+    renderRunDiagnostics(report);
+    const statusDetails = [
+      report.recovery_required ? "履歴の末尾が未確定" : null,
+      report.observation_store_status === "unavailable"
+        ? "活動観測の保存内容を確認できません"
+        : null,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    $("run-diagnostics-status").textContent =
+      `直近 ${report.runs.length} run · 観測 ${new Date(
+        report.observed_at,
+      ).toLocaleString("ja-JP")}${statusDetails ? ` · ${statusDetails}` : ""}`;
+  } catch (error) {
+    $("run-diagnostics-status").textContent =
+      `診断を取得できません: ${error.message}`;
+    $("run-diagnostics-result").replaceChildren();
+  } finally {
+    $("run-diagnostics-refresh").disabled = false;
+  }
+};
 $("github-status-refresh").onclick = async () => {
   const button = $("github-status-refresh");
   button.disabled = true;
@@ -284,14 +751,91 @@ const renderInstructions = createInstructionPanel($("instruction-panel"), {
   node,
   api,
   refreshState,
+  makeDeepLink,
+});
+const renderNotifications = createNotificationPanel({
+  api,
+  refreshState,
+  navigateTo,
 });
 const renderCosts = createCostPanel($("cost-ledger"), node);
+let summarySourceRecords = [];
+const renderUpdateSummary = createUpdateSummary($("update-summary"), {
+  node,
+  navigateTo,
+  loadChangeRecords: (afterRevision) =>
+    api(`changes?after_revision=${encodeURIComponent(afterRevision)}`),
+  onSourceRecords: (records, sourceEventIds, state) => {
+    summarySourceRecords = records;
+    renderReports(
+      { ...state, change_records: records },
+      Date.now(),
+      sourceEventIds,
+    );
+  },
+});
 const renderTaskOutcomes = createTaskOutcomesPanel(
   $("tasks"),
   $("task-milestones"),
-  { node, api },
+  { node, api, makeDeepLink },
 );
 const renderCatalog = createModelCatalogPanel($("model-catalog"), node);
+// rdsh-ui/1: the agent presents a surface, and a human action returns to the
+// same session. The rendered surface is skipped until its revision changes so
+// an update never wipes a draft, a selection or focus.
+let renderedSurfaceKey = "";
+let uiActionSequence = 0;
+async function submitUiAction(action, block, value) {
+  const surface = latestState?.ui_surfaces?.current;
+  const status = $("agent-ui-status");
+  if (!surface) {
+    status.textContent = "提示されたUIがありません。";
+    return;
+  }
+  uiActionSequence += 1;
+  const body = {
+    surface_id: surface.surface_id,
+    surface_revision: surface.revision,
+    block_id: block.id,
+    action_id: action.id,
+    action_request_id: "act_" + Date.now().toString(36) + "_" + uiActionSequence,
+  };
+  if (value !== null && value !== undefined) body.value = value;
+  try {
+    const result = await api("ui/actions", body);
+    status.className = result.followup_required ? "" : "ok";
+    status.textContent = result.followup_required
+      ? "要求として記録しました。実行は別の認可された経路で行われます。"
+      : "選択をセッションへ返しました（受付 " + result.sequence + "）。実行権限は発行していません。";
+  } catch (error) {
+    status.className = "error";
+    status.textContent = "送信できません: " + error.message;
+  }
+}
+function renderAgentUi(state) {
+  const surface = state.ui_surfaces?.current || null;
+  const key = surface ? surface.surface_id + "@" + surface.revision : "none";
+  if (key === renderedSurfaceKey) return;
+  renderedSurfaceKey = key;
+  renderSurface($("agent-ui"), surface, node, submitUiAction);
+  const meta = $("agent-ui-meta");
+  const status = $("agent-ui-status");
+  meta.replaceChildren();
+  status.className = "";
+  status.textContent = "";
+  if (!surface) {
+    meta.append(node("span", "提示待ち"));
+    return;
+  }
+  meta.append(
+    node("span", surface.surface_id, "ui-surface-id"),
+    node("span", "版 " + surface.revision),
+    node("span", "提示 " + (surface.presented_at
+      ? new Date(surface.presented_at).toLocaleString("ja-JP")
+      : "未取得")),
+    node("span", "ブロック " + surface.blocks.length),
+  );
+}
 const renderHumanAnnotations = createHumanAnnotationPanel(
   $("human-annotations-panel"),
   { api, node, navigateTo },
@@ -302,10 +846,137 @@ const renderHumanMetrics = createHumanMetricsPanel($("human-metrics"), {
   confirm: (message) => window.confirm(message),
 });
 let humanMetricsRevision = -1;
+const renderDecisions = createDecisionLogPanel($("decision-log"), {
+  node,
+  api,
+  refreshState,
+});
+let profileCatalog = null;
+function selectedProfileVersion() {
+  try {
+    const selected = JSON.parse($("profile-select").value || "null");
+    return selected && typeof selected.id === "string" && typeof selected.version === "string"
+      ? selected
+      : null;
+  } catch {
+    return null;
+  }
+}
+function profileVersionEntry(selection) {
+  return profileCatalog?.profiles?.[selection?.id]?.versions?.find(
+    (entry) => entry.version === selection.version,
+  ) || null;
+}
+function loadProfileSelection() {
+  const selection = selectedProfileVersion();
+  const profile = profileCatalog?.profiles?.[selection?.id];
+  const version = profileVersionEntry(selection);
+  if (!profile || !version) return;
+  $("profile-id").value = profile.id;
+  $("profile-name").value = profile.name;
+  $("profile-values").value = JSON.stringify(version.values, null, 2);
+}
+async function refreshProfiles() {
+  profileCatalog = await api("profiles");
+  const active = profileCatalog.active;
+  const versions = Object.values(profileCatalog.profiles || {})
+    .flatMap((profile) => profile.versions.map((version) => ({ profile, version })))
+    .sort((a, b) => a.profile.name.localeCompare(b.profile.name) ||
+      b.version.created_at.localeCompare(a.version.created_at));
+  const options = versions.map(({ profile, version }) => {
+    const option = node(
+      "option",
+      `${profile.name} · ${profile.id} · ${version.version.slice(0, 19)}`,
+    );
+    option.value = JSON.stringify({ id: profile.id, version: version.version });
+    return option;
+  });
+  $("profile-select").replaceChildren(...options);
+  if (active) {
+    $("profile-select").value = JSON.stringify(active);
+  } else if (options.length) {
+    $("profile-select").value = options[0].value;
+  }
+  if (versions.length) {
+    loadProfileSelection();
+    const isActive = active && versions.some(({ profile, version }) =>
+      profile.id === active.id && version.version === active.version);
+    $("profile-status").textContent = isActive
+      ? `選択中: ${active.id} · ${active.version}`
+      : "保存済みprofileがあります。実行へは自動適用されません。";
+  } else {
+    $("profile-id").value = "";
+    $("profile-name").value = "";
+    $("profile-status").textContent =
+      "profileは未設定です。保存した設定は実行に自動適用されません。";
+  }
+}
+$("profile-select").addEventListener("change", loadProfileSelection);
+$("profile-save").addEventListener("click", async () => {
+  const button = $("profile-save");
+  button.disabled = true;
+  try {
+    const values = JSON.parse($("profile-values").value || "{}");
+    const catalog = await api("profiles/save", {
+      id: $("profile-id").value,
+      name: $("profile-name").value,
+      values,
+      activate: true,
+    });
+    profileCatalog = catalog;
+    await refreshProfiles();
+    $("profile-status").textContent =
+      `保存して選択しました: ${catalog.active.id} · ${catalog.active.version}`;
+    $("profile-preview-result").textContent = "プレビューは未取得です。";
+  } catch (error) {
+    $("profile-status").textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+});
+$("profile-activate").addEventListener("click", async () => {
+  const button = $("profile-activate");
+  button.disabled = true;
+  try {
+    const selection = selectedProfileVersion();
+    if (!selection) throw new Error("選択する保存済みprofileがありません");
+    profileCatalog = await api("profiles/activate", selection);
+    await refreshProfiles();
+    $("profile-status").textContent =
+      `選択しました: ${selection.id} · ${selection.version}`;
+    $("profile-preview-result").textContent = "プレビューは未取得です。";
+  } catch (error) {
+    $("profile-status").textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+});
+$("profile-preview").addEventListener("click", async () => {
+  const button = $("profile-preview");
+  button.disabled = true;
+  try {
+    const selection = selectedProfileVersion();
+    if (!selection) throw new Error("プレビューする保存済みprofileがありません");
+    const result = await api("profiles/preview", {
+      ...selection,
+      user: JSON.parse($("profile-user-values").value || "{}"),
+      invocation: JSON.parse($("profile-invocation-values").value || "{}"),
+    });
+    $("profile-preview-result").textContent = JSON.stringify(result, null, 2);
+    $("profile-status").textContent =
+      "優先順位と出所を表示しました。実行・権限変更は発生していません。";
+  } catch (error) {
+    $("profile-status").textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+});
 function render(state) {
   if (state.revision < renderedRevision) return;
+  const focusedId = document.activeElement?.id || "";
   renderedRevision = state.revision;
   latestState = state;
+  void timeline.refresh();
   observedCli?.render(state);
   renderHumanMetrics.render(state);
   if (state.revision !== humanMetricsRevision) {
@@ -313,18 +984,51 @@ function render(state) {
     void renderHumanMetrics.reload();
   }
   renderInstructions(state);
+  renderNotifications(state);
   renderCosts(state);
   renderCatalog();
+  renderAgentUi(state);
+  renderProviderStatuses($("provider-status"), state.provider_statuses, node);
   renderBudget($("budget-admission"), state, node);
+  renderDecisions(state);
   updateOverview(state);
   renderHumanAnnotations(state);
-  renderReports(state, Date.now(), previewArtifact);
+  const focusedEventSequence = requestedDeepLink.status === "target" &&
+    requestedDeepLink.kind === "event" && requestedDeepLink.projectId === state.project.id
+    ? requestedDeepLink.id
+    : null;
+  const summarySources = renderUpdateSummary(state);
+  summarySourceRecords = summarySources.records;
+  renderReports(
+    { ...state, change_records: summarySourceRecords },
+    Date.now(),
+    summarySources.sourceEventIds,
+    previewArtifact,
+    makeDeepLink,
+    focusedEventSequence,
+  );
+  renderReviewEvidence($("review-evidence"), state, node);
+  for (const task of state.tasks) {
+    const title = document.getElementById("task-" + task.id)?.children[2];
+    title?.append(renderTaskContract(task, state, node));
+  }
+  renderOperations(state, $("policy-checks"), $("approvals"), {
+    node,
+    api,
+    refreshState,
+  });
   const unanswered = state.questions.filter((question) => question.answer === null);
   renderTaskOutcomes(state);
+  const deviceCapabilities = new Set(deviceAccess?.capabilities || []);
   renderQuestionCards($("questions"), unanswered, state.question_contracts, {
     node,
     api,
     refreshState,
+    canReply:
+      deviceAccess?.role !== "device" || deviceCapabilities.has("reply"),
+    canControl:
+      deviceAccess?.role !== "device" || deviceCapabilities.has("control"),
+    makeDeepLink,
   });
   renderAnswerApplications($("reply-status"), state, node);
   $("answers").replaceChildren(
@@ -339,6 +1043,8 @@ function render(state) {
           node("strong", question.question),
           node("p", question.answer),
         );
+        const link = deepLinkButton(node, makeDeepLink, "question", question.id, `質問 ${question.id}`);
+        if (link) element.append(link);
         const contract = state.question_contracts?.cards[question.id];
         element.append(
           node(
@@ -353,12 +1059,20 @@ function render(state) {
       }),
   );
   renderAttention(state);
+  applyDeepLink(state);
+  const restoredFocus = focusedId ? $(focusedId) : null;
+  if (restoredFocus) {
+    if (restoredFocus.tabIndex < 0) restoredFocus.tabIndex = -1;
+    restoredFocus.focus({ preventScroll: true });
+  }
   $("connection").textContent = "接続済み · プロジェクト専用";
   $("updated").textContent =
     `最終受信: ${state.updated_at ? new Date(state.updated_at).toLocaleString("ja-JP") : "まだ報告がありません"} · 鮮度は各項目の観測時刻から判定します。累計欄は報告元のAPI換算値です。台帳は出所ごとの報告値です。`;
 }
+const refreshPlans = createPlanPanel($("execution-plans"), api, node);
 async function refreshState() {
   await refreshModelRouting();
+  void refreshPlans();
 }
 let routingRefreshing = false;
 async function refreshModelRouting() {
@@ -366,6 +1080,10 @@ async function refreshModelRouting() {
   routingRefreshing = true;
   try {
     render(await api("state"));
+    if (!initialSourceFocused) {
+      focusCurrentSource();
+      initialSourceFocused = true;
+    }
   } catch (e) {
     $("connection").textContent = e.message;
     $("overview-state").textContent = "画面の更新に失敗 · 対象の現在状態は不明";
@@ -392,7 +1110,13 @@ setInterval(() => {
   if (!document.hidden) void refreshModelRouting();
 }, 5000);
 let qrObjectUrl = null;
+let initialSourceFocused = false;
 async function renderShare(config) {
+  if (config.device_access?.role === "device") {
+    $("share-toggle").hidden = true;
+    $("share").hidden = true;
+    return;
+  }
   const share = config.share;
   $("share-message").textContent = share.message;
   $("share-url").textContent = share.url || "";
@@ -606,9 +1330,11 @@ document.addEventListener("keydown", (event) => {
 });
 try {
   const config = await api("config");
+  deviceAccess = config.device_access;
+  await setupDeviceAccess({ api, config, base });
   if (config.kind === "project") observedCli = setupObservedCli({ api });
   restoreWorkspaceLayout(config.project?.id);
-  await renderShare(config);
+  if (deviceAccess?.role !== "device") await renderShare(config);
   if (config.kind === "harness") {
     $("connection-detail").hidden = true;
     $("kind").textContent = "DEEPSEEK HARNESS";
@@ -616,16 +1342,20 @@ try {
     $("location").textContent = "会話・ツール実行のWeb画面";
     $("project-content").hidden = true;
     $("harness").hidden = false;
-    $("harness-open").href = config.harness_url;
+    $("harness-open").href = config.harness_url || "#";
+    $("harness-open").hidden = deviceAccess?.role === "device";
     $("connection").textContent = "接続済み · Harness専用の入口";
-    $("share").hidden = false;
-    $("share-toggle").setAttribute("aria-expanded", "true");
+    if (deviceAccess?.role !== "device") {
+      $("share").hidden = false;
+      $("share-toggle").setAttribute("aria-expanded", "true");
+    }
     let stopRequested = false;
     let pendingStop = null;
     const refreshManaged = async () => {
       try {
         const value = await api("managed-process"),
           scope = value.scope;
+        renderManagedRunHealth($("managed-health"), value.diagnostic, node);
         const labels = {
           running: "実行中",
           stopping: "停止要求中 · 子孫の終了を確認しています",
@@ -672,10 +1402,12 @@ try {
         );
         $("managed-stop").disabled =
           stopRequested || scope?.status !== "running";
-        $("harness-open").hidden = scope?.status === "exit_confirmed";
+        $("harness-open").hidden =
+          deviceAccess?.role === "device" || scope?.status === "exit_confirmed";
       } catch {
         $("managed-status").textContent =
           "監視に接続できません · 終了は未確認です";
+        renderManagedRunHealth($("managed-health"), null, node);
         $("managed-stop").disabled = true;
       }
     };
@@ -754,6 +1486,13 @@ try {
       } catch {}
     }
     $("quick-actions").hidden = false;
+    await refreshProfiles();
+    $("cross-project-overview").hidden = !config.project_overview_enabled;
+    $("cross-project-search").hidden = !config.project_search_enabled;
+    if (config.project_overview_enabled) {
+      await refreshProjectCrossOverview();
+      setInterval(refreshProjectCrossOverview, 15000);
+    }
     await refreshState();
     const source = new EventSource(
       base + "api/live?key=" + encodeURIComponent(browserToken),

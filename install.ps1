@@ -14,7 +14,7 @@
 #   .\install.ps1 -FromRelease      # prebuilt binary from GitHub Releases (no Rust needed)
 #   .\install.ps1 -FromRelease -Version v0.1.2  # pinned release
 #   .\install.ps1 -FromRelease -NoChecksum      # skip SHA-256 only after typing YES at a terminal
-#   .\install.ps1 -Desktop         # also attach the rdsh plugins to DeepSeek Harness Desktop
+#   .\install.ps1 -Desktop         # also attach the rdsh + default third-party (sound, gitview) plugins to Desktop
 # -FromRelease verifies the Windows archive against this repository's
 # release-digests-windows.tsv, fetched from its fixed canonical URL; the release
 # origin's .sha256 sidecar is never trusted. RDSH_RELEASE_BASE only moves the
@@ -269,6 +269,7 @@ if ($Wsl) {
   $wargs = @()
   if ($AsDsh) { $wargs += '--as-dsh' }
   if ($NoRustup) { $wargs += '--no-rustup' }
+  if ($Desktop) { $wargs += '--desktop' }
   & wsl bash "$nix/install.sh" @wargs
 }
 

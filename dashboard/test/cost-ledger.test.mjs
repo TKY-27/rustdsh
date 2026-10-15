@@ -9,6 +9,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { identity, ProjectStore, publicState } from "../state.mjs";
 import { startDashboard } from "../server.mjs";
+import { readLocalRuntime } from "../private-runtime.mjs";
 import { costRequest } from "../cost-client.mjs";
 import { executeTool, tools } from "../mcp.mjs";
 import { costScope, costReport } from "./fixtures/cost-report.mjs";
@@ -346,11 +347,11 @@ test("scope identity, source certainty, dates and malformed persisted ledger fai
   const file = path.join(project.directory, "state.json"),
     bytes = JSON.stringify(corrupted);
   await fs.writeFile(file, bytes);
-  await assert.rejects(ProjectStore.open(project), /Cost ledger/);
+  await assert.rejects(ProjectStore.open(project), /integrity check failed/);
   assert.equal(await fs.readFile(file, "utf8"), bytes);
 });
 
-test("existing MCP metrics tool records ledger reports; old metrics remain compatible", async (t) => {
+test("existing MCP metrics tool records ledger reports; old metrics and existing tool names remain compatible", async (t) => {
   const { store, project } = await setup(t);
   const api = {
     mutate: (...args) => store.mutate(...args),
@@ -367,7 +368,7 @@ test("existing MCP metrics tool records ledger reports; old metrics remain compa
     3,
   );
   assert.equal(group(store).amount, "0.1");
-  assert.equal(tools.length, 8);
+  assert.equal(tools.length, 19);
   assert.ok(
     tools.find((tool) => tool.name === "dashboard_update_metrics").inputSchema
       .properties.cost_report,
@@ -382,9 +383,7 @@ test("HTTP parallel worker reports, lost response retry, browser read-only and p
       tailscale: false,
     });
   t.after(() => dashboard.close());
-  const runtime = JSON.parse(
-    await fs.readFile(path.join(f.project.directory, "runtime.json"), "utf8"),
-  );
+  const runtime = await readLocalRuntime(f.project.directory);
   const human = {
     "x-rdsh-browser-token": new URL(runtime.browser_url).hash.slice(5),
   };
