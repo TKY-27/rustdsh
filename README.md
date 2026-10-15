@@ -369,6 +369,37 @@ in the graph neighbours of the files their search matched, so a retrieved
 excerpt arrives with the files it actually depends on.
 Native execution overhead is ~1 ms per invocation.
 
+## Low-end hosts
+
+Default profile: `RDSH_DEFAULT_PROFILE`, then `general.default_profile` in rdsh settings, then local `tui`, else a guided error. Set the saved default with `rdsh settings set general.default_profile web`; an explicit `--profile <name>` keeps its precedence.
+
+rdsh aims to remain useful on modest machines: older x86-64 CPUs, older Linux
+distributions, and hosts without Node.js installed.
+
+- **Faster Node startup.** When rdsh launches dsh, it sets `NODE_COMPILE_CACHE`
+  to `~/.cache/rdsh-node-compile-cache`, letting Node reuse compiled code across
+  launches (Node 22.1 or newer; older versions ignore it). An existing
+  `NODE_COMPILE_CACHE` value is preserved. Set `RDSH_NODE_COMPILE_CACHE=0`, or
+  use `--passthrough` / `RDSH_PASSTHROUGH=1`, to opt out.
+- **Broad CPU support.** Prebuilt x86-64 binaries do not require AVX or BMI;
+  the static musl build also runs on systems with older glibc.
+- **Session token estimates.** `sessions --tokens` reads a decompressed size
+  from the zstd frame header when available. Most streaming frames need the
+  `zstd -dc` fallback. Results are cached under
+  `~/.cache/rdsh/sessions-tokens.json` (`$XDG_CACHE_HOME` takes precedence);
+  set `RDSH_TOKENS_CACHE=0` to disable the cache. A `?` marks an estimate that
+  could not be read, for example when the zstd CLI is unavailable.
+- **Bounded parallel work.** Search and session scans use at most eight worker
+  threads. The zstd CLI fallback uses 8 to 32 parallel processes.
+- **Native commands without Node.** Commands such as `tokens`, `search`, and
+  `sessions` keep working without Node. To delegate conversations, install
+  `@deepseek-ai/dsh` or set `DSH_ORIG_BIN` (or `RDSH_ORIG_BIN`).
+- **Low-priority updates.** `sync-dsh.sh` updates dsh and rdsh, verifies
+  archive bytes against that registry, and rolls back a failed update candidate. By default it uses the
+  stable release selected by the reviewed repository digest registry; set `RDSH_SYNC_FROM_SOURCE=1` to build from
+  `main` under `nice -n 19` and `ionice -c3` when available. The systemd unit
+  runs at low priority; adjust its `ExecStart` to your checkout.
+
 ## Web UI & Dashboard
 
 ### Lightweight Local Web UI (`rdsh serve`)
@@ -516,6 +547,9 @@ Measurements conducted on Linux x86_64:
 
 - **Q. Will my existing scripts break?**  
   No. Any argument not belonging to an rdsh-specific command is forwarded verbatim to upstream `dsh`.
+
+- **Q. Does a profile-less `rdsh boot` fail?**
+  Set `general.default_profile` or `RDSH_DEFAULT_PROFILE`, or pass `--profile <name>`.
 
 ## Documentation
 

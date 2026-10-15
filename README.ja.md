@@ -36,6 +36,7 @@
   - [フック監視](#フック監視-rdsh-guard)
   - [コンテキスト注入](#コンテキスト注入rdsh-context)
   - [依存グラフと変更影響](#依存グラフと変更影響rdsh-deps)
+- [低スペック環境向け](#低スペック環境向け)
 - [Web UI とダッシュボード](#web-ui-とダッシュボード)
 - [Smart-DSH との併用](#smart-dsh-との併用)
 - [実測ベンチマーク](#実測ベンチマーク)
@@ -353,6 +354,29 @@ rdsh deps impact src/context.rs    # 直接・推移的な依存元と影響す�
 依存近傍を取り込みます。抜粋が、実際に依存しているファイルと一緒に届きます。
 Rust ネイティブ処理のため、呼び出しごとのオーバーヘッドは約1msと非常に軽量です。
 
+## 低スペック環境向け
+
+既定プロファイルは `RDSH_DEFAULT_PROFILE`、rdsh設定の `general.default_profile`、ローカルの `tui`、案内付きエラーの順です。保存する既定値は `rdsh settings set general.default_profile web` で設定できます。明示的な `--profile <name>` が最優先です。
+
+古いx86-64 CPU、古いLinuxディストリビューション、Node.jsを入れていない環境でも使えることを目指しています。
+
+- **Nodeの起動を高速化**：rdshがdshを起動するとき、`NODE_COMPILE_CACHE` に
+  `~/.cache/rdsh-node-compile-cache` を設定し、起動をまたいでNodeにコンパイル結果を再利用させます
+  （Node 22.1以上。古い版は無視します）。既存の `NODE_COMPILE_CACHE` は尊重します。
+  `RDSH_NODE_COMPILE_CACHE=0`、`--passthrough`、`RDSH_PASSTHROUGH=1` で無効にできます。
+- **幅広いCPUに対応**：ビルド済みx86-64バイナリはAVX/BMIを必要としません。静的musl版は古いglibcの環境でも使えます。
+- **セッションのトークン見積り**：`sessions --tokens` は、サイズが記録されたzstdフレームならヘッダーから展開後サイズを読みます。
+  多くのストリーミングフレームでは `zstd -dc` が必要です。結果は
+  `~/.cache/rdsh/sessions-tokens.json` に保存し（`$XDG_CACHE_HOME` を優先）、
+  `RDSH_TOKENS_CACHE=0` でキャッシュを無効化できます。サイズを読めない場合は `?` を付けます。
+- **並列処理を制限**：検索・セッション走査のワーカーは最大8スレッドです。zstd CLIへのフォールバックは8〜32プロセスを並列で使います。
+- **Nodeなしでも使えるネイティブコマンド**：`tokens`・`search`・`sessions` などは使えます。会話を委譲するには
+  `@deepseek-ai/dsh` を導入するか、`DSH_ORIG_BIN`（または `RDSH_ORIG_BIN`）を指定してください。
+- **低優先度の自動更新**：`sync-dsh.sh` はdshとrdshを更新し、リポジトリでレビュー済みの固定digest台帳に対して取得物を検証し、更新に失敗した場合は元に戻します。
+  既定では固定digest台帳の `latest` が示す安定版を使います。`RDSH_SYNC_FROM_SOURCE=1` を指定すると、
+  `nice -n 19` と（利用可能なら）`ionice -c3` の下で `main` からビルドします。
+  systemdユニットも低優先度で実行します。`ExecStart` は各自のcheckoutに合わせてください。
+
 <a id="web-ui"></a>
 
 ## Web UI とダッシュボード
@@ -454,6 +478,9 @@ Linux x86_64 環境での測定値です：
 
 - **Q. 既存のスクリプトは壊れませんか？**  
   `rdsh` 固有のコマンド以外は、指定したすべての引数をそのまま本家 `dsh` に引き渡すため、既存のスクリプトや CI パイプラインはそのまま動きます。
+
+- **Q. プロファイルを指定しない `rdsh boot` が失敗する場合は？**
+  `general.default_profile` または `RDSH_DEFAULT_PROFILE` を設定するか、`--profile <name>` を付けてください。
 
 ## 資料
 
