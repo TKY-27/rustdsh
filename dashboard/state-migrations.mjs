@@ -375,7 +375,8 @@ export async function applyStateMigration(project) {
       );
       record.created_at = saved.created_at;
       record.stage = "prepared";
-    } else await writeJson(manifest, record);
+    }
+    await writeJson(manifest, record);
 
     const currentBytes = await readBytes(filePaths.state);
     check(

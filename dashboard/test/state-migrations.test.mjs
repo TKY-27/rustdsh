@@ -113,6 +113,87 @@ test("apply snapshots exact source bytes and rollback restores a schema-1-readab
   assert.equal(rolledBack.status, "rolled_back");
   assert.deepEqual(await fs.readFile(stateFile), sourceBytes);
   assert.equal((await ProjectStore.open(project)).value.schema, 1);
+
+  const reapplied = await applyStateMigration(project);
+  assert.equal(reapplied.status, "applied");
+  assert.equal(reapplied.migration_id, applied.migration_id);
+  assert.deepEqual(
+    await fs.readFile(path.join(project.directory, reapplied.snapshot)),
+    sourceBytes,
+  );
+  assert.equal((await applyStateMigration(project)).status, "current");
+  await rollbackStateMigration(project, reapplied.migration_id);
+  assert.deepEqual(await fs.readFile(stateFile), sourceBytes);
+});
+
+function failManifestSave(t, manifestFile, stage) {
+  const rename = fs.rename;
+  return t.mock.method(fs, "rename", async (source, target) => {
+    if (target === manifestFile) {
+      const value = JSON.parse(await fs.readFile(source, "utf8"));
+      if (value.stage === stage) {
+        const error = new Error("Fixture manifest rename I/O failure");
+        error.code = "EIO";
+        throw error;
+      }
+    }
+    return rename(source, target);
+  });
+}
+
+test("interrupted reapply retains a prepared record and can roll back the cutover", async (t) => {
+  const { project, stateFile } = await fixture(t);
+  const sourceBytes = await fs.readFile(stateFile);
+  const applied = await applyStateMigration(project);
+  await rollbackStateMigration(project, applied.migration_id);
+  const manifestFile = path.join(
+    project.directory,
+    "state-migrations",
+    applied.migration_id + ".json",
+  );
+  failManifestSave(t, manifestFile, "applied");
+  await assert.rejects(
+    applyStateMigration(project),
+    (error) => error.code === "atomic_write_unconfirmed",
+  );
+  assert.equal((await ProjectStore.open(project)).value.schema, 2);
+  const inspection = await inspectStateMigrations(project);
+  const record = inspection.migrations[0];
+  assert.equal(record.stage, "prepared");
+  assert.equal(record.effective_stage, "applied");
+  assert.equal(record.recovered_after_restart, true);
+  assert.equal(inspection.current_sha256, record.target_sha256);
+  const rolledBack = await rollbackStateMigration(project, applied.migration_id);
+  assert.equal(rolledBack.status, "rolled_back");
+  assert.deepEqual(await fs.readFile(stateFile), sourceBytes);
+});
+
+test("a failed prepared save leaves the rolled-back state and manifest unchanged", async (t) => {
+  const { project, stateFile } = await fixture(t);
+  const applied = await applyStateMigration(project);
+  await rollbackStateMigration(project, applied.migration_id);
+  const manifestFile = path.join(
+    project.directory,
+    "state-migrations",
+    applied.migration_id + ".json",
+  );
+  const beforeState = await fs.readFile(stateFile);
+  const beforeManifest = await fs.readFile(manifestFile);
+  const beforeSnapshot = await fs.readFile(
+    path.join(project.directory, applied.snapshot),
+  );
+  failManifestSave(t, manifestFile, "prepared");
+  await assert.rejects(
+    applyStateMigration(project),
+    (error) => error.code === "atomic_write_unconfirmed",
+  );
+  assert.deepEqual(await fs.readFile(stateFile), beforeState);
+  assert.deepEqual(await fs.readFile(manifestFile), beforeManifest);
+  assert.deepEqual(
+    await fs.readFile(path.join(project.directory, applied.snapshot)),
+    beforeSnapshot,
+  );
+  assert.equal((await ProjectStore.open(project)).value.schema, 1);
 });
 
 test("rollback refuses changed state and leaves post-migration data intact", async (t) => {
