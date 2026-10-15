@@ -6,7 +6,13 @@ import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import QRCode from "qrcode";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
-import { ProjectStore, writeJson, stateHome, publicState } from "./state.mjs";
+import {
+  ProjectStore,
+  writeJson,
+  stateHome,
+  publicState,
+  publicChangeRecords,
+} from "./state.mjs";
 import {
   InstructionQueueWorker,
   resolveRdshExecutable,
@@ -621,7 +627,7 @@ export async function startDashboard(options) {
         );
       if (
         kind === "project" &&
-        ["/api/state", "/api/config"].includes(route) &&
+        ["/api/state", "/api/changes", "/api/config"].includes(route) &&
         (humanAuthorized || req.headers["x-rdsh-browser-token"])
       )
         connections.record(
@@ -663,6 +669,7 @@ export async function startDashboard(options) {
           route === "/instruction-queue-ui.mjs" ||
           route === "/cost-ledger-ui.mjs" ||
           route === "/budget-ui.mjs" ||
+          route === "/update-summary.mjs" ||
           route === "/model-routing-ui.mjs" ||
           route === "/task-outcomes-ui.mjs" ||
           route === "/observed-cli-ui.mjs" ||
@@ -773,6 +780,7 @@ export async function startDashboard(options) {
           "/instruction-queue-ui.mjs",
           "/cost-ledger-ui.mjs",
           "/budget-ui.mjs",
+          "/update-summary.mjs",
           "/model-routing-ui.mjs",
           "/task-outcomes-ui.mjs",
           "/observed-cli-ui.mjs",
@@ -1032,6 +1040,17 @@ export async function startDashboard(options) {
         }
         if (req.method === "GET" && route === "/api/state")
           return json(res, 200, await visibleState());
+        if (req.method === "GET" && route === "/api/changes") {
+          if (!humanAuthorized && !adminAuthorized)
+            return json(res, 403, {
+              error: "Human browser credential required",
+            });
+          const rawAfter = url.searchParams.get("after_revision");
+          const afterRevision = rawAfter === null ? 0 : Number(rawAfter);
+          if (!Number.isSafeInteger(afterRevision) || afterRevision < 0)
+            return json(res, 400, { error: "Invalid after_revision cursor" });
+          return json(res, 200, publicChangeRecords(store.value, afterRevision));
+        }
         if (req.method === "GET" && route === "/api/handoff") {
           if (!mcpAuthorized)
             return json(res, 403, { error: "MCP bearer credential required" });

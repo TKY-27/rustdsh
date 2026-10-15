@@ -10,6 +10,7 @@ import { createCostPanel } from "./cost-ledger-ui.mjs";
 import { createModelCatalogPanel } from "./model-catalog-ui.mjs";
 import { renderSurface } from "./ui/blocks.mjs";
 import { renderBudget } from "./budget-ui.mjs";
+import { createUpdateSummary } from "./update-summary.mjs";
 import { renderModelRouting } from "./model-routing-ui.mjs";
 import { createTaskOutcomesPanel } from "./task-outcomes-ui.mjs";
 import { createHumanAnnotationPanel } from "./human-annotations-ui.mjs";
@@ -252,6 +253,21 @@ const renderInstructions = createInstructionPanel($("instruction-panel"), {
   refreshState,
 });
 const renderCosts = createCostPanel($("cost-ledger"), node);
+let summarySourceRecords = [];
+const renderUpdateSummary = createUpdateSummary($("update-summary"), {
+  node,
+  navigateTo,
+  loadChangeRecords: (afterRevision) =>
+    api(`changes?after_revision=${encodeURIComponent(afterRevision)}`),
+  onSourceRecords: (records, sourceEventIds, state) => {
+    summarySourceRecords = records;
+    renderReports(
+      { ...state, change_records: records },
+      Date.now(),
+      sourceEventIds,
+    );
+  },
+});
 const renderTaskOutcomes = createTaskOutcomesPanel(
   $("tasks"),
   $("task-milestones"),
@@ -330,7 +346,13 @@ function render(state) {
   renderBudget($("budget-admission"), state, node);
   updateOverview(state);
   renderHumanAnnotations(state);
-  renderReports(state);
+  const summarySources = renderUpdateSummary(state);
+  summarySourceRecords = summarySources.records;
+  renderReports(
+    { ...state, change_records: summarySourceRecords },
+    Date.now(),
+    summarySources.sourceEventIds,
+  );
   const unanswered = state.questions.filter((question) => question.answer === null);
   renderTaskOutcomes(state);
   renderQuestionCards($("questions"), unanswered, state.question_contracts, {
