@@ -2,12 +2,17 @@ fn main() {
     println!("cargo:rerun-if-changed=assets/rdsh.rc");
     println!("cargo:rerun-if-changed=assets/icon.ico");
     if std::env::var("CARGO_CFG_TARGET_OS").is_ok_and(|s| s == "windows") {
-        // Windows reserves 1 MiB for the main thread while Linux and macOS
-        // reserve 8 MiB. Debug builds already need close to 1 MiB for clap's
-        // command tree, so ask MSVC for the same 8 MiB reserve instead of
-        // overflowing inside the context-hook path.
-        if std::env::var("CARGO_CFG_TARGET_ENV").is_ok_and(|s| s == "msvc") {
-            println!("cargo:rustc-link-arg-bins=/STACK:8388608");
+
+        // The debug `rdsh` binary needs close to the 1 MiB main-thread stack
+        // the Windows linker reserves by default (clap's derived parser
+        // dominates the frame), so one extra call frame — `context hook
+        // status` re-reading a config — overflows it. Ask for the 8 MiB that
+        // the Linux and macOS defaults already provide.
+        match std::env::var("CARGO_CFG_TARGET_ENV").as_deref() {
+            Ok("msvc") => println!("cargo:rustc-link-arg-bins=/STACK:8388608"),
+            Ok("gnu") => println!("cargo:rustc-link-arg-bins=-Wl,--stack,8388608"),
+            _ => {}
+
         }
         embed_resource::compile_for("assets/rdsh.rc", ["rdsh"], embed_resource::NONE)
             .manifest_required()
