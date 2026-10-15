@@ -11,6 +11,7 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
       - ".github/workflows/dashboard.yml"
+      - "scripts/bench-worker-git.mjs"
   pull_request:
     paths:
       - "dashboard/**"
@@ -19,6 +20,7 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
       - ".github/workflows/dashboard.yml"
+      - "scripts/bench-worker-git.mjs"
   workflow_dispatch:
 
 permissions:
@@ -41,15 +43,21 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
-      - name: Build native dashboard policy helper
-        run: cargo build --locked --bin rdsh
-        working-directory: .
+      - name: Build the native dashboard bridge and policy helper
+        run: cargo build --locked --manifest-path ../Cargo.toml --bin rdsh
       - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: dashboard/package-lock.json
       - run: npm ci
+      - if: runner.os == 'Windows'
+        name: Measure worker Git bridge latency
+        shell: pwsh
+        run: |
+          cargo build --locked --release --manifest-path ../Cargo.toml --bin rdsh
+          $env:RDSH_BENCH_BIN = (Resolve-Path ../target/release/rdsh.exe).Path
+          node ../scripts/bench-worker-git.mjs
       - if: runner.os == 'Windows'
         # Native GUI startup must not compete with every process-heavy fixture.
         # Run every test with the same assertions and startup deadlines.

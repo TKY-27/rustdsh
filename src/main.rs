@@ -72,6 +72,7 @@ mod tokens;
 mod tool_security;
 mod update_auto;
 mod websearch;
+mod worker_git;
 mod worker_scopes;
 
 #[derive(Parser, Debug)]
@@ -264,6 +265,9 @@ enum Commands {
         #[arg(long, value_parser = parse_positive_usize)]
         rpm: Option<usize>,
     },
+    /// Internal JSON bridge for dashboard Git observations
+    #[command(name = "worker-git", hide = true)]
+    WorkerGit,
     /// Inventory, select and import only explicitly shared credentials
     Auth(auth_sharing::AuthArgs),
     /// Register an OpenAI-compatible endpoint (HAI, a home LLM server) as a
@@ -618,6 +622,7 @@ const NATIVE_FIRST: &[&str] = &[
     "cost-ledger",
     "update",
     "serial-proxy",
+    "worker-git",
     "subagents",
     "task-outcomes",
     "budget-admission",
@@ -660,6 +665,13 @@ fn main() {
     }
     // NOTE: --version/-V is served by clap itself (prints "rdsh x.y.z", exit 0).
     let cli = Cli::parse();
+    if matches!(cli.command.as_ref(), Some(Commands::WorkerGit)) {
+        if let Err(error) = worker_git::cmd() {
+            eprintln!("[rdsh] error: {error:#}");
+            std::process::exit(1);
+        }
+        return;
+    }
     if let Some(Commands::WorkerScope { action }) = &cli.command {
         let result = match action {
             WorkerScopeAction::Validate => worker_scopes::cmd_validate(),
@@ -779,6 +791,7 @@ fn main() {
             max_body_bytes,
             rpm,
         }),
+        Some(Commands::WorkerGit) => unreachable!("worker-git handled before settings load"),
         Some(Commands::Bench { n }) => bench(n.unwrap_or(cfg.bench.n)),
         Some(Commands::Compute { once }) => compute::cmd_compute(once),
         Some(Commands::WorkerScope { .. }) => {
@@ -2323,6 +2336,10 @@ mod default_profile_tests {
             .split('|')
             .collect();
         for name in crate::NATIVE_FIRST {
+            if *name == "worker-git" {
+                // Internal dashboard bridge is native-first but intentionally hidden from help.
+                continue;
+            }
             assert!(listed.contains(name), "after_help is missing {name:?}");
         }
     }
