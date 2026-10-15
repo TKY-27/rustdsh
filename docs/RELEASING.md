@@ -33,7 +33,22 @@ Generation failure stops publication.
 2. Copy `docs/releases/TEMPLATE.md` to the version's filename and fill in every
    placeholder. Keep Japanese user-facing notes, platform limits and installation
    commands accurate. For candidates, replace `/releases/latest/download/` with
-   `/releases/download/vX.Y.Z-rc.N/`.
+   `/releases/download/vX.Y.Z-rc.N/` and pass `--version=vX.Y.Z-rc.N` to the
+   Unix installer or `-Version vX.Y.Z-rc.N` to the Windows installer. Downloading
+   a candidate's installer alone does not select its binary: both installers
+   otherwise fetch `latest`. Keep the selectors on the actual commands in code
+   blocks or inline code, rather than only in explanatory prose. Candidate examples:
+
+   ```sh
+   curl -fsSL https://github.com/jimoto-no-llm/rustdsh/releases/download/vX.Y.Z-rc.N/install.sh | bash -s -- --from-release --version=vX.Y.Z-rc.N
+   ```
+
+   Download `install.ps1` from the same candidate release, then run:
+
+   ```powershell
+   ./install.ps1 -FromRelease -Version vX.Y.Z-rc.N
+   ```
+
 3. Run the metadata and packaging checks (Python 3.11+):
 
    ```sh
@@ -198,7 +213,7 @@ The script reads GitHub's own asset digests (`gh release view --json assets`
 does not expose them), writes the four Unix archives to `release-digests.tsv`
 and `rdsh-windows-x64.zip` to `release-digests-windows.tsv`, updates both
 `latest` rows, keeps older rows for explicit `--version` installs, and refuses
-prerelease tags, missing archives or values that are not a SHA-256. Pinning an
+prerelease tags unless explicitly enabled, missing archives or values that are not a SHA-256. Pinning an
 older release only backfills its rows: each `latest` row moves forward only, so
 re-pinning a past version never moves the install and automatic-update channel
 backwards. Raw list:
@@ -212,6 +227,19 @@ After publication, the `pin-release-digests` workflow runs this script on `main`
 and opens the `chore/pin-<tag>-digests` PR automatically: review both ledgers and
 merge it. Prereleases are skipped, and a release that is already pinned opens no
 PR.
+
+候補版の公開後は、全5アーカイブのGitHub asset digestが揃ってから明示的に登録します。
+自動workflowは引き続きstableのみを扱います。
+
+```sh
+python3 scripts/pin-release-digests.py vX.Y.Z-rc.N --allow-prerelease --dry-run
+python3 scripts/pin-release-digests.py vX.Y.Z-rc.N --allow-prerelease
+git diff release-digests.tsv release-digests-windows.tsv
+```
+
+候補行を追加しても両台帳の`latest`は既存のstableを保持し、その後のstable登録でも
+候補行を残します。完全なstableの`latest`がない台帳への候補だけの初回登録は拒否します。
+登録内容をレビューしてmainへ統合するまで、明示tagの候補導入も取得前に安全に拒否されます。
 
 Review both updated ledgers before announcing the new stable channel. Their
 `latest` rows must name the release GitHub marks Latest.
