@@ -12,7 +12,9 @@ import {
   stateHome,
   publicState,
   publicChangeRecords,
+  identity,
 } from "./state.mjs";
+import { acquireProjectIdentityLock } from "./project-identity.mjs";
 import {
   InstructionQueueWorker,
   resolveRdshExecutable,
@@ -158,26 +160,48 @@ async function readBody(req, maximum = 131072) {
   return JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
 }
 export async function startDashboard(options) {
-  const { kind = "project", project, tailscale = true } = options;
+  const { kind = "project", tailscale = true } = options;
+  let project = options.project;
+  // Managed projects live in <home>/projects/<id> and can be remapped by a
+  // project move; callers that pass an explicit state directory keep it.
+  const managedLayout =
+    kind === "project" &&
+    path.basename(path.dirname(project?.directory || "")) === "projects";
+  const projectHome = managedLayout
+    ? path.dirname(path.dirname(project.directory))
+    : stateHome();
+  let port, directory, lockFile, lockContent;
+  let releaseIdentityLock;
+  try {
+    if (managedLayout && /^[0-9a-f]{16}$/.test(project?.id || "")) {
+      releaseIdentityLock = await acquireProjectIdentityLock(projectHome);
+      project = await identity(project.root, projectHome);
+    }
+    port =
+      options.port ||
+      (kind === "harness"
+        ? 38081
+        : 38100 + (parseInt(project.id.slice(0, 4), 16) % 1000));
+    directory =
+      kind === "project" ? project.directory : path.join(stateHome(), "harness");
+    await fs.mkdir(directory, { recursive: true });
+    // The identity lock makes migration and server startup mutually exclusive;
+    // the exclusive live-instance lock never launches two writers for one project.
+    lockFile = path.join(directory, "server.lock");
+    lockContent = `${process.pid}:${randomUUID()}`;
+    const acquisition = dashboardLockQueue.then(
+      () => acquireDashboardLock(lockFile, lockContent),
+      () => acquireDashboardLock(lockFile, lockContent),
+    );
+    dashboardLockQueue = acquisition.catch(() => {});
+    await acquisition;
+  } catch (error) {
+    await releaseIdentityLock?.();
+    throw error;
+  }
+  await releaseIdentityLock?.();
   const githubStatusInspector =
     options.githubStatusInspector || inspectGitHubStatus;
-  const port =
-    options.port ||
-    (kind === "harness"
-      ? 38081
-      : 38100 + (parseInt(project.id.slice(0, 4), 16) % 1000));
-  const directory =
-    kind === "project" ? project.directory : path.join(stateHome(), "harness");
-  await fs.mkdir(directory, { recursive: true });
-  // Exclusive live-instance lock: never launch two writers for the same project.
-  const lockFile = path.join(directory, "server.lock");
-  const lockContent = `${process.pid}:${randomUUID()}`;
-  const acquisition = dashboardLockQueue.then(
-    () => acquireDashboardLock(lockFile, lockContent),
-    () => acquireDashboardLock(lockFile, lockContent),
-  );
-  dashboardLockQueue = acquisition.catch(() => {});
-  await acquisition;
   const token = randomBytes(32).toString("hex"); // local administrator
   const mcpToken = randomBytes(32).toString("hex");
   const browserToken = randomBytes(32).toString("hex");

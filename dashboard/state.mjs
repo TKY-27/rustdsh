@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { normalizeAttention, updateTaskAttention, validateAttentionState } from "./attention.mjs";
+import { identity, stateHome } from "./project-identity.mjs";
 import { applyTaskOutcomes, validateTaskOutcomes } from "./task-outcomes.mjs";
 import { normalizeObservation } from "./observations.mjs";
 import {
@@ -74,29 +75,7 @@ export const metricNames = [
   "refusals",
   "api_errors",
 ];
-export function stateHome(env = process.env) {
-  return (
-    env.RDSH_DASHBOARD_HOME ||
-    path.join(
-      env.LOCALAPPDATA || path.join(os.homedir(), ".local", "state"),
-      "rdsh",
-      "dashboard",
-    )
-  );
-}
-export async function identity(project) {
-  const root = await fs.realpath(path.resolve(project));
-  if (!(await fs.stat(root)).isDirectory())
-    throw new Error("Project must be a directory");
-  const normalized = process.platform === "win32" ? root.toLowerCase() : root;
-  const id = createHash("sha256").update(normalized).digest("hex").slice(0, 16);
-  return {
-    id,
-    root,
-    name: path.basename(root),
-    directory: path.join(stateHome(), "projects", id),
-  };
-}
+export { identity, stateHome };
 export async function writeJson(file, value) {
   await fs.mkdir(path.dirname(file), { recursive: true });
   const temp = `${file}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
@@ -154,6 +133,15 @@ export class ProjectStore {
         "Dashboard state belongs to a different project or version",
       );
     validateAttentionState(value);
+    if (
+      value.project.root !== project.root ||
+      value.project.name !== project.name
+    )
+      value.project = {
+        ...value.project,
+        root: project.root,
+        name: project.name,
+      };
     validateQuestionContracts(value);
     validateAnswerApplications(value);
     validateInstructions(value);

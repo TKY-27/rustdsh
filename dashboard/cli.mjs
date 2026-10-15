@@ -5,6 +5,11 @@ import { constants } from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { identity, stateHome } from "./state.mjs";
+import {
+  applyProjectMove,
+  previewProjectMove,
+  rollbackProjectMove,
+} from "./project-identity.mjs";
 import { startDashboard } from "./server.mjs";
 import { runStdio } from "./mcp.mjs";
 import { adapterCatalog, createCliAdapter } from "./adapters.mjs";
@@ -62,6 +67,9 @@ import {
 
 const help = `rdsh-dashboard project --project <directory> [--port <port>] [--no-tailscale] [--open]
 rdsh-dashboard harness [--port 38081] [--harness-port 3081] [--no-tailscale] [--open]
+rdsh-dashboard project-id --project <directory>
+rdsh-dashboard project-move preview|apply --project <new-directory> --from-id <project_id> [--expected-revision <n>]
+rdsh-dashboard project-move rollback --migration-id <migration_id>
 rdsh-dashboard open --project <directory> | --harness
 rdsh-dashboard stop --project <directory> | --harness
 rdsh-dashboard revoke-events --project <directory>
@@ -137,6 +145,8 @@ const { values, positionals } = parseArgs({
   allowPositionals: true,
   options: {
     project: { type: "string" },
+    "from-id": { type: "string" },
+    "migration-id": { type: "string" },
     port: { type: "string" },
     "harness-port": { type: "string" },
     "no-tailscale": { type: "boolean" },
@@ -500,6 +510,11 @@ try {
   )
     throw new Error("--gpu-request requires a native session attachment");
   if (
+    command !== "project-move" &&
+    (values["from-id"] !== undefined || values["migration-id"] !== undefined)
+  )
+    throw new Error("Project move options require project-move");
+  if (
     command !== "release" &&
     ["release-id", "selection-revision"].some((k) => values[k] !== undefined)
   )
@@ -545,9 +560,12 @@ try {
     throw new Error("Backup options require backup");
   if (
     values["expected-revision"] !== undefined &&
-    !["backup", "integration", "workers"].includes(command)
+    !["backup", "integration", "workers"].includes(command) &&
+    !(command === "project-move" && positionals[1] === "apply")
   )
-    throw new Error("Backup options require backup");
+    throw new Error(
+      "Expected revision requires backup, integration, workers or project-move apply",
+    );
   if (
     values["expected-head"] !== undefined &&
     !["integration", "workers"].includes(command)
@@ -657,6 +675,72 @@ try {
                   confirmed: values["confirm-stale-lock"],
                 });
     console.log(JSON.stringify(report, null, 2));
+  } else if (command === "project-id") {
+    const allowed = new Set(["project", "help"]);
+    if (
+      positionals.length !== 1 ||
+      Object.keys(values).some((key) => !allowed.has(key))
+    )
+      throw new Error("Specify project-id --project <directory>");
+    const project = await identity(values.project || process.cwd());
+    console.log(
+      JSON.stringify(
+        {
+          project_id: project.id,
+          root: project.root,
+          state_directory: project.directory,
+        },
+        null,
+        2,
+      ),
+    );
+  } else if (command === "project-move") {
+    const action = positionals[1];
+    let result;
+    if (action === "rollback") {
+      const allowed = new Set(["migration-id", "help"]);
+      if (
+        positionals.length !== 2 ||
+        !values["migration-id"] ||
+        Object.keys(values).some((key) => !allowed.has(key))
+      )
+        throw new Error(
+          "Specify project-move rollback --migration-id <migration_id>",
+        );
+      result = await rollbackProjectMove(values["migration-id"]);
+    } else {
+      const allowed = new Set([
+        "project",
+        "from-id",
+        "expected-revision",
+        "help",
+      ]);
+      if (
+        positionals.length !== 2 ||
+        !["preview", "apply"].includes(action) ||
+        !values.project ||
+        !values["from-id"] ||
+        Object.keys(values).some((key) => !allowed.has(key)) ||
+        (action === "preview" && values["expected-revision"] !== undefined) ||
+        (action === "apply" && values["expected-revision"] === undefined)
+      )
+        throw new Error(
+          "Specify project-move preview|apply --project <new-directory> --from-id <project_id>; apply also requires --expected-revision",
+        );
+      if (action === "preview")
+        result = await previewProjectMove(values.project, values["from-id"]);
+      else {
+        const revision = Number(values["expected-revision"]);
+        if (!Number.isSafeInteger(revision) || revision < 0)
+          throw new Error("--expected-revision must be a nonnegative integer");
+        result = await applyProjectMove(
+          values.project,
+          values["from-id"],
+          revision,
+        );
+      }
+    }
+    console.log(JSON.stringify(result, null, 2));
   } else if (command === "release") {
     const action = positionals[1];
     const allowed = new Set([
