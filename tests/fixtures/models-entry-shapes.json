@@ -1,0 +1,82 @@
+[
+  {
+    "label": "standalone-dash",
+    "profile": "- id: llm-pi-ai\n  config:\n    providers:\n      openai-codex:\n        models:\n          - id: old\n            name: Keep\n-\n  id: llm-pi-ai\n  config:\n    providers:\n      openai-codex:\n        models:\n          - id: later-active\n            name: Keep\n",
+    "refuse": true
+  },
+  {
+    "label": "flow-entry",
+    "profile": "- id: llm-pi-ai\n  config:\n    providers:\n      openai-codex:\n        models:\n          - id: old\n            name: Keep\n- {id: llm-pi-ai, config: {providers: {openai-codex: {models: [{id: later-active, name: Keep}]}}}}\n",
+    "refuse": true
+  },
+  {
+    "label": "flow-quoted-keys",
+    "profile": "- id: llm-pi-ai\n  config:\n    providers:\n      openai-codex:\n        models:\n          - id: old\n            name: Keep\n- {\"id\": llm-pi-ai, config: {providers: {openai-codex: {models: [{id: later-active, name: Keep}]}}}}\n",
+    "refuse": true
+  },
+  {
+    "label": "tagged-map",
+    "profile": "- id: llm-pi-ai\n  config:\n    providers:\n      openai-codex:\n        models:\n          - id: old\n            name: Keep\n- !!map\n  id: llm-pi-ai\n  config:\n    providers:\n      openai-codex:\n        models:\n          - id: later-active\n            name: Keep\n",
+    "refuse": true
+  },
+  {
+    "label": "anchored-map",
+    "profile": "- id: llm-pi-ai\n  config:\n    providers:\n      openai-codex:\n        models:\n          - id: old\n            name: Keep\n- &later\n  id: llm-pi-ai\n  config:\n    providers:\n      openai-codex:\n        models:\n          - id: later-active\n            name: Keep\n",
+    "refuse": true
+  },
+  {
+    "label": "tagged-id",
+    "profile": "- id: llm-pi-ai\n  config:\n    providers:\n      openai-codex:\n        models:\n          - id: old\n            name: Keep\n- id: !!str llm-pi-ai\n  config:\n    providers:\n      openai-codex:\n        models:\n          - id: later-active\n            name: Keep\n",
+    "refuse": true
+  },
+  {
+    "label": "block-scalar-id",
+    "profile": "- id: llm-pi-ai\n  config:\n    providers:\n      openai-codex:\n        models:\n          - id: old\n            name: Keep\n- id: >-\n    llm-pi-ai\n  config:\n    providers:\n      openai-codex:\n        models:\n          - id: later-active\n            name: Keep\n",
+    "refuse": true
+  },
+  {
+    "label": "multiline-quoted-id",
+    "profile": "- id: llm-pi-ai\n  config:\n    providers:\n      openai-codex:\n        models:\n          - id: old\n            name: Keep\n- id: \"llm-pi-\\\n    ai\"\n  config:\n    providers:\n      openai-codex:\n        models:\n          - id: later-active\n            name: Keep\n",
+    "refuse": true
+  },
+  {
+    "label": "alias-entry",
+    "profile": "- &shared\n  id: llm-pi-ai\n  config:\n    providers:\n      openai-codex:\n        models:\n          - id: old\n            name: Keep\n- *shared\n",
+    "refuse": true
+  },
+  {
+    "label": "alias-id",
+    "profile": "- id: &shared_id llm-pi-ai\n  config:\n    providers:\n      openai-codex:\n        models:\n          - id: old\n            name: Keep\n- id: *shared_id\n  config:\n    providers:\n      openai-codex:\n        models:\n          - id: later-active\n            name: Keep\n",
+    "refuse": true
+  },
+  {
+    "label": "flow-first",
+    "profile": "- {id: llm-pi-ai, config: {providers: {openai-codex: {models: [{id: later-active, name: Keep}]}}}}\n- id: llm-pi-ai\n  config:\n    providers:\n      openai-codex:\n        models:\n          - id: old\n            name: Keep\n",
+    "refuse": true
+  },
+  {
+    "label": "root-flow-sequence",
+    "profile": "[{id: llm-pi-ai, config: {providers: {openai-codex: {models: [{id: old}]}}}}, {id: llm-pi-ai, config: {providers: {openai-codex: {models: [{id: later-active}]}}}}]\n",
+    "refuse": true
+  },
+  {
+    "label": "single-standard",
+    "profile": "- id: llm-pi-ai\n  config:\n    providers:\n      openai-codex:\n        models:\n          - id: old\n            name: Keep\n",
+    "refuse": false
+  },
+  {
+    "label": "single-quoted-id-key",
+    "profile": "- \"id\": llm-pi-ai\n  config:\n    providers:\n      openai-codex:\n        models:\n          - id: old\n            name: Keep\n",
+    "refuse": false
+  },
+  {
+    "label": "single-escaped-id-key",
+    "profile": "- \"i\\x64\": llm-pi-ai\n  config:\n    providers:\n      openai-codex:\n        models:\n          - id: old\n            name: Keep\n",
+    "refuse": false
+  },
+  {
+    "label": "single-name-key",
+    "profile": "- \"name\": \"@deepseek-ai/dsh-llm-pi-ai\"\n  id: llm-pi-ai\n  config:\n    providers:\n      openai-codex:\n        models:\n          - id: old\n            name: Keep\n",
+    "refuse": false
+  }
+]

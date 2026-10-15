@@ -259,6 +259,28 @@ rdsh provider list                                           # プリセット�
 
 詳細は [docs/PROVIDERS.md](docs/PROVIDERS.md)（英語）を参照してください。
 
+### モデル一覧の同期 (`rdsh models`)
+
+DeepSeek Harness は「このプロバイダはどのモデルを扱えるか」を、依存パッケージ
+`@earendil-works/pi-ai` に同梱されたカタログから答えます。このカタログはパッケージの
+公開時に生成されるため、それ以降にプロバイダが変えた内容はモデル選択に出てきません
+（例: Codex の `gpt-6.1-sol` が丸ごと欠落、Kimi Code の `kimi-for-coding` が
+"K2.8 Preview" に昇格済みなのに古い表示名のまま）。プロファイルが `models:` を
+明示していれば、その一覧が同梱カタログを置き換えるため、なおさらです。
+`rdsh models` はプロバイダ自身のカタログ（ローカルの Codex CLI、または Kimi Code の
+`/v1/models` をプロファイルのAPIキーで取得）を読んでプロファイルへ反映します：
+
+```sh
+rdsh models                              # 読み取り専用：不足IDと古い表示名を表示
+rdsh models --provider kimi-coding       # プロバイダを限定
+rdsh models sync                         # 不足分を追記し、古い表示名を更新
+rdsh models sync --profile web --dry-run # 書き込まずに確認
+```
+
+削除は行いません。既存エントリは他の行をそのまま保ち、プロバイダの現行名を既に含む
+表示名は書き換えません。構造を認識できないプロファイルは書き換えずに拒否します。
+反映は次回の設定リロードまたは再起動時です。
+
 ### エージェント実行の安全な隔離
 
 委譲したエージェントツールは既定で通常のファイル読み書きができます。`--share-file` で隔離されるのは **`rdsh_inspect` だけ**です。Linux（bubblewrap と prlimit がある環境）では、このツールから見えるのは明示的に共有したファイルだけになります：
