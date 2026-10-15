@@ -2271,17 +2271,6 @@
           <div class="feed" id="observed-cli-list" aria-live="polite"></div>
           <button id="observed-cli-refresh" type="button">識別状態を再確認</button>
         </details>
-        <h2 id="pending-heading" tabindex="-1">未回答の質問</h2>
-        <p class="sub" id="pending-note">
-          プロジェクト全体の質問です。回答はこの質問への返答のみです。対象・条件が変わった場合は回答前に内容を再確認してください。回答しただけで実行権限は生まれません。
-        </p>
-        <div
-          id="questions"
-          class="decision-grid"
-          aria-labelledby="pending-heading"
-          aria-describedby="pending-note"
-        ></div>
-        <section id="budget-admission" aria-label="予算制御"></section>
         <details class="fold" id="provider-status-detail">
           <summary>Provider利用枠・再試行状態</summary>
           <p class="sub">
@@ -2289,36 +2278,6 @@
           </p>
           <div id="provider-status" aria-live="polite"></div>
         </details>
-        <details class="fold" id="metrics-detail">
-          <summary>プロジェクト全体の数値</summary>
-          <h2 id="metrics-heading" tabindex="-1">数値の詳細</h2>
-          <div class="cards" id="cards"></div>
-          <h2>費用の明細と出所</h2>
-          <section id="cost-ledger" aria-label="費用台帳"></section>
-        </details>
-        <details class="fold" id="tasks-detail">
-          <summary>タスク一覧</summary>
-          <h2 id="tasks-heading" tabindex="-1">
-            タスク <span class="sub" id="task-milestones"></span>
-          </h2>
-          <div class="table-box">
-            <!-- #57: 各行に task-<id> の目印を付け、端末を替えても同じ行へ戻れるようにします。 -->
-            <table aria-labelledby="tasks-heading">
-              <thead>
-                <tr>
-                  <th scope="col">ID</th>
-                  <th scope="col">状態</th>
-                  <th scope="col">題名</th>
-                  <th scope="col">ブロック要因</th>
-                </tr>
-              </thead>
-              <tbody id="tasks"></tbody>
-            </table>
-          </div>
-        </details>
-        <details class="fold" id="human-annotation-detail">
-          <summary>人間のブックマーク・注釈</summary>
-          <h2>人間のブックマーク</h2>
         <details class="fold" id="github-status-detail">
           <summary>最新push・CI・レビュー状態</summary>
           <p class="sub">
