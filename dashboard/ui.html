@@ -368,6 +368,29 @@
       #human-metrics button[hidden] {
         display: none;
       }
+      .run-health-summary {
+        margin: 10px 0 4px;
+        font-weight: 700;
+      }
+      .run-health-evidence {
+        margin: 8px 0 14px;
+      }
+      .run-health-evidence summary {
+        cursor: pointer;
+      }
+      .run-health-facts {
+        display: grid;
+        grid-template-columns: minmax(120px, 0.3fr) minmax(0, 1fr);
+        gap: 4px 12px;
+        margin-top: 10px;
+      }
+      .run-health-facts dt {
+        font-weight: 600;
+      }
+      .run-health-facts dd {
+        margin: 0;
+        overflow-wrap: anywhere;
+      }
       .label {
         color: var(--mut);
         font-size: 16px;
@@ -1140,6 +1163,13 @@
           grid-template-columns: 76px minmax(0, 1fr);
           gap: 10px;
         }
+        .run-health-facts {
+          grid-template-columns: 1fr;
+          gap: 0;
+        }
+        .run-health-facts dt:not(:first-child) {
+          margin-top: 8px;
+        }
         .table-box {
           overflow: visible;
         }
@@ -1880,6 +1910,7 @@
           </p>
           <p id="managed-provider" class="sub"></p>
           <p id="managed-remaining" class="sub"></p>
+          <div id="managed-health"></div>
           <details>
             <summary>実行IDと停止履歴</summary>
             <code id="managed-run"></code>
@@ -1988,6 +2019,20 @@
             <div id="attention-history-list"></div>
           </details>
         </section>
+            <section
+              class="summary-card"
+              aria-labelledby="run-diagnostics-heading"
+            >
+              <h3 id="run-diagnostics-heading">実行の停滞診断</h3>
+              <p class="sub">
+                プロセス、ACP活動、待機状態を分けて表示します。未取得のCPU/GPU値はゼロ扱いせず、停滞の疑いでも自動停止しません。
+              </p>
+              <button id="run-diagnostics-refresh">実行を診断</button>
+              <p id="run-diagnostics-status" role="status" aria-live="polite">
+                診断は未取得です。
+              </p>
+              <div id="run-diagnostics-result" class="feed"></div>
+            </section>
         <details class="fold" id="observed-cli-panel">
           <summary>別terminalのCLIを読取専用で観測</summary>
           <p class="sub">

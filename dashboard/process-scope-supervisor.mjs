@@ -64,7 +64,9 @@ input.on("line", (line) => {
             if (frame.docker_worker === true) process.exit(0);
           }),
         );
-        scope.child.on("error", () => send({ type: "monitor_error" }));
+        scope.child.on("error", () => {
+          if (!closing) send({ type: "monitor_error" });
+        });
         if (frame.framed) {
           for (const name of ["stdout", "stderr"])
             scope.child[name].on("data", (buf) =>
@@ -122,8 +124,10 @@ input.on("line", (line) => {
         result = { closed: await scope.close() };
         if (result.closed) closing = true;
       } else throw new Error();
-      send({ type: "response", id: frame.id, result });
-      if (closing) process.stdout.end(() => process.exit(0));
+      send(
+        { type: "response", id: frame.id, result },
+        closing ? () => process.exit(0) : undefined,
+      );
     } catch (error) {
       if (frame?.op === "start")
         startupCleanupConfirmed =

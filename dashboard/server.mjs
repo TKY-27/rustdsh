@@ -52,6 +52,7 @@ import {
   connectionReport,
   inspectTunnel,
 } from "./connection-diagnostics.mjs";
+import { RunHistory } from "./run-history.mjs";
 import { HumanAnnotationStore } from "./human-annotations.mjs";
 import { inspectGitHubStatus } from "./github-status.mjs";
 import { DeviceRegistry } from "./devices.mjs";
@@ -66,6 +67,7 @@ const dashboardAssets = new Set([
   "/devices-ui.mjs",
   "/provider-status.mjs",
   "/provider-status-ui.mjs",
+  "/run-health-ui.mjs",
   "/decision-log-ui.mjs",
   "/human-annotations-ui.mjs",
   "/annotation-identifiers.mjs",
@@ -328,6 +330,7 @@ export async function startDashboard(options) {
   deliveryTimer?.unref();
   let harness = null;
   let humanMetricsWarning = null;
+  let lastManagedPollAt = null;
   let share = {
     state: "disabled",
     message: "ローカル接続のみ。Tailscale共有は起動時に有効にできます。",
@@ -898,14 +901,20 @@ export async function startDashboard(options) {
         });
         return res.end(bytes);
       }
-      if (req.method === "GET" && route === "/api/managed-process")
+      if (req.method === "GET" && route === "/api/managed-process") {
+        if (!harness)
+          return json(res, 200, { run_id: null, scope: null, stages: [] });
+        const now = Date.now();
+        const browserPollGapMs = !humanAuthorized || lastManagedPollAt === null
+          ? null
+          : Math.max(0, now - lastManagedPollAt);
+        if (humanAuthorized) lastManagedPollAt = now;
         return json(
           res,
           200,
-          harness
-            ? await harness.inspect()
-            : { run_id: null, scope: null, stages: [] },
+          await harness.inspect({ browser_poll_gap_ms: browserPollGapMs }),
         );
+      }
       if (req.method === "POST" && route === "/api/managed-stop") {
         if (!harness)
           return json(res, 409, { error: "No owned Harness process" });
@@ -975,6 +984,7 @@ export async function startDashboard(options) {
           "/update-summary.mjs",
           "/model-routing-ui.mjs",
           "/review-evidence-ui.mjs",
+          "/run-health-ui.mjs",
           "/task-outcomes-ui.mjs",
           "/observed-cli-ui.mjs",
           "/ui/registry.mjs",
@@ -1038,6 +1048,20 @@ export async function startDashboard(options) {
         route === "/api/diagnostics"
       )
         return json(res, 200, await diagnostics());
+      if (
+        kind === "project" &&
+        req.method === "GET" &&
+        route === "/api/run-diagnostics"
+      ) {
+        const history = new RunHistory(project);
+        return json(
+          res,
+          200,
+          await history.diagnoseRecent({
+            uiConnection: humanAuthorized ? "connected" : "unknown",
+          }),
+        );
+      }
       if (
         kind === "project" &&
         req.method === "GET" &&

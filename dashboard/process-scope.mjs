@@ -443,6 +443,7 @@ export async function spawnOwnedProcess({
     resourcesReleased = false,
     startupCleanupConfirmed = null,
     sequence = 0,
+    disposalRequestId = null,
     buffer = "",
     stopping = null,
     initial;
@@ -524,7 +525,10 @@ export async function spawnOwnedProcess({
     child.emit("error", new ScopeError("monitor_lost"));
   };
   monitor.on("error", () => lose());
-  monitor.on("exit", () => {
+  // #49: wait for stdout to drain before treating an intentional dispose exit
+  // as ownership loss; the supervisor's final response can arrive after
+  // ChildProcess 'exit'.
+  monitor.on("close", () => {
     if (!docker?.stopping) lose();
   });
   monitor.stdin.on("error", () => lose());
@@ -561,7 +565,18 @@ export async function spawnOwnedProcess({
               ? "cleanup_unconfirmed"
               : "ownership_unavailable",
           );
-        else if (!handleSupervisorResponse(frame, pending)) throw new Error();
+        else {
+          // #49: ownership is released as soon as the dispose response is
+          // parsed, so the later drained close event is not reported as loss.
+          if (
+            frame.type === "response" &&
+            frame.id === disposalRequestId &&
+            !frame.error &&
+            frame.result?.closed === true
+          )
+            disposed = true;
+          if (!handleSupervisorResponse(frame, pending)) throw new Error();
+        }
       } catch {
         lose();
       }
@@ -580,6 +595,7 @@ export async function spawnOwnedProcess({
     }
     if (lost || disposed) throw new ScopeError("monitor_lost");
     const id = ++sequence;
+    if (op === "dispose") disposalRequestId = id;
     let timer;
     try {
       return await new Promise((resolve, reject) => {

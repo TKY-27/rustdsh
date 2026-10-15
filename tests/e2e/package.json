@@ -3,8 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test qa-matrix.test.mjs && node browser.mjs && node update-banner.mjs && node easy-work.mjs && node task-outcomes.mjs",
-    "test:easy-work": "node easy-work.mjs",
+    "test": "node --test qa-matrix.test.mjs && node browser.mjs && node update-banner.mjs && node easy-work.mjs && node run-health.mjs && node task-outcomes.mjs",
     "test:harness": "node harness-settings.mjs",
     "test:language": "node harness-language.mjs",
     "test:answer-guard": "node answer-guard-native.mjs",
