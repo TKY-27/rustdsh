@@ -54,7 +54,7 @@ test("existing HTTP MCP task publication accepts outcome metadata without adding
     }),
   );
   const advertised = (await client.listTools()).tools;
-  assert.equal(advertised.length, 8);
+  assert.equal(advertised.length, 10);
   assert.ok(
     advertised.find((tool) => tool.name === "dashboard_upsert_task").inputSchema
       .properties.outcome,
@@ -124,7 +124,7 @@ test("legacy task shape retains observation metadata and omitted outcome fields 
     status: "done",
   });
   assert.equal(Object.hasOwn(legacy, "task_outcomes"), false);
-  assert.equal(tools.length, 8);
+  assert.equal(tools.length, 10);
 });
 test("reported done and partial or operator-reported passes never imply a verified full check", async (t) => {
   const f = await setup(t);
