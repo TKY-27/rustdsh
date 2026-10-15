@@ -22,7 +22,7 @@ export async function loadRuntime(packagePath) {
   const sdkPkg = JSON.parse(
     await readFile(join(dirname(sdkPath), "../package.json"), "utf8"),
   );
-  if (sdkPkg.version !== "2.0.0")
+  if (sdkPkg.version !== "2.2.0")
     throw new Error("MCP OAuth: unsupported MCP SDK version");
   // Cordis/schemastery share an ESM dependency with a CJS entry; concurrent
   // first imports can cause ERR_REQUIRE_ESM_RACE_CONDITION on Node 24.
@@ -42,6 +42,8 @@ export async function loadRuntime(packagePath) {
   const sdk = await import(pathToFileURL(sdkPath).href);
   return {
     sdk,
+    sdkVersion: sdkPkg.version,
+    nativeVersion: pkg.version,
     credentials,
     local,
     cordis,
