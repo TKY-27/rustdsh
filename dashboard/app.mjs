@@ -17,6 +17,7 @@ import { renderReviewEvidence } from "./review-evidence-ui.mjs";
 import { renderManagedRunHealth } from "./run-health-ui.mjs";
 import { createPlanPanel } from "./execution-plan-ui.mjs";
 import { createTimelinePanel } from "./causal-timeline-ui.mjs";
+import { createNotificationPanel } from "./notifications-ui.mjs";
 import { createTaskOutcomesPanel } from "./task-outcomes-ui.mjs";
 import { createHumanAnnotationPanel } from "./human-annotations-ui.mjs";
 import { createHumanMetricsPanel } from "./human-metrics-ui.mjs";
@@ -410,6 +411,7 @@ function navigateTo(id) {
   if (!target) return;
   for (let parent = target.parentElement; parent; parent = parent.parentElement)
     if (parent.tagName === "DETAILS") parent.open = true;
+  if (target.tagName === "DETAILS") target.open = true;
   target.tabIndex = -1;
   target.focus();
   target.scrollIntoView({ block: "start" });
@@ -677,6 +679,11 @@ const renderInstructions = createInstructionPanel($("instruction-panel"), {
   api,
   refreshState,
 });
+const renderNotifications = createNotificationPanel({
+  api,
+  refreshState,
+  navigateTo,
+});
 const renderCosts = createCostPanel($("cost-ledger"), node);
 let summarySourceRecords = [];
 const renderUpdateSummary = createUpdateSummary($("update-summary"), {
@@ -902,6 +909,7 @@ function render(state) {
     void renderHumanMetrics.reload();
   }
   renderInstructions(state);
+  renderNotifications(state);
   renderCosts(state);
   renderCatalog();
   renderAgentUi(state);
