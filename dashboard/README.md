@@ -24,6 +24,9 @@ explicit interruption with native proof, and honest unsupported-steer fallback.
 [Task preflight](../docs/TASK-PREFLIGHT.md) checks the required CLI, cwd, disk,
 port, dependencies, GPU/WSL and selected authentication before an ACP session.
 
+[Resource admission](../docs/RESOURCE-ADMISSION.md) reserves local CPU, memory,
+heavy-build slots and ports before a managed build or test command starts.
+
 [Durable run recovery](../docs/RUN-RECOVERY.md) records control request/ack IDs
 and separates recorded run state, root-process observations and UI connectivity.
 
@@ -41,6 +44,8 @@ from current full checks, preserves partial results and rejects stale evidence.
 
 [Model assertions](../docs/MODEL-ROUTING.md) compare a declared run's requested
 route with native ACP configuration and block mismatched or unknown prompts.
+`routing enforce` adds the audited native dispatch guard on reattachment; the
+human view compares actual request tuples and retains fallback permission history.
 
 [Mobile overview](../docs/MOBILE-OVERVIEW.md) puts project/task context, observed
 state, last result, pending decisions and stop availability before folded metrics

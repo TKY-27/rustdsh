@@ -9,6 +9,7 @@ import { createCostPanel } from "./cost-ledger-ui.mjs";
 import { createModelCatalogPanel } from "./model-catalog-ui.mjs";
 import { renderBudget } from "./budget-ui.mjs";
 import { createUpdateSummary } from "./update-summary.mjs";
+import { renderModelRouting } from "./model-routing-ui.mjs";
 import { createTaskOutcomesPanel } from "./task-outcomes-ui.mjs";
 import { createHumanAnnotationPanel } from "./human-annotations-ui.mjs";
 import { setupObservedCli } from "./observed-cli-ui.mjs";
@@ -290,13 +291,39 @@ function render(state) {
     `最終受信: ${state.updated_at ? new Date(state.updated_at).toLocaleString("ja-JP") : "まだ報告がありません"} · 鮮度は各項目の観測時刻から判定します。累計欄は報告元のAPI換算値です。台帳は出所ごとの報告値です。`;
 }
 async function refreshState() {
+  await refreshModelRouting();
+}
+let routingRefreshing = false;
+async function refreshModelRouting() {
+  if (routingRefreshing) return;
+  routingRefreshing = true;
   try {
     render(await api("state"));
   } catch (e) {
     $("connection").textContent = e.message;
     $("overview-state").textContent = "画面の更新に失敗 · 対象の現在状態は不明";
   }
+  try {
+    renderModelRouting(
+      $("model-routing"),
+      (await api("model-routing")).runs,
+      node,
+    );
+  } catch {
+    $("model-routing").replaceChildren(
+      node(
+        "p",
+        "モデルの照合履歴を取得できません。現在のモデルは未確認です。",
+        "sub",
+      ),
+    );
+  } finally {
+    routingRefreshing = false;
+  }
 }
+setInterval(() => {
+  if (!document.hidden) void refreshModelRouting();
+}, 5000);
 let qrObjectUrl = null;
 async function renderShare(config) {
   const share = config.share;

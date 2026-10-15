@@ -23,6 +23,13 @@ import { ReplyConsumer } from "./reply-consumer.mjs";
 import { instructionRequest } from "./instruction-client.mjs";
 import { costRequest } from "./cost-client.mjs";
 import { budgetRequest } from "./budget-client.mjs";
+import {
+  ResourceAdmission,
+} from "./resource-admission.mjs";
+import {
+  resourceRunSummary,
+  runResourceCommand,
+} from "./resource-runner.mjs";
 import { backupRequest } from "./backup-client.mjs";
 import {
   readBackupJson,
@@ -69,7 +76,7 @@ rdsh-dashboard run-history list|inspect|events --project <directory> [--run-id <
 rdsh-dashboard retry-history list|inspect --project <directory> [--operation-id <id>]
 rdsh-dashboard checkpoint record|list|inspect|resume|start-new --project <directory> [--run-id <id>] [--checkpoint-id <id>] [--executable <original-dsh>] [--entrypoint <bin.js>] [--verify-native] [--retry-operation-id <id>] [--summary-file <file> --accept-context-loss]
 rdsh-dashboard acceptance define|run|report|inspect --project <directory> --task-id <id> [--criterion-id <id>] [--criteria-file <json>] [--argv-file <json>] [--result-file <json>] [--scope full|partial] [--timeout-ms <ms>] [--image <relative-path>]
-rdsh-dashboard routing bind|inspect|probe|allow-change --project <directory> --run-id <id> [--route-file <json>] [--authorization-file <json>] [--executable <original-dsh>] [--entrypoint <bin.js>]
+rdsh-dashboard routing bind|enforce|inspect|probe|allow-change --project <directory> --run-id <id> [--route-file <json>] [--authorization-file <json>] [--executable <original-dsh>] [--entrypoint <bin.js>]
 rdsh-dashboard session-ledger list|record|resolve|start|resume --project <directory> [--run-id <run_id>] [--task-id <id>] [--session-id <id>] [--label <name>] [--provider <name>] [--cwd <directory>] [--cli <name>] [--executable <original-dsh>] [--entrypoint <bin.js>]
 rdsh-dashboard reply-consumer inspect|once|serve --project <directory> [--run-id <run_id>] [--command-id <reply_id>] [--executable <original-dsh>] [--entrypoint <bin.js>]
 rdsh-dashboard instruction context --project <directory> --consumer-id <consumer_id>
@@ -84,6 +91,9 @@ rdsh-dashboard answer-applications apply|validate|public|schema --input-file <re
 rdsh-dashboard instruction-queue validate|context|submit|resolve|control --input-file <request-json>
 rdsh-dashboard budget policy|usage --project <directory> --input-file <json>
 rdsh-dashboard budget inspect --project <directory>
+rdsh-dashboard resources inspect
+rdsh-dashboard resources policy --max-heavy-builds <n>
+rdsh-dashboard resources run --request-file <json> --argv-file <json>
 rdsh-dashboard integration init --project <directory> --input-file <checks-json> --expected-revision 0 --expected-head <sha>
 rdsh-dashboard integration enqueue|reject --project <directory> --input-file <json> --expected-revision <n>
 rdsh-dashboard integration inspect --project <directory>
@@ -162,6 +172,9 @@ const { values, positionals } = parseArgs({
     "command-id": { type: "string" },
     "consumer-id": { type: "string" },
     "input-file": { type: "string" },
+    "request-file": { type: "string" },
+    "argv-file": { type: "string" },
+    "max-heavy-builds": { type: "string" },
     "budget-guard": { type: "boolean" },
     "worker-id": { type: "string" },
     "lease-seconds": { type: "string" },
@@ -553,15 +566,15 @@ try {
     throw new Error("Checkpoint options require checkpoint");
   if (
     command !== "acceptance" &&
-    [
+    ([
       "criterion-id",
       "criteria-file",
-      "argv-file",
       "result-file",
       "scope",
       "timeout-ms",
       "image",
-    ].some((key) => values[key] !== undefined)
+    ].some((key) => values[key] !== undefined) ||
+      (command !== "resources" && values["argv-file"] !== undefined))
   )
     throw new Error("Acceptance options require acceptance");
   if (
@@ -1039,6 +1052,58 @@ try {
         2,
       ),
     );
+  } else if (command === "resources") {
+    const action = positionals[1];
+    const admission = new ResourceAdmission();
+    if (
+      positionals.length !== 2 ||
+      !["inspect", "policy", "run"].includes(action)
+    )
+      throw new Error("Specify resources inspect, policy or run");
+    if (action === "inspect") {
+      if (
+        Object.keys(values).some((key) => key !== "help") ||
+        positionals.length !== 2
+      )
+        throw new Error("Resources inspect takes no options");
+      console.log(JSON.stringify(await admission.inspect(), null, 2));
+    } else if (action === "policy") {
+      if (
+        Object.keys(values).some(
+          (key) => !["max-heavy-builds", "help"].includes(key),
+        ) ||
+        !/^\d+$/.test(values["max-heavy-builds"] || "")
+      )
+        throw new Error(
+          "Resources policy requires --max-heavy-builds between 1 and 64",
+        );
+      console.log(
+        JSON.stringify(
+          await admission.configure({
+            max_heavy_builds: Number(values["max-heavy-builds"]),
+          }),
+          null,
+          2,
+        ),
+      );
+    } else {
+      if (
+        Object.keys(values).some(
+          (key) => !["request-file", "argv-file", "help"].includes(key),
+        ) ||
+        !values["request-file"] ||
+        !values["argv-file"]
+      )
+        throw new Error(
+          "Resources run requires --request-file and --argv-file",
+        );
+      const request = await localJson(values["request-file"]);
+      const argv = await localJson(values["argv-file"]);
+      process.exitCode = await runResourceCommand(admission, request, argv, {
+        onReserved: (lease) =>
+          console.error(JSON.stringify(resourceRunSummary(lease), null, 2)),
+      });
+    }
   } else if (command === "instruction") {
     const action = positionals[1],
       allowed = new Set(["project", "consumer-id", "input-file", "help"]);
@@ -1163,9 +1228,11 @@ try {
     const action = positionals[1];
     if (
       positionals.length !== 2 ||
-      !["bind", "inspect", "probe", "allow-change"].includes(action)
+      !["bind", "enforce", "inspect", "probe", "allow-change"].includes(action)
     )
-      throw new Error("Specify routing bind, inspect, probe or allow-change");
+      throw new Error(
+        "Specify routing bind, enforce, inspect, probe or allow-change",
+      );
     const allowed = new Set([
       "project",
       "run-id",
@@ -1196,6 +1263,7 @@ try {
     store.file(record);
     let result;
     if (action === "inspect") result = await store.inspect(record);
+    else if (action === "enforce") result = await store.enforceNative(record);
     else if (action === "bind") {
       const input = await localJson(values["route-file"]);
       let persisted;
