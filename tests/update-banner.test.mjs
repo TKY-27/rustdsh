@@ -415,4 +415,9 @@ test('updater resolves from its installed plugin and refuses missing or unsafe s
     const unverified = await runWith();
     assert.equal(unverified.ok, false); assert.match(unverified.message, /owned by the current user/);
   }
+  // A failing updater that reports the reason on stderr only must not lose it.
+  await writeFile(syncScript, "printf '%s\\n' 'stdout noise'; printf '%s\\n' 'fatal: registry unreachable' >&2; exit 1\n", { mode: 0o700 });
+  const failed = await runWith();
+  assert.equal(failed.ok, false);
+  assert.match(failed.message, /registry unreachable/);
 });
