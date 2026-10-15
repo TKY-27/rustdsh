@@ -45,20 +45,31 @@ test('unavailable enforcement fails closed and never runs the requested command'
   await assert.rejects(executeIsolated({ workspace, command: 'printf UNSANDBOXED' }, { bwrap: '/nonexistent-rdsh-bwrap' }), /sandbox|ENOENT/);
 });
 
-test('global monotonic guard denies every other tool and a scoped name replacement', () => {
-  let guard, definition;
+test('isolated inspection tool registers without globally denying DSH tools', () => {
+  let guardCalls = 0, definition;
   const tools = {
-    guard(fn) { guard = fn; return () => {}; },
+    guard() { guardCalls++; return () => {}; },
     register(value) { definition = value; return () => {}; },
-    get() { return definition; },
   };
   installToolBoundary(tools, { workspace: '/dummy' });
-  for (const name of ['bash', 'read', 'write', 'edit', 'run_code', 'mcp/upload', 'plugin/install']) {
-    assert.equal(typeof guard({ name }), 'string');
+  assert.equal(definition.name, 'rdsh_inspect');
+  assert.equal(typeof definition.execute, 'function');
+  assert.match(definition.description, /read-only/);
+  // No global denial may be installed as a side effect: other DSH tools
+  // keep their configured permissions.
+  assert.equal(guardCalls, 0);
+});
+
+test('missing registration API fails closed before exposing anything', () => {
+  let registered = 0;
+  for (const tools of [{}, { guard() {} }, null]) {
+    assert.throws(
+      () => installToolBoundary(tools, { workspace: '/dummy' }),
+      /registration API/,
+    );
   }
-  assert.equal(guard({ name: 'rdsh_inspect' }), undefined);
-  tools.get = () => ({ ...definition, execute() {} });
-  assert.equal(typeof guard({ name: 'rdsh_inspect' }), 'string');
+  installToolBoundary({ register() { registered++; } }, { workspace: '/dummy' });
+  assert.equal(registered, 1);
 });
 
 test('explicit sharing rejects hard links and hidden credentials', async t => {
