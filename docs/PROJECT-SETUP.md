@@ -95,9 +95,11 @@ older release by accident.
 The [Codecov Coverage workflow](../.github/workflows/codecov.yml) runs
 `cargo tarpaulin --workspace --out xml` on pushes to `main` and on pull
 requests that target it, then uploads `cobertura.xml` with
-`codecov/codecov-action`. [codecov.yml](../codecov.yml) keeps the project and
-patch statuses informational, so a coverage change is reported on the pull
-request instead of blocking the merge.
+`codecov/codecov-action`. [codecov.yml](../codecov.yml) follows Codecov's
+recommended project and patch statuses (`target: auto`) and the condensed,
+diff-first PR comment, posted on every pull request. Neither status is a
+required check, so a regression is reported without blocking a merge; adding
+`informational: true` makes either status advisory again if it turns out noisy.
 
 The upload needs the repository upload token. Codecov rejects tokenless uploads
 to a protected branch with `Token required because branch is protected`, which
