@@ -90,6 +90,26 @@ Both ledgers carry a `latest` row. Pinning an older release only backfills its
 rows; the channel moves forward only, so installs and updates never resolve an
 older release by accident.
 
+## Coverage
+
+The [Codecov Coverage workflow](../.github/workflows/codecov.yml) runs
+`cargo tarpaulin --workspace --out xml` on pushes to `main` and on pull
+requests that target it, then uploads `cobertura.xml` with
+`codecov/codecov-action`. [codecov.yml](../codecov.yml) keeps the project and
+patch statuses informational, so a coverage change is reported on the pull
+request instead of blocking the merge.
+
+The upload needs the repository upload token. Codecov rejects tokenless uploads
+to a protected branch with `Token required because branch is protected`, which
+is what the first runs on `main` reported; generate the token on the
+repository's Codecov settings page and store it as the `CODECOV_TOKEN` secret
+(`gh secret set CODECOV_TOKEN`). `fail_ci_if_error` stays false so a Codecov
+outage cannot fail an otherwise green run.
+
+Coverage is intentionally not in `required_checks`: it is a new signal, and an
+upload outage must not block unrelated pull requests. Promote it there only after
+its runs on `main` are stable.
+
 ## Security settings
 
 Dependabot vulnerability alerts, automated security updates, secret scanning,
