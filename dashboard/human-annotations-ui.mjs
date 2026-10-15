@@ -6,6 +6,25 @@ import {
   eventTargetId,
 } from "./annotation-identifiers.mjs";
 
+// Only these backend-owned labels are display copy. Unknown labels and saved
+// human text stay verbatim, even when they resemble a locale catalog key.
+const referenceStatusKeys = new Map([
+  ["参照切れ・保持期限または削除", "annotation.reference.eventMissing"],
+  ["現行のevent", "annotation.reference.eventCurrent"],
+  ["旧版・event内容が変更", "annotation.reference.eventChanged"],
+  ["参照切れ・決定記録がありません", "annotation.reference.decisionMissing"],
+  ["現行の決定記録", "annotation.reference.decisionCurrent"],
+  ["旧版・決定内容が変更", "annotation.reference.decisionChanged"],
+  ["参照状態を確認できません・Git repositoryが利用できません", "annotation.reference.gitUnavailable"],
+  ["参照切れ・固定したcommitを確認できません", "annotation.reference.commitMissing"],
+  ["参照状態を確認できません・ファイルを読めません", "annotation.reference.fileUnreadable"],
+  ["参照切れ・現在のファイルがありません", "annotation.reference.fileMissing"],
+  ["参照状態を確認できません・HEADを読めません", "annotation.reference.headUnreadable"],
+  ["参照状態を確認できません・作業ツリーを読めません", "annotation.reference.worktreeUnreadable"],
+  ["固定したcommit・行と現行ファイルが一致", "annotation.reference.diffCurrent"],
+  ["旧版・現行ファイルは別の内容", "annotation.reference.diffChanged"],
+]);
+
 export function createHumanAnnotationPanel(container, { api, node, navigateTo }) {
   const status = node("p", text("annotation.intro"), "sub");
   status.setAttribute("role", "status");
@@ -172,10 +191,12 @@ export function createHumanAnnotationPanel(container, { api, node, navigateTo })
     const article = node("article", undefined, "human-annotation-card");
     const target = record.target;
     const code = record.reference_status?.code || "missing";
+    const statusLabel = record.reference_status?.label;
+    const statusKey = referenceStatusKeys.get(statusLabel);
     article.append(
       node(
         "p",
-        record.reference_status?.label || text("annotation.unknown"),
+        statusKey ? text(statusKey) : statusLabel || text("annotation.unknown"),
         `human-annotation-status ${code}`,
       ),
     );

@@ -673,8 +673,12 @@ test("invalid returned locale blocks editing while auto language uses the browse
 for (const [language, browser, presenceLanguage, details, agent] of [
   ["auto", "ja-JP", "en", "Working in dsh", "Idle"],
   ["auto", "en-US", "zh-CN", "正在使用 dsh 工作", "待机中"],
+  ["auto", "en-US", "ja", "dshで作業中", "待機中"],
+  ["auto", "zh-CN", "en", "Working in dsh", "Idle"],
+  ["auto", "zh-CN", "zh-CN", "正在使用 dsh 工作", "待机中"],
   ["ja", "en-US", "ja", "dshで作業中", "待機中"],
   ["en", "ja-JP", "en", "Working in dsh", "Idle"],
+  ["zh-CN", "en-US", "zh-CN", "正在使用 dsh 工作", "待机中"],
 ]) {
   test(`Discord reflection uses server ${presenceLanguage} with UI ${language}/${browser}`, async () => {
     const fixture = await host(async (path) => ({
@@ -688,6 +692,39 @@ for (const [language, browser, presenceLanguage, details, agent] of [
     }), browser);
     fixture.render(); await fixture.settle();
     const reflected = fixture.copy(language, "reflected");
-    assert.ok(find(fixture.render(), node => node.props.role === "status" && node.children.includes(reflected)));
+    const tree = fixture.render();
+    assert.ok(find(tree, node => node.props.role === "status" && node.children.includes(reflected)));
+    assert.ok(find(tree, node => node.children.includes(details)), "the server-language default is the visible preview");
+    assert.equal(find(tree, node => node.tag === "p" && node.children.includes(fixture.copy(language, "truncated"))), undefined,
+      "a short default is not a truncation even when browser and presence languages differ");
+  });
+}
+
+for (const [language, browser, presenceLanguage, idle] of [
+  ["auto", "ja-JP", "en", "Idle"], ["ja", "en-US", "ja", "待機中"],
+  ["en", "zh-CN", "en", "Idle"], ["zh-CN", "en-US", "zh-CN", "待机中"],
+]) {
+  test(`Discord real UTF-8 shortening and explicit text remain correct for ${language}/${browser}`, async () => {
+    for (const [details, preview, warning] of [
+      ["日本語の明示本文🚀", "日本語の明示本文🚀", false],
+      ["漢".repeat(42), "漢".repeat(42), false],
+      ["漢".repeat(43), "漢".repeat(42), true],
+      ["🚀".repeat(33), "🚀".repeat(32), true],
+      ["x".repeat(129), "x".repeat(128), true],
+    ]) {
+      const config = { general: { language }, discord: { enabled: true, details, show_elapsed: false, show_image: false } };
+      const original = JSON.stringify(config);
+      const fixture = await host(async path => ({ ok: true, json: async () => path === "/api/rdsh-discord"
+        ? { ok: true, language: presenceLanguage, state: "connected", running_agents: 0,
+          published_activity: { details: preview, state: idle, status_display_type: 2 } }
+        : { config } }), browser);
+      fixture.render(); await fixture.settle(); const tree = fixture.render();
+      assert.ok(find(tree, node => node.children.includes(preview)), "actual client wireText preview");
+      assert.equal(Boolean(find(tree, node => node.tag === "p" && node.children.includes(fixture.copy(language, "truncated")))), warning,
+        `${new TextEncoder().encode(details).length} UTF-8 bytes`);
+      assert.ok(find(tree, node => node.props.role === "status" && node.children.includes(fixture.copy(language, "reflected"))));
+      assert.equal(JSON.stringify(config), original, "rendering must preserve the saved body");
+      assert.ok(new TextEncoder().encode(preview).length <= 128);
+    }
   });
 }
