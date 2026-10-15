@@ -5,6 +5,12 @@ const validators=[new Ajv({strict:false,allErrors:false,validateFormats:false}),
 export const TURN_SCHEMA={type:'object',additionalProperties:false,required:['version','text','toolCalls'],properties:{version:{const:1},text:{type:'string',maxLength:1048576},toolCalls:{type:'array',maxItems:8,items:{type:'object',additionalProperties:false,required:['id','name','arguments'],properties:{id:{type:'string',minLength:1,maxLength:160},name:{type:'string',minLength:1,maxLength:160},arguments:{type:'object'}}}}}};
 const validateTurn=validators[0].compile(TURN_SCHEMA);
 export class JsonTurnError extends Error {constructor(message){super(message);this.code='INVALID_JSON_TURN';}}
+export function assertSupportedGenerationOptions(options={}) {
+ for(const name of ['temperature','maxTokens','stop'])if(options[name]!==undefined){
+  const error=new Error(`Official SDK bridges do not support generation option "${name}"`);
+  error.code='UNSUPPORTED_GENERATION_OPTION';throw error;
+ }
+}
 function schemaFor(tool){return tool.parameters??tool.inputSchema??{type:'object',properties:{}};}
 export function parseTurnResponse(text,tools=[]) {
  if(typeof text!=='string'||Buffer.byteLength(text)>LIMIT)throw new JsonTurnError('SDK response is missing or exceeds the size limit');
