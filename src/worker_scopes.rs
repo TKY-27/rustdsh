@@ -1,3 +1,9 @@
+//! Pure worker-scope validation and batched policy evaluation from stdin.
+//!
+//! Canonical declaration codes, path ordering and JSON records match the
+//! dashboard engine. Only CLI-owned diagnostics use the resolved locale;
+//! parser and operating-system reasons remain unchanged in their error chain.
+use crate::locale::{self, Locale};
 use anyhow::{Context, Result};
 use serde_json::{Map, Value};
 use std::io::{self, Read, Write};
@@ -5,93 +11,121 @@ use std::io::{self, Read, Write};
 const MAX_INPUT_BYTES: usize = 2 * 1024 * 1024;
 const MAX_POLICY_BATCH_ITEMS: usize = 4096;
 
-pub fn cmd_validate() -> Result<()> {
-    let input = read_input("worker scope declarations")?;
-    let values = input
-        .as_array()
-        .context("worker scope declarations must be a JSON array")?;
+/// Validate stdin declarations without reading settings or changing JSON values.
+pub fn cmd_validate(locale: Locale) -> Result<()> {
+    let input = read_input("worker scope declarations", locale)?;
+    let values = input.as_array().context(locale::diagnostic(
+        locale,
+        "worker scope declarations must be a JSON array",
+    ))?;
     let output: Vec<Value> = values.iter().map(declaration_result).collect();
     let stdout = io::stdout();
     let mut stdout = stdout.lock();
-    serde_json::to_writer(&mut stdout, &output)?;
-    writeln!(stdout)?;
+    serde_json::to_writer(&mut stdout, &output)
+        .context(locale::diagnostic(locale, "serialize worker scope results"))?;
+    writeln!(stdout).context(locale::diagnostic(locale, "write worker scope results"))?;
     Ok(())
 }
 
-pub fn cmd_policy() -> Result<()> {
-    let input = read_input("worker scope policy batch")?;
-    let object = input
-        .as_object()
-        .context("worker scope policy batch must be a JSON object")?;
+/// Evaluate a stdin policy batch without changing canonical policy results.
+pub fn cmd_policy(locale: Locale) -> Result<()> {
+    let input = read_input("worker scope policy batch", locale)?;
+    let object = input.as_object().context(locale::diagnostic(
+        locale,
+        "worker scope policy batch must be a JSON object",
+    ))?;
     const ALLOWED: &[&str] = &["write_checks", "intersections", "shared_files"];
     if object.keys().any(|key| !ALLOWED.contains(&key.as_str())) {
-        anyhow::bail!("unknown worker scope policy batch field");
+        anyhow::bail!(
+            locale::diagnostic(locale, "unknown worker scope policy batch field").to_string()
+        );
     }
 
     let mut write_checks = Vec::new();
-    for check in optional_array(object, "write_checks")? {
-        let check = check
-            .as_object()
-            .context("write check must be a JSON object")?;
+    for check in optional_array(object, "write_checks", locale)? {
+        let check = check.as_object().context(locale::diagnostic(
+            locale,
+            "write check must be a JSON object",
+        ))?;
         if check
             .keys()
             .any(|key| !matches!(key.as_str(), "scope" | "files"))
         {
-            anyhow::bail!("unknown write check field");
+            anyhow::bail!(locale::diagnostic(locale, "unknown write check field").to_string());
         }
-        let scope = declaration(check.get("scope").context("write check is missing scope")?)
-            .map_err(anyhow::Error::msg)
-            .context("invalid write check scope")?;
+        let scope = declaration(
+            check
+                .get("scope")
+                .context(locale::diagnostic(locale, "write check is missing scope"))?,
+        )
+        .map_err(anyhow::Error::msg)
+        .context(locale::diagnostic(locale, "invalid write check scope"))?;
         let files = check
             .get("files")
             .and_then(Value::as_array)
-            .context("write check files must be a JSON array")?;
+            .context(locale::diagnostic(
+                locale,
+                "write check files must be a JSON array",
+            ))?;
         let mut results = Vec::with_capacity(files.len());
         for file in files {
-            let file = file.as_str().context("write check file must be a string")?;
+            let file = file.as_str().context(locale::diagnostic(
+                locale,
+                "write check file must be a string",
+            ))?;
             results.push(may_write(&scope, file));
         }
         write_checks.push(results);
         if write_checks.len() > MAX_POLICY_BATCH_ITEMS {
-            anyhow::bail!("too many worker scope write checks");
+            anyhow::bail!(
+                locale::diagnostic(locale, "too many worker scope write checks").to_string()
+            );
         }
     }
 
     let mut intersections = Vec::new();
-    for pair in optional_array(object, "intersections")? {
-        let pair = pair
-            .as_object()
-            .context("scope intersection must be a JSON object")?;
+    for pair in optional_array(object, "intersections", locale)? {
+        let pair = pair.as_object().context(locale::diagnostic(
+            locale,
+            "scope intersection must be a JSON object",
+        ))?;
         if pair
             .keys()
             .any(|key| !matches!(key.as_str(), "left" | "right"))
         {
-            anyhow::bail!("unknown scope intersection field");
+            anyhow::bail!(
+                locale::diagnostic(locale, "unknown scope intersection field").to_string()
+            );
         }
-        let left = declaration(
-            pair.get("left")
-                .context("scope intersection is missing left")?,
-        )
+        let left = declaration(pair.get("left").context(locale::diagnostic(
+            locale,
+            "scope intersection is missing left",
+        ))?)
         .map_err(anyhow::Error::msg)
-        .context("invalid left scope")?;
-        let right = declaration(
-            pair.get("right")
-                .context("scope intersection is missing right")?,
-        )
+        .context(locale::diagnostic(locale, "invalid left scope"))?;
+        let right = declaration(pair.get("right").context(locale::diagnostic(
+            locale,
+            "scope intersection is missing right",
+        ))?)
         .map_err(anyhow::Error::msg)
-        .context("invalid right scope")?;
+        .context(locale::diagnostic(locale, "invalid right scope"))?;
         intersections.push(scope_intersections(&left, &right));
         if intersections.len() > MAX_POLICY_BATCH_ITEMS {
-            anyhow::bail!("too many worker scope intersections");
+            anyhow::bail!(
+                locale::diagnostic(locale, "too many worker scope intersections").to_string()
+            );
         }
     }
 
     let mut shared_files = Vec::new();
-    for file in optional_array(object, "shared_files")? {
-        let file = file.as_str().context("shared file path must be a string")?;
+    for file in optional_array(object, "shared_files", locale)? {
+        let file = file.as_str().context(locale::diagnostic(
+            locale,
+            "shared file path must be a string",
+        ))?;
         shared_files.push(is_shared_file(file));
         if shared_files.len() > MAX_POLICY_BATCH_ITEMS {
-            anyhow::bail!("too many shared file checks");
+            anyhow::bail!(locale::diagnostic(locale, "too many shared file checks").to_string());
         }
     }
 
@@ -102,29 +136,40 @@ pub fn cmd_policy() -> Result<()> {
     });
     let stdout = io::stdout();
     let mut stdout = stdout.lock();
-    serde_json::to_writer(&mut stdout, &output)?;
-    writeln!(stdout)?;
+    serde_json::to_writer(&mut stdout, &output)
+        .context(locale::diagnostic(locale, "serialize worker scope results"))?;
+    writeln!(stdout).context(locale::diagnostic(locale, "write worker scope results"))?;
     Ok(())
 }
 
-fn read_input(context: &str) -> Result<Value> {
+fn read_input(context: &str, locale: Locale) -> Result<Value> {
     let mut input = Vec::new();
     io::stdin()
         .take((MAX_INPUT_BYTES + 1) as u64)
         .read_to_end(&mut input)
-        .with_context(|| format!("read {context}"))?;
+        .with_context(|| locale::diagnostic(locale, &format!("read {context}")).to_owned())?;
     if input.len() > MAX_INPUT_BYTES {
-        anyhow::bail!("worker scope input exceeds 2 MiB");
+        anyhow::bail!(locale::diagnostic(locale, "worker scope input exceeds 2 MiB").to_string());
     }
-    serde_json::from_slice(&input).with_context(|| format!("parse {context}"))
+    serde_json::from_slice(&input)
+        .with_context(|| locale::diagnostic(locale, &format!("parse {context}")).to_owned())
 }
 
-fn optional_array<'a>(object: &'a Map<String, Value>, key: &str) -> Result<&'a [Value]> {
+fn optional_array<'a>(
+    object: &'a Map<String, Value>,
+    key: &str,
+    locale: Locale,
+) -> Result<&'a [Value]> {
     match object.get(key) {
         None | Some(Value::Null) => Ok(&[]),
         Some(Value::Array(values)) if values.len() <= MAX_POLICY_BATCH_ITEMS => Ok(values),
-        Some(Value::Array(_)) => anyhow::bail!("too many values in {key}"),
-        Some(_) => anyhow::bail!("{key} must be a JSON array"),
+        Some(Value::Array(_)) => {
+            anyhow::bail!("{} {key}", locale::diagnostic(locale, "too many values in"))
+        }
+        Some(_) => anyhow::bail!(
+            "{key}{}",
+            locale::diagnostic(locale, " must be a JSON array")
+        ),
     }
 }
 

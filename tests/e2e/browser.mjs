@@ -12,9 +12,16 @@ const repo=path.resolve(import.meta.dirname,'../..');
 const {chromium}=await import(process.env.RDSH_PLAYWRIGHT_MODULE || 'playwright');
 const binary=path.resolve(repo,process.env.RDSH_E2E_BIN || path.join(repo,'target', 'debug', process.platform==='win32'?'rdsh.exe':'rdsh'));
 const output=path.resolve(process.env.RDSH_E2E_OUTPUT || path.join(repo,'target/e2e'));
+const language=process.env.RDSH_E2E_LANGUAGE || 'ja';
+const copies={
+ ja:{connect:'接続',enabled:'有効',estimate:'推定する',prune:'prune実行',nativeTitle:'rdsh ダッシュボード',projectTitle:'プロジェクトダッシュボード',answer:'回答を返す',empty:'未回答の質問はありません',tokens:'トークン',projects:'プロジェクト'},
+ en:{connect:'Connect',enabled:'on',estimate:'Estimate',prune:'Run prune',nativeTitle:'rdsh dashboard',projectTitle:'PROJECT DASHBOARD',answer:'Submit answer',empty:'No unanswered questions',tokens:'tokens',projects:'projects'},
+ 'zh-CN':{connect:'连接',enabled:'已启用',estimate:'估算',prune:'执行裁剪',nativeTitle:'rdsh 仪表板',projectTitle:'项目仪表板',answer:'提交回答',empty:'没有待回答的问题',tokens:'令牌',projects:'个项目'},
+};
+assert.ok(Object.hasOwn(copies,language));const copy=copies[language];
 const root=await mkdtemp(path.join(tmpdir(),'rdsh-browser-e2e-'));
 const env=Object.fromEntries(['PATH','SystemRoot','WINDIR','COMSPEC','TEMP','TMP'].filter(k=>process.env[k]).map(k=>[k,process.env[k]]));
-Object.assign(env,{HOME:root,USERPROFILE:root,DSH_HOME:path.join(root,'dsh'),XDG_CACHE_HOME:path.join(root,'cache'),XDG_CONFIG_HOME:path.join(root,'config'),XDG_DATA_HOME:path.join(root,'data'),RDSH_ORIG_BIN:path.join(root,'no-original'),RDSH_DASHBOARD_HOME:path.join(root,'projects-state')});
+Object.assign(env,{RDSH_LANG:language,HOME:root,USERPROFILE:root,DSH_HOME:path.join(root,'dsh'),XDG_CACHE_HOME:path.join(root,'cache'),XDG_CONFIG_HOME:path.join(root,'config'),XDG_DATA_HOME:path.join(root,'data'),RDSH_ORIG_BIN:path.join(root,'no-original'),RDSH_DASHBOARD_HOME:path.join(root,'projects-state')});
 await mkdir(env.DSH_HOME);await mkdir(output,{recursive:true});
 let sourceSha=process.env.RDSH_E2E_SOURCE_SHA||null;
 if(!sourceSha){try{sourceSha=execFileSync('git',['rev-parse','HEAD'],{cwd:repo,encoding:'utf8',stdio:['ignore','pipe','ignore']}).trim();}catch{sourceSha=null;}}
@@ -32,27 +39,36 @@ async function stop(child){if(child.exitCode!==null)return;await new Promise(res
 async function pageFor(browser,url){const context=await browser.newContext({viewport:report.viewports[0],locale:'ja-JP'});contexts.push(context);const page=await context.newPage();page.on('pageerror',e=>report.page_errors.push(e.message));page.on('console',msg=>{if(msg.type()==='error'){const error={case_id:activeQaCase,text:msg.text(),path:msg.location().url?new URL(msg.location().url).pathname:''};report[classifyBrowserConsoleError(error)==='expected'?'expected_console_errors':'console_errors'].push(error);}});await page.goto(url);return page;}
 async function screenshot(page,name){await page.evaluate(async()=>{window.scrollTo(0,0);await document.fonts.ready;await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));});await page.screenshot({path:path.join(output,name+'.png'),fullPage:false});}
 async function freePort(){const server=net.createServer();await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(0,'127.0.0.1',resolve);});const port=server.address().port;await new Promise(resolve=>server.close(resolve));return String(port);}
-async function check(page,title){assert.match(await page.title(),title);assert.ok((await page.locator('body').innerText()).trim().length>100);assert.equal(await page.locator('vite-error-overlay,nextjs-portal').count(),0);assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth <= innerWidth+1),'page overflow');}
+async function check(page,title){assert.match(await page.title(),title);assert.ok((await page.locator('body').innerText()).trim().length>100);assert.equal(await page.locator('html').getAttribute('lang'),language);assert.equal(await page.locator('vite-error-overlay,nextjs-portal').count(),0);assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth <= innerWidth+1),'page overflow');}
 const browser=await chromium.launch({headless:true,...(process.env.RDSH_CHROME_PATH?{executablePath:process.env.RDSH_CHROME_PATH}:{})});
 report.environment.browser=browser.version();
 try{
- const setup=await launch(binary,['setup','--web','--port','0'],/(http:\/\/127\.0\.0\.1:\d+\/)[\s\S]*?token handoff file: ([^\r\n]+)/);handoffFiles.push(setup.tokenFile);assert.equal(new URL(setup.url).hash,'');
- const page=await pageFor(browser,setup.url);await page.locator('#token-box').waitFor({state:'visible'});await page.locator('#setup-token').fill((await readFile(setup.tokenFile,'utf8')).trim());await page.getByRole('button',{name:'接続'}).click();await page.locator('#extras .row').first().waitFor();await check(page,/rdsh setup/);
+ const setup=await launch(binary,['setup','--web','--port','0'],/(http:\/\/127\.0\.0\.1:\d+\/)[\s\S]*?(?:token handoff file|トークン引き渡しファイル|令牌交接文件): ([^\r\n]+)/);handoffFiles.push(setup.tokenFile);assert.equal(new URL(setup.url).hash,'');
+ const page=await pageFor(browser,setup.url);await page.locator('#token-box').waitFor({state:'visible'});await page.locator('#setup-token').fill((await readFile(setup.tokenFile,'utf8')).trim());await page.getByRole('button',{name:copy.connect}).click();await page.locator('#extras .row').first().waitFor();await check(page,/rdsh setup/);
  assert.equal(new URL(page.url()).hash,'');await page.locator('#extras .row').filter({hasText:'rdsh serve'}).click();
- await page.waitForFunction(()=>document.querySelector('#extras .row')?.textContent.includes('有効'));
+ await page.waitForFunction(value=>document.querySelector('#extras .row')?.textContent.includes(value),copy.enabled);
  assert.deepEqual(JSON.parse(await readFile(path.join(env.DSH_HOME,'rdsh.json'),'utf8')).extras.enable,['serve']);
- await page.reload();await page.waitForFunction(()=>document.querySelector('#extras .row')?.textContent.includes('有効'));
+ await page.reload();await page.waitForFunction(value=>document.querySelector('#extras .row')?.textContent.includes(value),copy.enabled);
  await screenshot(page,'setup-desktop');await page.setViewportSize(report.viewports[1]);await check(page,/rdsh setup/);await screenshot(page,'setup-mobile');
- await page.close();await stop(setup.child);await rm(setup.tokenFile,{force:true});report.flows.push('setup: protected token handoff -> Extras enable -> file readback -> reload retained');
+ const sharingFile=path.join(env.DSH_HOME,'rdsh-auth-sharing.json');await writeFile(sharingFile,'{broken policy');await page.evaluate(()=>load());
+ const policyCopy={en:'invalid credential sharing policy; imports are disabled','zh-CN':'凭据共享策略无效；已禁用导入',ja:'認証情報の共有ポリシーが無効です。インポートは無効です'}[language];
+ assert.ok((await page.locator('#sharehint').innerText()).includes(policyCopy));
+ const rawPolicy=await page.evaluate(async()=>{const response=await fetch('/api/status',{headers:{'X-RDSH-Token':setupToken}});return(await response.json()).sharing.policy_error;});
+ assert.equal(rawPolicy,'invalid credential sharing policy; imports are disabled');assert.equal(await readFile(sharingFile,'utf8'),'{broken policy');await screenshot(page,'setup-policy-error-mobile');await rm(sharingFile);await page.evaluate(()=>load());assert.ok(!(await page.locator('#sharehint').innerText()).includes(policyCopy));
+ await page.close();await stop(setup.child);await rm(setup.tokenFile,{force:true});report.flows.push('setup: protected token handoff -> Extras enable -> file readback -> reload retained -> corrupt sharing policy localized with canonical API JSON -> repair');
 
  const session=path.join(env.DSH_HOME,'sessions','example','session-one');await mkdir(session,{recursive:true});await writeFile(path.join(session,'messages.jsonl'),'synthetic session');
  const skills=path.join(env.DSH_HOME,'skills','e2e-skill');await mkdir(skills,{recursive:true});await writeFile(path.join(skills,'SKILL.md'),'# Synthetic skill');
- const serve=await launch(binary,['serve','--port','0'],/(http:\/\/127\.0\.0\.1:\d+\/)[\s\S]*?token handoff file: ([^\r\n]+)/);handoffFiles.push(serve.tokenFile);assert.equal(new URL(serve.url).hash,'');
- const native=await pageFor(browser,serve.url);await native.locator('#auth').waitFor({state:'visible'});await native.locator('#dashboard-token').fill((await readFile(serve.tokenFile,'utf8')).trim());await native.getByRole('button',{name:'接続'}).click();await native.locator('#sess').filter({hasText:'session-one'}).waitFor();await check(native,/rdsh dashboard/);
- await native.locator('#ttext').fill('abcd日本語');await native.getByRole('button',{name:'推定する',exact:true}).click();await native.waitForFunction(()=>document.querySelector('#tout').textContent.includes('4'));
- await native.locator('#ptext').fill('START\n'+'日本語 context\n'.repeat(1000)+'END');await native.locator('#pmax').fill('100');await native.getByRole('button',{name:'prune実行',exact:true}).click();await native.locator('#pout').filter({hasText:'rdsh pruned'}).waitFor();
+ const serve=await launch(binary,['serve','--port','0'],/(http:\/\/127\.0\.0\.1:\d+\/)[\s\S]*?(?:token handoff file|トークン引き渡しファイル|令牌交接文件): ([^\r\n]+)/);handoffFiles.push(serve.tokenFile);assert.equal(new URL(serve.url).hash,'');
+ const native=await pageFor(browser,serve.url);await native.locator('#auth').waitFor({state:'visible'});await native.locator('#dashboard-token').fill((await readFile(serve.tokenFile,'utf8')).trim());await native.getByRole('button',{name:copy.connect}).click();await native.locator('#sess').filter({hasText:'session-one'}).waitFor();await check(native,new RegExp(copy.nativeTitle));
+ await native.locator('#ttext').fill('abcd日本語');await native.getByRole('button',{name:copy.estimate,exact:true}).click();await native.waitForFunction(()=>document.querySelector('#tout').textContent.includes('4'));
+ assert.ok((await native.locator('#tout').innerText()).includes(copy.tokens));
+ assert.ok((await native.locator('#sess').innerText()).includes(copy.projects));
+ assert.equal(await native.evaluate(()=>formatSessionTime('2026-10-14 00:01')),new Intl.DateTimeFormat(language,{timeZone:'UTC',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',timeZoneName:'short'}).format(new Date('2026-10-14T00:01:00Z')));
+ assert.equal(await native.evaluate(()=>formatSessionTime('-')),'-');
+ await native.locator('#ptext').fill('START\n'+'日本語 context\n'.repeat(1000)+'END');await native.locator('#pmax').fill('100');await native.getByRole('button',{name:copy.prune,exact:true}).click();await native.locator('#pout').filter({hasText:'rdsh pruned'}).waitFor();
  assert.ok((await native.locator('#pout').innerText()).includes('START'));assert.ok((await native.locator('#pout').innerText()).includes('END'));
- await screenshot(native,'native-desktop');await native.reload();await native.locator('#sess').filter({hasText:'session-one'}).waitFor();await native.setViewportSize(report.viewports[1]);await check(native,/rdsh dashboard/);await screenshot(native,'native-mobile');
+ await screenshot(native,'native-desktop');await native.reload();await native.locator('#sess').filter({hasText:'session-one'}).waitFor();await native.setViewportSize(report.viewports[1]);await check(native,new RegExp(copy.nativeTitle));await screenshot(native,'native-mobile');
  await native.close();await stop(serve.child);await rm(serve.tokenFile,{force:true});report.flows.push('native serve: protected token handoff -> tokens -> prune -> sessions -> reload retained');
 
  const {identity}=await import(pathToFileURL(path.join(repo,'dashboard/state.mjs')));
@@ -131,26 +147,26 @@ try{
  assert.equal(await observedCli.locator('#observed-cli-form').count(),1,'the observation registration form should remain available');
  assert.equal(await observedCli.locator('#observed-cli-refresh').count(),1,'the observation refresh action should remain available');
  await observedCli.locator('summary').click();
- await observedCli.locator('#observed-cli-list').getByText('登録済みのCLIはありません。',{exact:true}).waitFor();
+ await observedCli.locator('#observed-cli-list').getByText(catalog[language]['observed.empty'],{exact:true}).waitFor();
  assert.equal(await observedCli.locator('#observed-cli-task option[value="T1"]').count(),1,'the panel should retain its task selector integration');
  const config=await projectPage.evaluate(async()=>{const token=sessionStorage.getItem('rdsh_project_browser_token');const response=await fetch('/api/config',{headers:{'x-rdsh-browser-token':token}});return response.json();});
  assert.equal(typeof config.project?.id,'string');
  const layoutKey=`rdsh:workspace-layout:v1:${encodeURIComponent(config.project.id)}`;
  assert.equal(await projectPage.locator('#workspace-grid').getAttribute('data-layout'),'3');
- await projectPage.getByLabel('2列').check();
+ await projectPage.getByLabel(catalog[language]['workspace.two']).check();
  assert.equal(await projectPage.locator('#workspace-grid').getAttribute('data-layout'),'2');
  assert.equal(await projectPage.evaluate(key=>localStorage.getItem(key),layoutKey),'2');
  await projectPage.evaluate(()=>localStorage.setItem('rdsh:workspace-layout:v1:another-project','1'));
  await projectPage.reload();await projectPage.locator('#question-Q1 textarea').waitFor();
  assert.equal(await projectPage.locator('#workspace-grid').getAttribute('data-layout'),'2','the layout should restore for the same project');
  await projectPage.locator('#workspace-grid').evaluate(e=>{const panes=[...e.querySelectorAll('.workspace-pane')];return panes.every(p=>p.id&&p.getAttribute('aria-labelledby')&&document.getElementById(p.getAttribute('aria-labelledby')))}).then(value=>assert.equal(value,true));
- const paneLink=projectPage.getByRole('navigation',{name:'ワークスペースのペインへ移動'}).getByRole('link',{name:'タスクと作業'});
+ const paneLink=projectPage.getByRole('navigation',{name:catalog[language]['workspace.navigate']}).getByRole('link',{name:catalog[language]['workspace.work']});
  await paneLink.focus();await projectPage.keyboard.press('Enter');
  assert.equal(await projectPage.evaluate(()=>document.activeElement.id),'workspace-work','keyboard pane navigation should focus its destination');
  await projectPage.setViewportSize(report.viewports[1]);
  const mobileColumns=await projectPage.locator('#workspace-grid').evaluate(e=>new Set([...e.querySelectorAll('.workspace-pane')].map(p=>Math.round(p.getBoundingClientRect().left))).size);
  assert.equal(mobileColumns,1,'narrow layouts should use one column');
- await check(projectPage,/dashboard/i);
+ await check(projectPage,new RegExp(copy.projectTitle));
  await projectPage.setViewportSize(report.viewports[0]);
  await projectPage.locator('#device-detail').evaluate(e=>e.open=true);
  await projectPage.locator('#device-name').fill('E2E viewer');await projectPage.locator('#device-create').click();

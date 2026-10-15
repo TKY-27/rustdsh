@@ -166,55 +166,93 @@ fn valid_tool_input(tool: &str, input: &serde_json::Map<String, serde_json::Valu
     }
 }
 
-fn parse_policy(bytes: &[u8]) -> anyhow::Result<GuardPolicy> {
-    anyhow::ensure!(bytes.len() <= 64 * 1024, "policy too large");
-    let value: serde_json::Value = serde_json::from_slice(bytes)?;
+fn parse_policy(bytes: &[u8], locale: crate::locale::Locale) -> anyhow::Result<GuardPolicy> {
+    anyhow::ensure!(
+        bytes.len() <= 64 * 1024,
+        "{}",
+        policy_reason(locale, "policy too large")
+    );
+    let value: serde_json::Value = serde_json::from_slice(bytes).map_err(|error| {
+        anyhow::anyhow!("{}: {error}", policy_reason(locale, "invalid policy JSON"))
+    })?;
     anyhow::ensure!(
         exact_keys(&value, &["schema", "rules"]),
-        "invalid policy schema"
+        "{}",
+        policy_reason(locale, "invalid policy schema")
     );
     anyhow::ensure!(
         value["schema"].as_u64() == Some(1),
-        "unsupported policy schema"
+        "{}",
+        policy_reason(locale, "unsupported policy schema")
     );
     let rules = value["rules"]
         .as_array()
-        .ok_or_else(|| anyhow::anyhow!("invalid policy rules"))?;
-    anyhow::ensure!(rules.len() <= 128, "too many policy rules");
+        .ok_or_else(|| anyhow::anyhow!("{}", policy_reason(locale, "invalid policy rules")))?;
+    anyhow::ensure!(
+        rules.len() <= 128,
+        "{}",
+        policy_reason(locale, "too many policy rules")
+    );
     let mut output = Vec::with_capacity(rules.len());
     let mut ids = std::collections::HashSet::new();
     for rule in rules {
         anyhow::ensure!(
             exact_keys(rule, &["id", "tool", "access", "roots"]),
-            "invalid policy rule"
+            "{}",
+            policy_reason(locale, "invalid policy rule")
         );
         let id = rule["id"]
             .as_str()
             .filter(|id| safe_rule_id(id))
-            .ok_or_else(|| anyhow::anyhow!("invalid policy rule id"))?;
-        anyhow::ensure!(ids.insert(id.to_owned()), "duplicate policy rule id");
+            .ok_or_else(|| {
+                anyhow::anyhow!("{}", policy_reason(locale, "invalid policy rule id"))
+            })?;
+        anyhow::ensure!(
+            ids.insert(id.to_owned()),
+            "{}",
+            policy_reason(locale, "duplicate policy rule id")
+        );
         let tool = rule["tool"]
             .as_str()
-            .ok_or_else(|| anyhow::anyhow!("invalid policy tool"))?;
-        let access = tool_access(tool).ok_or_else(|| anyhow::anyhow!("unsupported policy tool"))?;
+            .ok_or_else(|| anyhow::anyhow!("{}", policy_reason(locale, "invalid policy tool")))?;
+        let access = tool_access(tool).ok_or_else(|| {
+            anyhow::anyhow!("{}", policy_reason(locale, "unsupported policy tool"))
+        })?;
         anyhow::ensure!(
             rule["access"].as_str() == Some(access),
-            "policy access mismatch"
+            "{}",
+            policy_reason(locale, "policy access mismatch")
         );
         let roots = rule["roots"]
             .as_array()
             .filter(|roots| !roots.is_empty() && roots.len() <= 32)
-            .ok_or_else(|| anyhow::anyhow!("invalid policy roots"))?;
+            .ok_or_else(|| anyhow::anyhow!("{}", policy_reason(locale, "invalid policy roots")))?;
         let mut canonical_roots = Vec::with_capacity(roots.len());
         for root in roots {
             let root = root
                 .as_str()
                 .filter(|root| root.len() <= 4096)
-                .ok_or_else(|| anyhow::anyhow!("invalid policy root"))?;
+                .ok_or_else(|| {
+                    anyhow::anyhow!("{}", policy_reason(locale, "invalid policy root"))
+                })?;
             let root = PathBuf::from(root);
-            anyhow::ensure!(root.is_absolute(), "policy roots must be absolute");
-            let root = std::fs::canonicalize(root)?;
-            anyhow::ensure!(root.is_dir(), "policy root must be a directory");
+            anyhow::ensure!(
+                root.is_absolute(),
+                "{}",
+                policy_reason(locale, "policy roots must be absolute")
+            );
+            let root = std::fs::canonicalize(&root).map_err(|error| {
+                anyhow::anyhow!(
+                    "{} {}: {error}",
+                    policy_reason(locale, "cannot resolve policy root"),
+                    root.display()
+                )
+            })?;
+            anyhow::ensure!(
+                root.is_dir(),
+                "{}",
+                policy_reason(locale, "policy root must be a directory")
+            );
             if !canonical_roots.contains(&root) {
                 canonical_roots.push(root);
             }
@@ -229,13 +267,35 @@ fn parse_policy(bytes: &[u8]) -> anyhow::Result<GuardPolicy> {
     Ok(GuardPolicy { rules: output })
 }
 
-fn read_policy(path: &str) -> anyhow::Result<GuardPolicy> {
+fn read_policy(path: &str, locale: crate::locale::Locale) -> anyhow::Result<GuardPolicy> {
     use std::io::Read;
-    let file = std::fs::File::open(path)?;
-    anyhow::ensure!(file.metadata()?.len() <= 64 * 1024, "policy too large");
+    let file = std::fs::File::open(path).map_err(|error| {
+        anyhow::anyhow!(
+            "{} {path}: {error}",
+            policy_reason(locale, "cannot read policy file")
+        )
+    })?;
+    let metadata = file.metadata().map_err(|error| {
+        anyhow::anyhow!(
+            "{} {path}: {error}",
+            policy_reason(locale, "cannot inspect policy file")
+        )
+    })?;
+    anyhow::ensure!(
+        metadata.len() <= 64 * 1024,
+        "{}",
+        policy_reason(locale, "policy too large")
+    );
     let mut bytes = Vec::new();
-    file.take(64 * 1024 + 1).read_to_end(&mut bytes)?;
-    parse_policy(&bytes)
+    file.take(64 * 1024 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| {
+            anyhow::anyhow!(
+                "{} {path}: {error}",
+                policy_reason(locale, "cannot read policy file")
+            )
+        })?;
+    parse_policy(&bytes, locale)
 }
 
 fn resolve_target(target: &str, cwd: &Path, access: &str) -> Result<PathBuf, &'static str> {
@@ -328,7 +388,7 @@ fn classify_operation(raw: &str, policy: &GuardPolicy) -> PolicyDecision {
     }
 }
 
-fn emit_policy_decision(decision: PolicyDecision, json_out: bool) {
+fn emit_policy_decision(decision: PolicyDecision, json_out: bool, locale: crate::locale::Locale) {
     match decision {
         PolicyDecision::Allow(rule_id) => {
             if json_out {
@@ -342,12 +402,17 @@ fn emit_policy_decision(decision: PolicyDecision, json_out: bool) {
                 );
             }
         }
-        PolicyDecision::Deny(reason) => emit_policy_block("deny", reason, json_out),
-        PolicyDecision::Unknown(reason) => emit_policy_block("unknown", reason, json_out),
+        PolicyDecision::Deny(reason) => emit_policy_block("deny", reason, json_out, locale),
+        PolicyDecision::Unknown(reason) => emit_policy_block("unknown", reason, json_out, locale),
     }
 }
 
-fn emit_policy_block(classification: &str, reason: &str, json_out: bool) {
+fn emit_policy_block(
+    classification: &str,
+    reason: &str,
+    json_out: bool,
+    locale: crate::locale::Locale,
+) {
     if json_out {
         println!(
             "{}",
@@ -358,8 +423,115 @@ fn emit_policy_block(classification: &str, reason: &str, json_out: bool) {
             })
         );
     } else {
-        eprintln!("rdsh guard: {reason}");
+        eprintln!(
+            "{}: {}",
+            crate::locale::ui_message(locale, crate::locale::UiMessage::Guard),
+            policy_reason(locale, reason)
+        );
         std::process::exit(2);
+    }
+}
+
+fn policy_reason(locale: crate::locale::Locale, reason: &str) -> &str {
+    if locale == crate::locale::Locale::English {
+        return reason;
+    }
+    match (locale, reason) {
+        (crate::locale::Locale::Chinese, "policy_unavailable") => "策略不可用",
+        (crate::locale::Locale::Japanese, "policy_unavailable") => "ポリシーを利用できません",
+        (crate::locale::Locale::Chinese, "policy too large") => "策略过大",
+        (crate::locale::Locale::Japanese, "policy too large") => "ポリシーが大きすぎます",
+        (crate::locale::Locale::Chinese, "invalid policy JSON") => "无效的策略 JSON",
+        (crate::locale::Locale::Japanese, "invalid policy JSON") => "無効なポリシー JSON",
+        (crate::locale::Locale::Chinese, "invalid policy schema") => "无效的策略架构",
+        (crate::locale::Locale::Japanese, "invalid policy schema") => "無効なポリシースキーマ",
+        (crate::locale::Locale::Chinese, "unsupported policy schema") => "不支持的策略架构",
+        (crate::locale::Locale::Japanese, "unsupported policy schema") => {
+            "未対応のポリシースキーマ"
+        }
+        (crate::locale::Locale::Chinese, "invalid policy rules") => "无效的策略规则",
+        (crate::locale::Locale::Japanese, "invalid policy rules") => "無効なポリシールール",
+        (crate::locale::Locale::Chinese, "too many policy rules") => "策略规则过多",
+        (crate::locale::Locale::Japanese, "too many policy rules") => "ポリシールールが多すぎます",
+        (crate::locale::Locale::Chinese, "invalid policy rule") => "无效的策略规则",
+        (crate::locale::Locale::Japanese, "invalid policy rule") => "無効なポリシールール",
+        (crate::locale::Locale::Chinese, "invalid policy rule id") => "无效的策略规则 ID",
+        (crate::locale::Locale::Japanese, "invalid policy rule id") => "無効なポリシールール ID",
+        (crate::locale::Locale::Chinese, "duplicate policy rule id") => "重复的策略规则 ID",
+        (crate::locale::Locale::Japanese, "duplicate policy rule id") => {
+            "重複したポリシールール ID"
+        }
+        (crate::locale::Locale::Chinese, "invalid policy tool") => "无效的策略工具",
+        (crate::locale::Locale::Japanese, "invalid policy tool") => "無効なポリシーツール",
+        (crate::locale::Locale::Chinese, "unsupported policy tool") => "不支持的策略工具",
+        (crate::locale::Locale::Japanese, "unsupported policy tool") => "未対応のポリシーツール",
+        (crate::locale::Locale::Chinese, "policy access mismatch") => "策略访问权限不匹配",
+        (crate::locale::Locale::Japanese, "policy access mismatch") => {
+            "ポリシーアクセスが一致しません"
+        }
+        (crate::locale::Locale::Chinese, "invalid policy roots") => "无效的策略根目录",
+        (crate::locale::Locale::Japanese, "invalid policy roots") => "無効なポリシールート",
+        (crate::locale::Locale::Chinese, "invalid policy root") => "无效的策略根目录",
+        (crate::locale::Locale::Japanese, "invalid policy root") => "無効なポリシールート",
+        (crate::locale::Locale::Chinese, "policy roots must be absolute") => {
+            "策略根目录必须为绝对路径"
+        }
+        (crate::locale::Locale::Japanese, "policy roots must be absolute") => {
+            "ポリシールートは絶対パスである必要があります"
+        }
+        (crate::locale::Locale::Chinese, "cannot resolve policy root") => "无法解析策略根目录",
+        (crate::locale::Locale::Japanese, "cannot resolve policy root") => {
+            "ポリシールートを解決できません"
+        }
+        (crate::locale::Locale::Chinese, "policy root must be a directory") => {
+            "策略根目录必须是目录"
+        }
+        (crate::locale::Locale::Japanese, "policy root must be a directory") => {
+            "ポリシールートはディレクトリである必要があります"
+        }
+        (crate::locale::Locale::Chinese, "cannot read policy file") => "无法读取策略文件",
+        (crate::locale::Locale::Japanese, "cannot read policy file") => {
+            "ポリシーファイルを読み込めません"
+        }
+        (crate::locale::Locale::Chinese, "cannot inspect policy file") => "无法检查策略文件",
+        (crate::locale::Locale::Japanese, "cannot inspect policy file") => {
+            "ポリシーファイルを確認できません"
+        }
+        (crate::locale::Locale::Chinese, "input_unavailable_or_oversized") => "输入不可用或过大",
+        (crate::locale::Locale::Japanese, "input_unavailable_or_oversized") => {
+            "入力を利用できないか大きすぎます"
+        }
+        (crate::locale::Locale::Chinese, "invalid_json") => "无效的 JSON",
+        (crate::locale::Locale::Japanese, "invalid_json") => "無効な JSON",
+        (crate::locale::Locale::Chinese, "hook_schema_unsupported") => "不支持的 Hook 架构",
+        (crate::locale::Locale::Japanese, "hook_schema_unsupported") => {
+            "Hook スキーマに対応していません"
+        }
+        (crate::locale::Locale::Chinese, "shell_command_parse_unsupported") => {
+            "不支持的 shell 命令解析"
+        }
+        (crate::locale::Locale::Japanese, "shell_command_parse_unsupported") => {
+            "shell コマンド解析に対応していません"
+        }
+        (crate::locale::Locale::Chinese, "tool_schema_unsupported") => "不支持的工具架构",
+        (crate::locale::Locale::Japanese, "tool_schema_unsupported") => {
+            "ツールスキーマに対応していません"
+        }
+        (crate::locale::Locale::Chinese, "cwd_unavailable") => "当前目录不可用",
+        (crate::locale::Locale::Japanese, "cwd_unavailable") => {
+            "現在のディレクトリを利用できません"
+        }
+        (crate::locale::Locale::Chinese, "path_unresolved") => "无法解析路径",
+        (crate::locale::Locale::Japanese, "path_unresolved") => "パスを解決できません",
+        (crate::locale::Locale::Chinese, "path_unavailable") => "路径不可用",
+        (crate::locale::Locale::Japanese, "path_unavailable") => "パスを利用できません",
+        (crate::locale::Locale::Chinese, "tool_not_allowed") => "不允许该工具",
+        (crate::locale::Locale::Japanese, "tool_not_allowed") => "このツールは許可されていません",
+        (crate::locale::Locale::Chinese, "path_outside_allowed_root") => "路径不在允许的根目录内",
+        (crate::locale::Locale::Japanese, "path_outside_allowed_root") => {
+            "パスが許可されたルート外です"
+        }
+        _ => reason,
     }
 }
 
@@ -380,6 +552,7 @@ pub fn cmd_guard(
     reason: Option<String>,
     json_out: bool,
     policy_file: Option<String>,
+    locale: crate::locale::Locale,
 ) -> anyhow::Result<()> {
     use std::io::Read;
     const MAX_INPUT: u64 = 1024 * 1024;
@@ -387,10 +560,18 @@ pub fn cmd_guard(
         eprintln!("[rdsh guard] warning: no deny patterns configured; this hook is a best-effort aid, not a security boundary");
     }
     let policy = match policy_file {
-        Some(path) => match read_policy(&path) {
+        Some(path) => match read_policy(&path, locale) {
             Ok(policy) => Some(policy),
-            Err(_) => {
-                emit_policy_block("unknown", "policy_unavailable", json_out);
+            Err(error) => {
+                if json_out {
+                    emit_policy_block("unknown", "policy_unavailable", true, locale);
+                } else {
+                    eprintln!(
+                        "{}: {error:#}",
+                        crate::locale::ui_message(locale, crate::locale::UiMessage::Guard)
+                    );
+                    std::process::exit(2);
+                }
                 return Ok(());
             }
         },
@@ -404,33 +585,84 @@ pub fn cmd_guard(
         || raw.len() as u64 > MAX_INPUT
     {
         if policy.is_some() {
-            emit_policy_block("unknown", "input_unavailable_or_oversized", json_out);
+            emit_policy_block(
+                "unknown",
+                "input_unavailable_or_oversized",
+                json_out,
+                locale,
+            );
         } else {
-            block("rdsh guard: unreadable or oversized input", json_out);
+            let message_locale = if json_out {
+                crate::locale::Locale::English
+            } else {
+                locale
+            };
+            block(
+                &format!(
+                    "{}: {}",
+                    crate::locale::ui_message(message_locale, crate::locale::UiMessage::Guard),
+                    crate::locale::ui_message(
+                        message_locale,
+                        crate::locale::UiMessage::UnreadableOrOversizedInput
+                    )
+                ),
+                json_out,
+            );
         }
         return Ok(());
     }
     let hit = match denied_pattern(&raw, &deny) {
         Ok(hit) => hit,
         Err(_) if policy.is_some() => {
-            emit_policy_block("unknown", "invalid_json", json_out);
+            emit_policy_block("unknown", "invalid_json", json_out, locale);
             return Ok(());
         }
         Err(_) => {
-            block("rdsh guard: invalid JSON input", json_out);
+            let message_locale = if json_out {
+                crate::locale::Locale::English
+            } else {
+                locale
+            };
+            block(
+                &format!(
+                    "{}: {}",
+                    crate::locale::ui_message(message_locale, crate::locale::UiMessage::Guard),
+                    crate::locale::ui_message(
+                        message_locale,
+                        crate::locale::UiMessage::InvalidJsonInput
+                    )
+                ),
+                json_out,
+            );
             return Ok(());
         }
     };
     match hit {
         Some(p) => {
-            let msg = reason.unwrap_or_else(|| "blocked by rdsh guard".to_owned());
-            eprintln!("[rdsh guard] pattern hit: {p}");
+            let msg = reason.unwrap_or_else(|| {
+                if json_out {
+                    "blocked by rdsh guard".to_owned()
+                } else {
+                    match locale {
+                        crate::locale::Locale::English => "blocked by rdsh guard".to_owned(),
+                        crate::locale::Locale::Chinese => "被 rdsh guard 阻止".to_owned(),
+                        crate::locale::Locale::Japanese => {
+                            "rdsh guard によりブロックされました".to_owned()
+                        }
+                    }
+                }
+            });
+            eprintln!(
+                "[{}] {}: {p}",
+                crate::locale::ui_message(locale, crate::locale::UiMessage::Guard),
+                crate::locale::ui_message(locale, crate::locale::UiMessage::PatternHit)
+            );
             block(&msg, json_out);
             Ok(())
         }
         None => {
             if let Some(policy) = policy {
-                emit_policy_decision(classify_operation(&raw, &policy), json_out);
+                emit_policy_decision(classify_operation(&raw, &policy), json_out, locale);
             } else if json_out {
                 // A deny-list miss is not authority to bypass the host's approval policy.
                 println!("{{}}");
@@ -569,6 +801,7 @@ mod tests {
             })
             .to_string()
             .into_bytes(),
+            crate::locale::Locale::English,
         )
         .unwrap()
     }
@@ -723,11 +956,11 @@ mod tests {
     #[test]
     fn invalid_policy_fields_and_roots_are_rejected() {
         let unknown = br#"{"schema":1,"rules":[],"default":"allow"}"#;
-        assert!(parse_policy(unknown).is_err());
+        assert!(parse_policy(unknown, crate::locale::Locale::English).is_err());
         let relative = br#"{"schema":1,"rules":[{"id":"bad","tool":"Read","access":"read","roots":["relative"]}]}"#;
-        assert!(parse_policy(relative).is_err());
+        assert!(parse_policy(relative, crate::locale::Locale::English).is_err());
         let unsupported =
             br#"{"schema":1,"rules":[{"id":"shell","tool":"Bash","access":"read","roots":["/"]}]}"#;
-        assert!(parse_policy(unsupported).is_err());
+        assert!(parse_policy(unsupported, crate::locale::Locale::English).is_err());
     }
 }

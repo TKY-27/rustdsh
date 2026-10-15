@@ -41,9 +41,37 @@ export const REMINDER_SOURCE_KIND = "rdsh-answer-guard";
  * emits reasoning cannot be steered in a loop. */
 export const DEFAULT_MAX_NUDGES = 1;
 
-/** Shown on the collapsed notice row, so the reader can tell the answer is
- * late rather than missing. Human-facing, hence the session's language. */
+/** Japanese notice text retained for callers that explicitly request it. */
 export const REMINDER_SUMMARY = "本文なしの応答を検知したため、再出力を要求しました";
+
+/** Resolve owned notice text from the launcher preference or saved settings. */
+export function guardLanguage(env = process.env) {
+  let saved;
+  try {
+    saved = JSON.parse(readFileSync(join(env.DSH_HOME || join(homedir(), ".dsh"), "rdsh.json"), "utf8"))?.general?.language;
+  } catch { /* A missing or malformed settings file does not disable recovery. */ }
+  const value = env.RDSH_LANG?.trim() || (typeof saved === "string" && saved !== "auto" ? saved.trim() : "") ||
+    [env.LC_ALL, env.LC_MESSAGES, env.LANG].find(value => value?.trim()) || Intl.DateTimeFormat().resolvedOptions().locale;
+  const language = value.toLowerCase();
+  return language.startsWith("ja") ? "ja" : language.startsWith("zh") ? "zh-CN" : "en";
+}
+
+/** Reader-facing summary; the steering instruction and source tags stay stable. */
+export function reminderSummary(language = guardLanguage()) {
+  switch (language) {
+    case "ja": return REMINDER_SUMMARY;
+    case "zh-CN": return "检测到没有正文的回复，已请求重新输出";
+    default: return "A reply without visible text was detected; another output was requested";
+  }
+}
+
+function invalidMaxNudges(value) {
+  switch (guardLanguage()) {
+    case "ja": return `rdsh-answer-guard: maxNudgesは0以上の整数にしてください。指定値: ${value}`;
+    case "zh-CN": return `rdsh-answer-guard: maxNudges必须是大于等于0的整数，收到 ${value}`;
+    default: return `rdsh-answer-guard: maxNudges must be an integer >= 0, got ${value}`;
+  }
+}
 
 /** Model-facing instruction. English matches every other DSH reminder
  * (e.g. `dsh-repeat-tool-reminder`); the model still answers in the user's
@@ -104,7 +132,7 @@ export function isSilentReply(content) {
  * the guard stays dependency-free.
  * @returns an immutable-enough pending user message for `agent.steer`.
  */
-export function createReminder(summary = REMINDER_SUMMARY, text = REMINDER_TEXT) {
+export function createReminder(summary = reminderSummary(), text = REMINDER_TEXT) {
   return Object.freeze({
     id: randomUUID(),
     role: "user",
@@ -123,7 +151,7 @@ export function createReminder(summary = REMINDER_SUMMARY, text = REMINDER_TEXT)
  */
 export function createAnswerGuard({ maxNudges = DEFAULT_MAX_NUDGES, reminder = createReminder } = {}) {
   if (!Number.isInteger(maxNudges) || maxNudges < 0)
-    throw new Error(`rdsh-answer-guard: maxNudges must be an integer >= 0, got ${maxNudges}`);
+    throw new Error(invalidMaxNudges(maxNudges));
   // WeakMap keyed by the Session object: a disposed session takes its state
   // with it, and two sessions never share a turn number.
   const lastReply = new WeakMap();

@@ -48,6 +48,7 @@ rdsh settings get search.max
 rdsh settings set search.max 50
 rdsh settings set context.goal "dsh互換性を維持する"
 rdsh settings set guard.deny '["rm -rf /*","*token*"]'
+rdsh settings set general.language ja
 ```
 
 `rdsh guard` に `--policy-file` を付けると、既知のファイル操作スキーマを
@@ -62,6 +63,10 @@ rdsh context status   # 有効化後に記憶の状態を見る
 
 設定は `$DSH_HOME/rdsh.json` に保存され、コマンドと画面で共有されます。
 旧 `rdsh-context.json` は `rdsh.json` に context がないときだけ読みます。
+
+`general.language` は `auto`、`en`、`zh-CN`、`ja` のいずれかです。CLI と独立ダッシュボードの `auto` は最初の空でないロケール環境変数を使い、未設定・未対応なら英語になります。DSH 内の rdsh 設定プラグインでは `auto` がブラウザーの言語に従います。優先順は CLI の `--language`、`RDSH_LANG`、この設定、`LC_ALL`、`LC_MESSAGES`、`LANG` です。`general.language` を明示して不正な値にした設定ファイルは、通常の設定破損と同じく停止して保持します。
+
+`settings init --force` は破損した設定の復旧用です。設定を使わない `task-outcomes` と `subagents plan` も設定ファイルを読み込まず、明示した `--language`、`RDSH_LANG`、OS のロケール環境変数の順に言語を解決します。これらの JSON コマンドは設定ファイルを変更しません。他のコマンドは設定が破損していると停止し、元のファイルを保持します。
 
 ローカル状態画面とWeb検索のオン／オフは `setup --web` のExtras、または
 `rdsh settings set extras.enable serve,search-web` で変更します。

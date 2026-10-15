@@ -744,19 +744,37 @@ pub fn plan_subagents(request: &Value) -> std::result::Result<Plan, PlanError> {
 
 /// Read one request file with the JS CLI's `localJson` rules: a regular file
 /// of at most 256 KiB with strict UTF-8 and valid JSON.
-fn read_request(input_file: &str) -> Result<Value> {
-    let file = std::fs::File::open(input_file)
-        .with_context(|| format!("cannot read input JSON {input_file}"))?;
-    let metadata = file
-        .metadata()
-        .with_context(|| format!("cannot read input JSON {input_file}"))?;
+fn read_request(input_file: &str, locale: crate::locale::Locale) -> Result<Value> {
+    let file = std::fs::File::open(input_file).with_context(|| {
+        localized_format!(
+            locale,
+            "cannot read input JSON {input_file}",
+            "无法读取输入 JSON {input_file}",
+            "入力JSON {input_file} を読み取れません"
+        )
+    })?;
+    let metadata = file.metadata().with_context(|| {
+        localized_format!(
+            locale,
+            "cannot read input JSON {input_file}",
+            "无法读取输入 JSON {input_file}",
+            "入力JSON {input_file} を読み取れません"
+        )
+    })?;
     if !metadata.is_file() || metadata.len() > 256 * 1024 {
         bail!("Input JSON must be a regular file of at most 256 KiB");
     }
     let mut bytes = Vec::with_capacity(metadata.len() as usize);
     file.take(256 * 1024 + 1)
         .read_to_end(&mut bytes)
-        .with_context(|| format!("cannot read input JSON {input_file}"))?;
+        .with_context(|| {
+            localized_format!(
+                locale,
+                "cannot read input JSON {input_file}",
+                "无法读取输入 JSON {input_file}",
+                "入力JSON {input_file} を読み取れません"
+            )
+        })?;
     if bytes.len() > 256 * 1024 {
         bail!("Input JSON exceeds 256 KiB");
     }
@@ -770,8 +788,8 @@ fn read_request(input_file: &str) -> Result<Value> {
 
 /// `rdsh subagents plan --input-file <request-json>`: read one request and
 /// print the plan as compact JSON on stdout, like the JS CLI did.
-pub fn cmd_plan(input_file: &str) -> Result<()> {
-    let request = read_request(input_file)?;
+pub fn cmd_plan(input_file: &str, locale: crate::locale::Locale) -> Result<()> {
+    let request = read_request(input_file, locale)?;
     let plan = plan_subagents(&request)?;
     let text = serde_json::to_string(&plan).context("serialize subagent plan")?;
     let stdout = std::io::stdout();

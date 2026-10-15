@@ -1050,6 +1050,7 @@ impl Fixture {
 
     fn run(&self, args: &[&str]) -> Output {
         let mut command = Command::new(env!("CARGO_BIN_EXE_rdsh"));
+        command.args(["--language", "en"]);
         command
             .env("HOME", self.root.join("home"))
             .env("USERPROFILE", self.root.join("home"))

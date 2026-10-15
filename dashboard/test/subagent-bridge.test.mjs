@@ -11,7 +11,7 @@ const cli = fileURLToPath(new URL("../cli.mjs", import.meta.url));
 function run(args, env = {}) {
   return spawnSync(process.execPath, [cli, ...args], {
     encoding: "utf8",
-    env: { ...process.env, ...env },
+    env: { ...process.env, ...env, RDSH_LANG: "en" },
   });
 }
 

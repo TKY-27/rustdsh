@@ -209,6 +209,7 @@ impl Fixture {
 
     fn run(&self) -> Output {
         Command::new(env!("CARGO_BIN_EXE_rdsh"))
+            .args(["--language", "en"])
             .args(["budget-admission", "public", "--input-file", &self.path()])
             .env("HOME", self.root.join("home"))
             .env("USERPROFILE", self.root.join("home"))

@@ -99,7 +99,7 @@ function settingsDefaults() {
   return {
     schema: 1,
     discord: { ...discordDefaults },
-    general: { slim: true, passthrough: false, dry_run: false, default_profile: '' },
+    general: { slim: true, passthrough: false, dry_run: false, default_profile: '', language: 'auto' },
     tokens: { default_budget: 4000 },
     search: { dir: '.', max: 100, web_limit: 10, searxng_url: '' },
     compact: { max_tokens: 8000 },
@@ -136,6 +136,9 @@ async function readSettingsDocument() {
   try {
     const value = JSON.parse(await readFile(settingsPath(), 'utf8'));
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('invalid settings');
+    if (Object.hasOwn(obj(value.general), 'language') && !['auto', 'en', 'zh-CN', 'ja'].includes(value.general.language)) {
+      throw new Error('invalid general.language');
+    }
     return value;
   } catch (e) {
     if (e.code === 'ENOENT') return {};
@@ -145,6 +148,9 @@ async function readSettingsDocument() {
 
 async function mergeSettings(current, input) {
   input = obj(input);
+  if (Object.hasOwn(obj(input.general), 'language') && !['auto', 'en', 'zh-CN', 'ja'].includes(input.general.language)) {
+    throw new Error('invalid general.language');
+  }
   const hasContext = current.context != null || input.context != null;
   if (current.context == null && input.context != null) {
     current = { ...current, context: (await settingsForForm(current)).context };
@@ -237,8 +243,9 @@ export function sanitizeSettings(j) {
       slim: bool(g.slim, dg.slim),
       passthrough: bool(g.passthrough, dg.passthrough),
       dry_run: bool(g.dry_run, dg.dry_run),
-      // Rust 側の PROFILE_CHARS と同じ上限（src/rdsh_config.rs）。
-      default_profile: str(g.default_profile, 200, dg.default_profile),
+        // Rust 側の PROFILE_CHARS と同じ上限（src/rdsh_config.rs）。
+        default_profile: str(g.default_profile, 200, dg.default_profile),
+        language: ['auto', 'en', 'zh-CN', 'ja'].includes(g.language) ? g.language : dg.language,
     },
     tokens: {
       default_budget: clampInt(tk.default_budget, 500, 200000, d.tokens.default_budget),

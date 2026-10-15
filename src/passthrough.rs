@@ -349,7 +349,12 @@ pub(crate) fn selected_node(orig: &str) -> Option<String> {
     node_for_dsh(orig).or_else(find_node_bin)
 }
 
-fn base_cmd(orig: &str, dry: bool, metadata_only: bool) -> anyhow::Result<std::process::Command> {
+fn base_cmd(
+    orig: &str,
+    dry: bool,
+    metadata_only: bool,
+    locale: crate::locale::Locale,
+) -> anyhow::Result<std::process::Command> {
     if dry || metadata_only {
         if is_node_entrypoint(orig) {
             let mut command = std::process::Command::new(
@@ -360,8 +365,14 @@ fn base_cmd(orig: &str, dry: bool, metadata_only: bool) -> anyhow::Result<std::p
         }
         return Ok(std::process::Command::new(orig));
     }
-    let bin = selected_node(orig)
-        .ok_or_else(|| anyhow::anyhow!("RDSH_SECURITY: compatible Node runtime is required"))?;
+    let bin = selected_node(orig).ok_or_else(|| {
+        anyhow::anyhow!(match locale {
+            crate::locale::Locale::English => "RDSH_SECURITY: compatible Node runtime is required",
+            crate::locale::Locale::Chinese => "RDSH_SECURITY：需要兼容的 Node 运行时",
+            crate::locale::Locale::Japanese =>
+                "RDSH_SECURITY: 互換性のある Node ランタイムが必要です",
+        })
+    })?;
     if !crate::tool_security::sandbox_enabled() {
         // Default: hand the run to DSH with its normal tools and normal file
         // access. The strict boundary stays available through --share-file,
@@ -386,7 +397,7 @@ fn base_cmd(orig: &str, dry: bool, metadata_only: bool) -> anyhow::Result<std::p
         command.env("RDSH_VERSION", env!("CARGO_PKG_VERSION"));
         return Ok(command);
     }
-    let mut command = crate::tool_security::command(orig, &bin)?;
+    let mut command = crate::tool_security::command(orig, &bin, locale)?;
     command.env("RDSH_VERSION", env!("CARGO_PKG_VERSION"));
     Ok(command)
 }
@@ -416,16 +427,34 @@ fn apply_slim(cmd: &mut std::process::Command, slim: bool) {
     }
 }
 
-fn exec_or_spawn(mut cmd: std::process::Command, dry: bool) -> anyhow::Result<()> {
+fn exec_or_spawn(
+    mut cmd: std::process::Command,
+    dry: bool,
+    locale: crate::locale::Locale,
+) -> anyhow::Result<()> {
     if dry {
-        println!("[rdsh dry-run] would exec: {cmd:?}");
+        println!(
+            "[rdsh dry-run] {}: {cmd:?}",
+            match locale {
+                crate::locale::Locale::English => "would exec",
+                crate::locale::Locale::Chinese => "将执行",
+                crate::locale::Locale::Japanese => "実行予定",
+            }
+        );
         return Ok(());
     }
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
         let err = cmd.exec();
-        Err(anyhow::anyhow!("exec failed: {err}"))
+        Err(anyhow::anyhow!(
+            "{}: {err}",
+            match locale {
+                crate::locale::Locale::English => "exec failed",
+                crate::locale::Locale::Chinese => "执行失败",
+                crate::locale::Locale::Japanese => "実行に失敗しました",
+            }
+        ))
     }
     #[cfg(not(unix))]
     {
@@ -433,7 +462,14 @@ fn exec_or_spawn(mut cmd: std::process::Command, dry: bool) -> anyhow::Result<()
         // so callers/pipes observe the same code.
         match cmd.status() {
             Ok(st) => std::process::exit(st.code().unwrap_or(1)),
-            Err(e) => Err(anyhow::anyhow!("spawn failed: {e}")),
+            Err(e) => Err(anyhow::anyhow!(
+                "{}: {e}",
+                match locale {
+                    crate::locale::Locale::English => "spawn failed",
+                    crate::locale::Locale::Chinese => "启动失败",
+                    crate::locale::Locale::Japanese => "起動に失敗しました",
+                }
+            )),
         }
     }
 }
@@ -445,13 +481,14 @@ pub fn exec_boot(
     app_args: &[String],
     dry: bool,
     slim: bool,
+    locale: crate::locale::Locale,
 ) -> anyhow::Result<()> {
-    let orig = find_original_dsh()
-        .ok_or_else(|| anyhow::anyhow!("original dsh not found in PATH (set DSH_ORIG_BIN)"))?;
-    let mut cmd = base_cmd(&orig, dry, false)?;
+    let orig =
+        find_original_dsh().ok_or_else(|| anyhow::anyhow!(original_dsh_not_found(locale)))?;
+    let mut cmd = base_cmd(&orig, dry, false, locale)?;
     if !dry {
         // Status is read-only and runs only after enforcement validation.
-        crate::auth::pre_boot(true);
+        crate::auth::pre_boot(true, locale);
     }
     cmd.arg("--profile").arg(profile);
     if let Some(f) = from_default {
@@ -464,11 +501,26 @@ pub fn exec_boot(
     apply_slim(&mut cmd, slim);
     if slim {
         eprintln!(
-            "[rdsh] boot '{profile}' via {orig} (slim ON: {})",
+            "[rdsh] {} '{profile}' {} {orig} ({}: {})",
+            match locale {
+                crate::locale::Locale::English => "boot",
+                crate::locale::Locale::Chinese => "启动",
+                crate::locale::Locale::Japanese => "起動",
+            },
+            match locale {
+                crate::locale::Locale::English => "via",
+                crate::locale::Locale::Chinese => "通过",
+                crate::locale::Locale::Japanese => "経由",
+            },
+            match locale {
+                crate::locale::Locale::English => "slim ON",
+                crate::locale::Locale::Chinese => "精简环境开启",
+                crate::locale::Locale::Japanese => "slim 環境オン",
+            },
             crate::slim::describe()
         );
     }
-    exec_or_spawn(cmd, dry)
+    exec_or_spawn(cmd, dry, locale)
 }
 
 pub fn exec_dump_config(
@@ -478,12 +530,13 @@ pub fn exec_dump_config(
     patches: &[String],
     dry: bool,
     slim: bool,
+    locale: crate::locale::Locale,
 ) -> anyhow::Result<()> {
-    let orig = find_original_dsh()
-        .ok_or_else(|| anyhow::anyhow!("original dsh not found in PATH (set DSH_ORIG_BIN)"))?;
-    let mut cmd = base_cmd(&orig, dry, false)?;
+    let orig =
+        find_original_dsh().ok_or_else(|| anyhow::anyhow!(original_dsh_not_found(locale)))?;
+    let mut cmd = base_cmd(&orig, dry, false, locale)?;
     if !dry {
-        crate::auth::pre_boot(false);
+        crate::auth::pre_boot(false, locale);
     }
     cmd.arg("--profile").arg(profile);
     if let Some(f) = from_default {
@@ -498,7 +551,7 @@ pub fn exec_dump_config(
         crate::dsh_args::DumpKind::Schema => cmd.arg("--dump-config-schema"),
     };
     apply_slim(&mut cmd, slim);
-    exec_or_spawn(cmd, dry)
+    exec_or_spawn(cmd, dry, locale)
 }
 
 /// Raw verbatim delegation (used when invoked as `dsh`): no arg rewriting.
@@ -511,13 +564,13 @@ pub fn exec_raw(args: &[String], dry: bool, slim: bool) -> anyhow::Result<()> {
     })?;
     let metadata_only =
         args.len() == 1 && matches!(args[0].as_str(), "--version" | "-V" | "--help" | "-h");
-    let mut cmd = base_cmd(&orig, dry, metadata_only)?;
+    let mut cmd = base_cmd(&orig, dry, metadata_only, crate::locale::Locale::English)?;
     if !dry {
-        crate::auth::pre_boot(true);
+        crate::auth::pre_boot(true, crate::locale::Locale::English);
     }
     cmd.args(args);
     apply_slim(&mut cmd, slim);
-    exec_or_spawn(cmd, dry)
+    exec_or_spawn(cmd, dry, crate::locale::Locale::English)
 }
 
 pub fn exec_plugin(
@@ -525,17 +578,28 @@ pub fn exec_plugin(
     pnpm_args: &[String],
     dry: bool,
     slim: bool,
+    locale: crate::locale::Locale,
 ) -> anyhow::Result<()> {
-    let orig = find_original_dsh()
-        .ok_or_else(|| anyhow::anyhow!("original dsh not found in PATH (set DSH_ORIG_BIN)"))?;
-    let mut cmd = base_cmd(&orig, dry, false)?;
+    let orig =
+        find_original_dsh().ok_or_else(|| anyhow::anyhow!(original_dsh_not_found(locale)))?;
+    let mut cmd = base_cmd(&orig, dry, false, locale)?;
     if !dry {
-        crate::auth::pre_boot(false);
+        crate::auth::pre_boot(false, locale);
     }
     cmd.arg("plugin").arg("--profile").arg(profile);
     cmd.args(pnpm_args);
     apply_slim(&mut cmd, slim);
-    exec_or_spawn(cmd, dry)
+    exec_or_spawn(cmd, dry, locale)
+}
+
+fn original_dsh_not_found(locale: crate::locale::Locale) -> &'static str {
+    match locale {
+        crate::locale::Locale::English => "original dsh not found in PATH (set DSH_ORIG_BIN)",
+        crate::locale::Locale::Chinese => "未在 PATH 中找到原始 dsh（请设置 DSH_ORIG_BIN）",
+        crate::locale::Locale::Japanese => {
+            "PATH に元の dsh が見つかりません（DSH_ORIG_BIN を設定してください）"
+        }
+    }
 }
 #[cfg(test)]
 mod tests {
@@ -786,7 +850,7 @@ mod tests {
         std::fs::write(&fixture, "// fixture\n").unwrap();
         let orig = fixture.to_string_lossy().into_owned();
 
-        let command = base_cmd(&orig, false, false);
+        let command = base_cmd(&orig, false, false, crate::locale::Locale::English);
         std::fs::remove_dir_all(&dir).unwrap();
         let Ok(command) = command else {
             return; // no compatible Node runtime in this environment
@@ -884,7 +948,7 @@ mod tests {
         std::fs::write(&fixture, "#!/usr/bin/env node\n// fixture\n").unwrap();
         let orig = fixture.to_string_lossy().into_owned();
 
-        let command = base_cmd(&orig, false, false);
+        let command = base_cmd(&orig, false, false, crate::locale::Locale::English);
         std::fs::remove_dir_all(&dir).unwrap();
         let Ok(command) = command else {
             return; // no compatible Node runtime in this environment
@@ -927,7 +991,7 @@ mod tests {
         }
         let orig = fixture.to_string_lossy().into_owned();
 
-        let command = base_cmd(&orig, false, false);
+        let command = base_cmd(&orig, false, false, crate::locale::Locale::English);
         std::fs::remove_dir_all(&dir).unwrap();
         let Ok(command) = command else {
             return; // no compatible Node runtime in this environment

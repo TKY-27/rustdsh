@@ -33,6 +33,7 @@ import { createHumanAnnotationPanel } from "./human-annotations-ui.mjs";
 import { createHumanMetricsPanel } from "./human-metrics-ui.mjs";
 import { createDecisionLogPanel } from "./decision-log-ui.mjs";
 import { setupObservedCli } from "./observed-cli-ui.mjs";
+import { formatDateTime, searchText, text } from "./locale.mjs";
 import { setupDeviceAccess } from "./devices-ui.mjs";
 import { renderProviderStatuses } from "./provider-status-ui.mjs";
 
@@ -88,7 +89,7 @@ async function api(route, body, method) {
   }
   const response = await fetch(base + "api/" + route, options);
   const result = await response.json();
-  if (!response.ok) throw new Error(result.error || "接続できません");
+  if (!response.ok) throw new Error(result.error || text("connection.failed"));
   return result;
 }
 function formatObservedAt(value) {
@@ -414,8 +415,8 @@ function setWorkspaceLayout(value, { persist = true, announce = true } = {}) {
   }
   if (announce) {
     $("workspace-layout-status").textContent = saved
-      ? `PC表示の最大列数を${value}列に設定し、このブラウザーにprojectごとに保存しました。`
-      : "表示を変更しましたが、このブラウザーには保存できませんでした。";
+      ? text("workspace.saved", { count: value })
+      : text("workspace.unsaved");
   }
   return true;
 }
@@ -491,9 +492,9 @@ function applyDeepLink(state) {
 }
 function updateOverview(state) {
   const select = $("overview-task");
-  const options = [{ id: "", title: "プロジェクト全体" }, ...state.tasks];
+  const options = [{ id: "", title: text("overview.project") }, ...state.tasks];
   if (selectedTask && !state.tasks.some((task) => task.id === selectedTask))
-    options.push({ id: selectedTask, title: "現在の一覧にありません" });
+    options.push({ id: selectedTask, title: text("overview.missingTask") });
   const signature = JSON.stringify(
     options.map((task) => [task.id, task.title]),
   );
@@ -515,7 +516,7 @@ function updateOverview(state) {
   $("quick-context").textContent = view.context;
   $("quick-context").title = view.context;
   $("quick-pending").textContent =
-    `判断 ${view.pending.length}件${view.reviews.length ? ` · 追指示 ${view.reviews.length}件` : ""}`;
+    text("overview.decisions", { count: view.pending.length, reviews: view.reviews.length ? ` · ${text("overview.instructions", { count: view.reviews.length })}` : "" });
 }
 $("overview-task").addEventListener("change", (event) => {
   selectedTask = event.target.value;
@@ -555,15 +556,15 @@ $("quick-details").onclick = () => navigateTo("metrics-heading");
 $("quick-stop").onclick = () => navigateTo("overview-stop");
 $("diagnostics-refresh").onclick = async () => {
   $("diagnostics-refresh").disabled = true;
-  $("diagnostics-status").textContent = "接続の各段階を確認中…";
+  $("diagnostics-status").textContent = text("diagnostics.working");
   try {
     const report = await api("diagnostics");
     renderConnectionDiagnostics($("diagnostics-result"), report, node);
     $("diagnostics-status").textContent =
-      "診断を取得しました。各日時はその段階を観測した時点です。";
+      text("diagnostics.ready");
   } catch {
     $("diagnostics-status").textContent =
-      "診断を取得できません。現在の接続は未確認です。最新のQRまたは rdsh-dashboard open から開き直してください。";
+      text("diagnostics.failed");
     $("diagnostics-result").replaceChildren();
   } finally {
     $("diagnostics-refresh").disabled = false;
@@ -1050,8 +1051,8 @@ function render(state) {
           node(
             "p",
             contract
-              ? `版 ${contract.revision} · ${contract.status === "answered" ? "回答を保存済み" : contract.status === "expired" ? "期限切れ · 回答は無効" : "取消し · 回答は無効"} · 実行権限は発行していません`
-              : "相談への返答を保存済み · 実行権限は発行していません",
+              ? `${text("answer.version", { version: contract.revision })} · ${contract.status === "answered" ? text("answer.answered") : contract.status === "expired" ? text("answer.expired") : text("answer.cancelled")} · ${text("answer.noAuthority")}`
+              : text("answer.saved"),
             "sub",
           ),
         );
@@ -1065,9 +1066,9 @@ function render(state) {
     if (restoredFocus.tabIndex < 0) restoredFocus.tabIndex = -1;
     restoredFocus.focus({ preventScroll: true });
   }
-  $("connection").textContent = "接続済み · プロジェクト専用";
+  $("connection").textContent = text("connection.connected");
   $("updated").textContent =
-    `最終受信: ${state.updated_at ? new Date(state.updated_at).toLocaleString("ja-JP") : "まだ報告がありません"} · 鮮度は各項目の観測時刻から判定します。累計欄は報告元のAPI換算値です。台帳は出所ごとの報告値です。`;
+    text("updated.prefix", { time: state.updated_at ? formatDateTime(state.updated_at) : text("updated.none") });
 }
 const refreshPlans = createPlanPanel($("execution-plans"), api, node);
 async function refreshState() {
@@ -1086,7 +1087,7 @@ async function refreshModelRouting() {
     }
   } catch (e) {
     $("connection").textContent = e.message;
-    $("overview-state").textContent = "画面の更新に失敗 · 対象の現在状態は不明";
+    $("overview-state").textContent = text("overview.refreshFailed");
   }
   try {
     renderModelRouting(
@@ -1118,21 +1119,28 @@ async function renderShare(config) {
     return;
   }
   const share = config.share;
-  $("share-message").textContent = share.message;
+  const key = "share.state." + share.state;
+  const message = text(key);
+  $("share-message").textContent = message === key ? share.message : message;
+  if (share.state === "setup_required" && share.message) {
+    const detail = node("details");
+    detail.append(node("summary", text("share.rawDetail")), node("pre", share.message));
+    $("share-message").append(detail);
+  }
   $("share-url").textContent = share.url || "";
   $("qr").hidden = !share.url;
   $("qr-placeholder").hidden = Boolean(share.url);
   $("qr-placeholder").textContent =
     share.state === "login_required"
-      ? "Tailscaleへのログイン待ち"
-      : "接続準備中";
+      ? text("share.loginRequired")
+      : text("share.preparing");
   if (qrObjectUrl) URL.revokeObjectURL(qrObjectUrl);
   qrObjectUrl = null;
   if (share.url) {
     const response = await fetch(base + "api/qr.svg?updated=" + Date.now(), {
       headers: browserToken ? { "x-rdsh-browser-token": browserToken } : {},
     });
-    if (!response.ok) throw new Error("QRコードを取得できません");
+    if (!response.ok) throw new Error(text("share.qrFailed"));
     qrObjectUrl = URL.createObjectURL(await response.blob());
     $("qr").src = qrObjectUrl;
   }
@@ -1140,13 +1148,13 @@ async function renderShare(config) {
   if (share.consent_url) $("consent").href = share.consent_url;
   $("mcp-info").textContent =
     config.kind === "project"
-      ? `MCPのイベント購読: ${config.events?.active || 0} 件` +
+      ? text("mcp.subscriptions", { count: config.events?.active || 0 }) +
         (config.events?.failures
-          ? ` · 配信エラー ${config.events.failures} 件`
+          ? ` · ${text("mcp.failures", { count: config.events.failures })}`
           : "") +
         (config.mcp_url
-          ? ` · MCP接続先: ${config.mcp_url}`
-          : " · 外部接続は設定待ち")
+          ? ` · ${text("mcp.endpoint", { url: config.mcp_url })}`
+          : ` · ${text("mcp.pending")}`)
       : "";
 }
 $("share-toggle").addEventListener("click", () => {
@@ -1170,29 +1178,25 @@ $("share-refresh").addEventListener("click", async () => {
 const paletteCommands = [
   {
     id: "toggle-share",
-    ja: "共有表示を切り替える",
-    en: "Toggle phone view",
+    label: "palette.toggleShare",
     keys: "共有 スマホ QR share phone",
     run: () => $("share-toggle").click(),
   },
   {
     id: "refresh-share",
-    ja: "共有の接続を更新する",
-    en: "Refresh share connection",
+    label: "palette.refreshShare",
     keys: "更新 refresh",
     run: () => $("share-refresh").click(),
   },
   {
     id: "goto-pending",
-    ja: "未回答の質問へ移動する",
-    en: "Go to pending questions",
+    label: "palette.pending",
     keys: "質問 未回答 question pending",
     run: () => navigateTo("pending-heading"),
   },
   {
     id: "toggle-answered",
-    ja: "回答済みの質問を開閉する",
-    en: "Toggle answered questions",
+    label: "palette.toggleAnswered",
     keys: "回答済み answered",
     run: () => {
       $("answered").open = !$("answered").open;
@@ -1200,8 +1204,7 @@ const paletteCommands = [
   },
   {
     id: "back-to-top",
-    ja: "先頭へ戻る",
-    en: "Back to top",
+    label: "palette.top",
     keys: "先頭 top",
     run: () => window.scrollTo({ top: 0 }),
   },
@@ -1231,21 +1234,21 @@ function setPaletteSelection(index) {
     `palette-option-${command.id}`,
   );
   $("palette-count").textContent =
-    `${paletteSelectedIndex + 1} / ${paletteMatches.length} 件 · ` +
-    `${command.ja} · ${command.en}`;
+    `${paletteSelectedIndex + 1} / ${text("palette.count", { count: paletteMatches.length })} · ` +
+    `${text(command.label)}`;
 }
 function renderPalette(filter = "") {
   const query = filter.trim().toLowerCase();
   paletteMatches = paletteCommands.filter(
     (command) =>
       !query ||
-      (command.ja + " " + command.en + " " + command.keys)
+      (searchText(command.label) + " " + command.keys)
         .toLowerCase()
         .includes(query),
   );
   $("palette-list").replaceChildren(
     ...paletteMatches.map((command, index) => {
-      const item = node("li", command.ja + " · " + command.en);
+      const item = node("li", text(command.label));
       item.id = `palette-option-${command.id}`;
       item.setAttribute("role", "option");
       item.setAttribute("aria-selected", "false");
@@ -1338,13 +1341,13 @@ try {
   if (config.kind === "harness") {
     $("connection-detail").hidden = true;
     $("kind").textContent = "DEEPSEEK HARNESS";
-    $("title").textContent = "Harnessを開く";
-    $("location").textContent = "会話・ツール実行のWeb画面";
+    $("title").textContent = text("app.harnessTitle");
+    $("location").textContent = text("app.harnessLocation");
     $("project-content").hidden = true;
     $("harness").hidden = false;
     $("harness-open").href = config.harness_url || "#";
     $("harness-open").hidden = deviceAccess?.role === "device";
-    $("connection").textContent = "接続済み · Harness専用の入口";
+    $("connection").textContent = text("app.harnessConnection");
     if (deviceAccess?.role !== "device") {
       $("share").hidden = false;
       $("share-toggle").setAttribute("aria-expanded", "true");
@@ -1357,46 +1360,42 @@ try {
           scope = value.scope;
         renderManagedRunHealth($("managed-health"), value.diagnostic, node);
         const labels = {
-          running: "実行中",
-          stopping: "停止要求中 · 子孫の終了を確認しています",
-          exit_confirmed: "終了確認済み · 所有する子孫プロセスは0件",
-          unverifiable: "終了確認不能 · 停止済みとは確認できません",
+          running: text("status.running"), stopping: text("status.stopping"),
+          exit_confirmed: text("status.exitConfirmed"), unverifiable: text("status.unverifiable"),
         };
         $("managed-status").textContent =
-          labels[scope?.status] ?? "所有する実行はありません";
+          labels[scope?.status] ?? text("status.none");
         $("managed-provider").textContent = value.provider
-          ? `起動先: ${value.provider.label} · ${value.provider.capabilities.connection} · 停止: ${value.provider.capabilities.stop}`
+          ? text("managed.provider", {
+              provider: value.provider.label,
+              connection: value.provider.capabilities.connection,
+              stop: value.provider.capabilities.stop,
+            })
           : "";
         $("managed-remaining").textContent = scope
-          ? `残存プロセス ${scope.remaining_count ?? "未確認"} 件` +
+          ? text("status.remaining", { count: scope.remaining_count ?? text("status.unknown") }) +
             (scope.remaining_pids.length
               ? ` · PID ${scope.remaining_pids.join(", ")}`
               : "") +
-            (scope.members_truncated ? " · 一覧は一部または未確認" : "") +
+            (scope.members_truncated ? ` · ${text("status.partial")}` : "") +
             (scope.confirmed && !scope.resources_released
-              ? " · 管理用の資源解放は未確認"
+              ? ` · ${text("status.resources")}`
               : "")
           : "";
         $("managed-run").textContent = value.run_id ?? "";
         const names = {
-          input_interrupt: "入力中断",
-          graceful: "協調終了",
-          termination: "終了要求",
-          kill: "期限後の強制終了",
-          verification: "子孫の終了確認",
+          input_interrupt: text("managed.stage.inputInterrupt"), graceful: text("managed.stage.graceful"),
+          termination: text("managed.stage.termination"), kill: text("managed.stage.kill"), verification: text("managed.stage.verification"),
         };
         const results = {
-          requested: "要求送信",
-          unsupported: "非対応",
-          running: "残存あり",
-          exit_confirmed: "終了確認済み",
-          unverifiable: "確認不能",
+          requested: text("managed.result.requested"), unsupported: text("managed.result.unsupported"),
+          running: text("managed.result.running"), exit_confirmed: text("managed.result.exitConfirmed"), unverifiable: text("managed.result.unverifiable"),
         };
         $("managed-stages").replaceChildren(
           ...value.stages.map((stage) =>
             node(
               "li",
-              `${names[stage.stage]} · ${stage.phase === "request" ? "要求を記録" : results[stage.status]}`,
+              `${names[stage.stage]} · ${stage.phase === "request" ? text("managed.stage.recorded") : results[stage.status]}`,
             ),
           ),
         );
@@ -1406,7 +1405,7 @@ try {
           deviceAccess?.role === "device" || scope?.status === "exit_confirmed";
       } catch {
         $("managed-status").textContent =
-          "監視に接続できません · 終了は未確認です";
+          text("managed.monitorFailed");
         renderManagedRunHealth($("managed-health"), null, node);
         $("managed-stop").disabled = true;
       }
@@ -1425,7 +1424,7 @@ try {
         $("managed-stop-target").textContent =
           `run ${current.run_id} · owner ${current.scope.owner_id}`;
         $("managed-stop-impact").textContent =
-          `このrunが所有する子孫プロセスを停止します。現在の残存 ${current.scope.remaining_count ?? "未確認"} 件（増減あり）。他のrun・外部プロセスは対象外です。停止後の作業結果は未確認です。`;
+          text("managed.impact", { count: current.scope.remaining_count ?? text("status.unknown") });
         $("managed-stop-error").textContent = "";
         $("managed-stop-confirm").disabled = false;
         $("managed-stop-dialog").showModal();
@@ -1450,7 +1449,7 @@ try {
           current.scope.status !== "running"
         )
           throw new Error(
-            "停止対象が変わりました。閉じて対象を確認し直してください",
+            text("managed.targetChanged"),
           );
       } catch (error) {
         $("managed-stop-error").textContent = error.message;
@@ -1461,7 +1460,7 @@ try {
       stopRequested = true;
       $("managed-stop").disabled = true;
       $("managed-status").textContent =
-        "停止要求中 · 子孫の終了を確認しています";
+        text("status.stopping");
       try {
         await api("managed-stop", {});
       } catch (error) {
@@ -1474,7 +1473,7 @@ try {
   } else {
     $("title").textContent = config.project.name;
     $("location").textContent = config.project.root;
-    document.title = config.project.name + " · Project dashboard";
+    document.title = config.project.name + " · " + text("chrome.project");
     selectionKey = "rdsh_overview_task_" + config.project.id;
     try {
       selectedTask = sessionStorage.getItem(selectionKey) || "";
@@ -1499,8 +1498,8 @@ try {
     );
     source.addEventListener("changed", refreshState);
     source.onerror = () => {
-      $("connection").textContent = "再接続中…";
-      $("overview-state").textContent = "再接続中 · 対象の現在状態は不明";
+      $("connection").textContent = text("app.reconnecting");
+      $("overview-state").textContent = text("app.reconnectingState");
     };
     source.onopen = refreshState;
     // Expiration needs a clock update even when publishers send no SSE event.

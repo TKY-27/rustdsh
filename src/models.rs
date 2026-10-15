@@ -588,7 +588,7 @@ fn selected_sources(provider: Option<&str>) -> Result<Vec<&'static CatalogSource
 /// skipped rather than hiding a provider in an uninspected entry.
 fn configures(text: &str, provider: &str) -> bool {
     let lines: Vec<String> = text.lines().map(str::to_string).collect();
-    let entry = match crate::providers::llm_pi_ai_entry(&lines) {
+    let entry = match crate::providers::llm_pi_ai_entry(&lines, crate::locale::Locale::English) {
         Ok(Some(entry)) => entry,
         Ok(None) => return false,
         Err(_) => return true,
@@ -753,7 +753,7 @@ struct Site {
 }
 
 fn locate_owned(lines: &[String], provider: &str) -> Result<Site> {
-    let entry = crate::providers::llm_pi_ai_entry(lines)
+    let entry = crate::providers::llm_pi_ai_entry(lines, crate::locale::Locale::English)
         .map_err(anyhow::Error::msg)?
         .ok_or_else(|| {
         anyhow::anyhow!(
@@ -1567,7 +1567,7 @@ fn sync_profile_locked(
     planned: &[Planned],
     dry_run: bool,
 ) -> Result<Vec<ProviderReport>> {
-    let _lock = CredentialFileLock::exclusive_for(path)?;
+    let _lock = CredentialFileLock::exclusive_for(path, crate::locale::Locale::English)?;
     let mut text =
         std::fs::read_to_string(path).with_context(|| format!("cannot read {}", path.display()))?;
     let mut reports = Vec::new();

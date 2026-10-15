@@ -17,6 +17,7 @@ test(
     const native = path.join(temp, "rdsh");
     const dashboardHome = path.join(temp, "dashboard");
     const inputFile = path.join(temp, "request.json");
+    const settings = path.join(temp, "settings");
     const request = {
       operation: "schema",
       state: { schema: 1, project: { id: "project-1" } },
@@ -36,6 +37,8 @@ process.stdout.write(JSON.stringify({ mode, request }));
       );
       await fs.chmod(native, 0o700);
       await fs.writeFile(inputFile, JSON.stringify(request));
+      await fs.mkdir(settings);
+      await fs.writeFile(path.join(settings, "rdsh.json"), "{broken");
 
       const result = spawnSync(
         process.execPath,
@@ -45,6 +48,8 @@ process.stdout.write(JSON.stringify({ mode, request }));
           env: {
             ...process.env,
             RDSH_BIN: native,
+            DSH_HOME: settings,
+            RDSH_LANG: "en",
             RDSH_DASHBOARD_HOME: dashboardHome,
           },
         },

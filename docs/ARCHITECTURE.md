@@ -11,6 +11,8 @@ Design rule: **port only the hot paths, delegate everything else**.
 conversation and model execution remain in the original DSH runtime.
 The Node dashboard is a separate optional entry point. Its Harness launcher
 currently targets Windows/WSL; project mode is portable.
+Dashboard-owned browser chrome follows the resolved rdsh locale. It does not
+translate producer-supplied API values, task text, model output, paths, or IDs.
 
 For the end-user sequence, see [installation, setup, usage, and recovery](USER-FLOW.md).
 Open PRs for additional orchestration features are not part of this diagram.
@@ -24,10 +26,29 @@ settings source of truth. The old context file only supplies missing context.
 The setup server validates its per-launch key, Host, and Origin; the settings
 plugin delegates authentication to the DSH connection service.
 Ordinary commands fail on corrupt JSON. `settings init --force` is the explicit
-operation that replaces the document with defaults.
+operation that replaces the document with defaults. Pure `subagents plan`,
+`task-outcomes` and native `cost-ledger` operations resolve their display language
+from the explicit flag and process locale without opening unrelated settings.
+Cost-ledger validation, decimal arithmetic, JSON key order and schema output
+match the in-process dashboard module; only CLI diagnostics are localized.
+The dashboard keeps its synchronous JS ledger for stores, MCP schemas and budget
+admission; its pure cost-ledger CLI bridge invokes Rust through a private file.
 
 - Delegation is a verbatim `exec`: zero behavior change by construction.
 - Optimizations must be output-identical (see `tests/regress.sh`).
+
+## Worker-scope validation and policy
+
+`worker-scope validate` reads declarations from stdin; `worker-scope policy`
+evaluates write paths, intersections and shared files in a single stdin batch.
+Both commands return compact canonical JSON without opening settings or
+accessing sessions, credentials or models. Explicit language flags and process
+locale select English, Chinese or Japanese help and CLI-owned diagnostics;
+JSON field names, declaration error codes, path values and policy decisions do
+not change with language. Parser and operating-system error details remain raw
+beneath the localized context. Invalid input keeps the native failure status and
+produces no JSON output. The input limit remains 2 MiB; each policy batch array
+retains its 4096-item limit.
 
 ## Crate layout (`src/`)
 
@@ -61,6 +82,7 @@ operation that replaces the document with defaults.
 | `file_lock.rs` | Serialized configuration writes and platform lock ownership |
 | `file_security.rs` | No-follow, directory-relative file reads within the selected root |
 | `tool_security.rs` | Opt-in audited tool boundary and delegated runtime checks |
+| `cost_ledger.rs` | Pure reported-cost declarations, reports, validation, public projection and schemas |
 
 ## Optional Node dashboard (`dashboard/`)
 
@@ -89,6 +111,18 @@ scope-bound discovery and a declaration budget to an existing authorized DSH
 PTC composition. It uses the original registry/renderers and public prompt
 waterfall. The guarded rdsh launcher preserves DSH's selected mode and refuses
 this bundle's activation before any registration or prompt wiring.
+
+## Protected delegated tool runtime
+
+`tool_security.rs` selects an exact matching DSH/tools pair for rc.2, alpha.1
+or alpha.3 and embeds the selected preload. The preload verifies the original
+and patched runtime hashes and refuses a dependency resolving another tools
+module. The launcher overwrites adapter/runtime environment overrides.
+Protected delegation requires Linux x86_64, bubblewrap, prlimit and working user
+namespaces. The actual-launcher matrix boots each official profile through Rust,
+checks shared-file inspection and denied secrets, writes, network and namespaces,
+and exercises original dispatcher and staged scheduler guards. The dashboard's
+project-pinned release and individual plugin compatibility lists are separate.
 
 ## Original-binary discovery (`dsh` name)
 

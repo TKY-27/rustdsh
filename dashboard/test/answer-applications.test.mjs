@@ -1,3 +1,4 @@
+import { requiresOwnershipBackend } from "./ownership-support.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -264,8 +265,7 @@ async function posted(f, input, actor = "human") {
 }
 test(
   "registration rejects malformed owner IDs and unbounded session IDs before enrollment",
-  options,
-  async (t) => {
+  { ...options, ...requiresOwnershipBackend }, async (t) => {
     const f = await setup(t),
       attached = await f.attach();
     const input = {
@@ -298,8 +298,7 @@ test(
 
 test(
   "general inputs and human replies share exact-session order and immutable IDs, including unsupported steer",
-  options,
-  async (t) => {
+  { ...options, ...requiresOwnershipBackend }, async (t) => {
     const f = await setup(t),
       attached = await f.attach(),
       client = await f.client(attached);
@@ -402,8 +401,7 @@ test(
 );
 test(
   "legacy unbound feedback cannot advance a consumer cursor past a newly submitted instruction",
-  options,
-  async (t) => {
+  { ...options, ...requiresOwnershipBackend }, async (t) => {
     const f = await setup(t),
       client = await f.client(await f.attach());
     const first = await instruction(f, client);
@@ -441,8 +439,7 @@ test(
 );
 test(
   "concurrent contradictory inputs retain both texts, require human comparison, and reject stale review decisions",
-  options,
-  async (t) => {
+  { ...options, ...requiresOwnershipBackend }, async (t) => {
     const f = await setup(t),
       client = await f.client(await f.attach());
     const first = await instruction(f, client, { text: "元のAPIを維持する" }),
@@ -502,8 +499,7 @@ test(
 );
 test(
   "human-approved interruption cancels only the currently awaited native prompt and confirms its correlated result before the follow-up",
-  options,
-  async (t) => {
+  { ...options, ...requiresOwnershipBackend }, async (t) => {
     const f = await setup(t),
       client = await f.client(await f.attach("reply_interrupt"));
     client.controlIntervalMs = 40;
@@ -579,8 +575,7 @@ test(
 );
 test(
   "a cancel notification without a correlated prompt result cannot release the follow-up or be replayed after reconnect",
-  options,
-  async (t) => {
+  { ...options, ...requiresOwnershipBackend }, async (t) => {
     const f = await setup(t),
       attached = await f.attach("reply_interrupt_lost"),
       client = await f.client(attached);
@@ -630,8 +625,7 @@ test(
 );
 test(
   "a lost cancel claim response performs zero cancels and does not gain replay permission",
-  options,
-  async (t) => {
+  { ...options, ...requiresOwnershipBackend }, async (t) => {
     const f = await setup(t),
       attached = await f.attach("reply_interrupt"),
       client = await f.client(attached);
@@ -684,8 +678,7 @@ test(
 );
 test(
   "general-input result loss remains an ordered unknown barrier after explicit exact-session reconnection",
-  options,
-  async (t) => {
+  { ...options, ...requiresOwnershipBackend }, async (t) => {
     const f = await setup(t),
       attached = await f.attach("reply_effect_lost"),
       first = await f.client(attached);
@@ -717,8 +710,7 @@ test(
 );
 test(
   "public instruction CLI and lost HTTP submission responses reuse an immutable ID without launching native sessions",
-  options,
-  async (t) => {
+  { ...options, ...requiresOwnershipBackend }, async (t) => {
     const f = await setup(t),
       client = await f.client(await f.attach());
     const context = await instructionRequest(f.project, "context", {
@@ -796,8 +788,7 @@ const begin = () => ({
 
 test(
   "late cursors and simultaneous callers cannot bypass earlier or uncertain inputs to the same native target",
-  options,
-  async (t) => {
+  { ...options, ...requiresOwnershipBackend }, async (t) => {
     const f = await setup(t),
       attached = await f.attach(),
       client = await f.client(attached);
@@ -876,8 +867,7 @@ test(
 
 test(
   "saved, webhook delivered, cursor GET, target read, begin and correlated ACP result stay separate",
-  options,
-  async (t) => {
+  { ...options, ...requiresOwnershipBackend }, async (t) => {
     const f = await setup(t, true),
       attached = await f.attach(),
       client = await f.client(attached);
@@ -943,8 +933,7 @@ test(
 
 test(
   "an invalidated input may reconcile its already-issued native result without replaying or changing the new question",
-  options,
-  async (t) => {
+  { ...options, ...requiresOwnershipBackend }, async (t) => {
     const f = await setup(t),
       attached = await f.attach(),
       client = await f.client(attached);
@@ -1008,8 +997,7 @@ test(
 
 test(
   "concurrent readers, old cursor rereads and duplicate begin IDs cannot repeat a native effect",
-  options,
-  async (t) => {
+  { ...options, ...requiresOwnershipBackend }, async (t) => {
     const f = await setup(t),
       attached = await f.attach(),
       client = await f.client(attached);
@@ -1052,8 +1040,7 @@ test(
 
 test(
   "stopped consumer retains its answer; explicit same-session resume rotates credentials and applies once",
-  options,
-  async (t) => {
+  { ...options, ...requiresOwnershipBackend }, async (t) => {
     const f = await setup(t),
       first = await f.attach(),
       originalClient = await f.client(first);
@@ -1103,8 +1090,7 @@ test(
 
 test(
   "effect followed by native result loss stays unknown after explicit reconnect and never replays",
-  options,
-  async (t) => {
+  { ...options, ...requiresOwnershipBackend }, async (t) => {
     const f = await setup(t),
       first = await f.attach("reply_effect_lost"),
       client = await f.client(first);
@@ -1134,8 +1120,7 @@ test(
 
 test(
   "dashboard restart and missing application ack reconcile an existing native result without another send",
-  options,
-  async (t) => {
+  { ...options, ...requiresOwnershipBackend }, async (t) => {
     const f = await setup(t),
       first = await f.attach();
     const client = await f.client(first, async (url, init) => {
@@ -1174,8 +1159,7 @@ test(
 
 test(
   "lost begin response commits a claim but performs zero sends and remains blocked on reread",
-  options,
-  async (t) => {
+  { ...options, ...requiresOwnershipBackend }, async (t) => {
     const f = await setup(t),
       attached = await f.attach();
     const client = await f.client(attached, async (url, init) => {
@@ -1201,8 +1185,7 @@ test(
 
 test(
   "wrong consumer/run, forged success, project MCP/admin/browser and ended-session acks fail closed",
-  options,
-  async (t) => {
+  { ...options, ...requiresOwnershipBackend }, async (t) => {
     const f = await setup(t),
       first = await f.attach(),
       second = await f.attach();
@@ -1320,8 +1303,7 @@ test(
 
 test(
   "revision changes, cancellation and expiry retain original replies but forbid current application",
-  options,
-  async (t) => {
+  { ...options, ...requiresOwnershipBackend }, async (t) => {
     const f = await setup(t),
       attached = await f.attach(),
       client = await f.client(attached);
@@ -1442,8 +1424,7 @@ test(
 
 test(
   "a correlated native refusal is shown as failed input processing, never successful application",
-  options,
-  async (t) => {
+  { ...options, ...requiresOwnershipBackend }, async (t) => {
     const f = await setup(t),
       attached = await f.attach("reply_refusal"),
       client = await f.client(attached);
@@ -1463,8 +1444,7 @@ test(
 
 test(
   "an acknowledged native command with different input cannot confirm application of the saved answer",
-  options,
-  async (t) => {
+  { ...options, ...requiresOwnershipBackend }, async (t) => {
     const f = await setup(t),
       attached = await f.attach(),
       client = await f.client(attached);
@@ -1909,8 +1889,7 @@ test("Dashboard preserves Rust worker failure and timeout HTTP statuses", option
 
 test(
   "public CLI once resumes the exact session, applies once, and inspection never launches another prompt",
-  options,
-  async (t) => {
+  { ...options, ...requiresOwnershipBackend }, async (t) => {
     const f = await setup(t),
       first = await f.attach(),
       client = await f.client(first);

@@ -39,6 +39,8 @@ that steers makes the Agent Loop re-read its inbox, and fresh steering runs
 another step. So the model restates its answer as ordinary text in the same
 turn, and the reader sees it instead of an empty step.
 
+The notice summary and configuration error use English, Simplified Chinese or Japanese, selected by `RDSH_LANG`, then saved `general.language`, then the operating-system locale. The model-facing reminder stays unchanged in English. Source tags, pending-message fields and explicit reminder callbacks stay unchanged; language selection only reads settings.
+
 Steering is bounded to one reminder per turn by default, so a model that only
 ever emits reasoning cannot be steered in a loop. The reminder is stamped
 `source.form = "notice"`, so it renders as a notice row and never as something
@@ -81,7 +83,7 @@ steering off while keeping the subscription.
 ## Tests
 
 ```sh
-node --test tests/answer-guard.test.mjs
+node --test tests/answer-guard.test.mjs tests/answer-guard-locale.test.mjs
 ```
 
 The cases cover the recorded reasoning-only shape, visible text, whitespace-only

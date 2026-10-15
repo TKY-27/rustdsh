@@ -73,7 +73,13 @@ const { apply: applyAnswerGuard } = await import(pathToFileURL(PLUGIN).href);
 // The exact contract the guard promises, pinned literally here so a mutated
 // plugin cannot pass by being self-consistent with its own exported constants.
 const EXPECTED_SOURCE_KIND = 'rdsh-answer-guard';
-const EXPECTED_SUMMARY = '本文なしの応答を検知したため、再出力を要求しました';
+process.env.RDSH_LANG ??= 'ja';
+const EXPECTED_SUMMARY = {
+  en: 'A reply without visible text was detected; another output was requested',
+  'zh-CN': '检测到没有正文的回复，已请求重新输出',
+  ja: '本文なしの応答を検知したため、再出力を要求しました',
+}[process.env.RDSH_LANG];
+assert.ok(EXPECTED_SUMMARY, 'Use en, zh-CN or ja for this locale fixture');
 const EXPECTED_TEXT_PREFIX =
   'Your previous assistant message contained no visible text:';
 

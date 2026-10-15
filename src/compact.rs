@@ -260,8 +260,18 @@ fn compact_output(text: &str, max_tokens: usize) -> String {
 }
 
 /// Compact a JSONL session transcript without changing the source file.
-pub fn cmd_compact(file: &str, max_tokens: usize) -> anyhow::Result<()> {
-    let text = std::fs::read_to_string(file)?;
+pub fn cmd_compact(
+    file: &str,
+    max_tokens: usize,
+    locale: crate::locale::Locale,
+) -> anyhow::Result<()> {
+    let text = std::fs::read_to_string(file).map_err(|error| match locale {
+        crate::locale::Locale::English => error.into(),
+        crate::locale::Locale::Chinese | crate::locale::Locale::Japanese => anyhow::anyhow!(
+            "{} {file}: {error}",
+            crate::locale::native_message(locale, crate::locale::NativeMessage::CannotReadFile)
+        ),
+    })?;
     let body = compact_output(&text, max_tokens);
     let stdout = std::io::stdout();
     let mut out = std::io::BufWriter::with_capacity(256 * 1024, stdout.lock());
@@ -269,16 +279,44 @@ pub fn cmd_compact(file: &str, max_tokens: usize) -> anyhow::Result<()> {
     out.flush()?;
     let full = estimate_tokens(&text);
     if full <= max_tokens {
-        eprintln!("[rdsh] no compaction needed ({full} <= {max_tokens} tokens)");
+        match locale {
+            crate::locale::Locale::English => {
+                eprintln!("[rdsh] no compaction needed ({full} <= {max_tokens} tokens)");
+            }
+            crate::locale::Locale::Chinese => {
+                eprintln!("[rdsh] 无需压缩（{full} <= {max_tokens} 令牌）");
+            }
+            crate::locale::Locale::Japanese => {
+                eprintln!("[rdsh] 圧縮は不要です（{full} <= {max_tokens} トークン）");
+            }
+        }
     } else {
-        eprintln!(
-            "[rdsh] compacted {full} -> ~{} tokens ({} lines kept of {})",
-            estimate_tokens(&body),
-            body.lines()
-                .filter(|line| !line.starts_with("...[rdsh compact:"))
-                .count(),
-            text.lines().count()
-        );
+        match locale {
+            crate::locale::Locale::English => eprintln!(
+                "[rdsh] compacted {full} -> ~{} tokens ({} lines kept of {})",
+                estimate_tokens(&body),
+                body.lines()
+                    .filter(|line| !line.starts_with("...[rdsh compact:"))
+                    .count(),
+                text.lines().count()
+            ),
+            crate::locale::Locale::Chinese => eprintln!(
+                "[rdsh] 已压缩 {full} -> ~{} 令牌（保留 {} 行，共 {} 行）",
+                estimate_tokens(&body),
+                body.lines()
+                    .filter(|line| !line.starts_with("...[rdsh compact:"))
+                    .count(),
+                text.lines().count()
+            ),
+            crate::locale::Locale::Japanese => eprintln!(
+                "[rdsh] 圧縮しました {full} -> ~{} トークン（{} 行を保持、全 {} 行）",
+                estimate_tokens(&body),
+                body.lines()
+                    .filter(|line| !line.starts_with("...[rdsh compact:"))
+                    .count(),
+                text.lines().count()
+            ),
+        }
     }
     Ok(())
 }

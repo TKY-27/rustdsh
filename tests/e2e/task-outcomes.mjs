@@ -13,6 +13,7 @@ import { createOutcomeProject } from "../../dashboard/test/fixtures/task-outcome
 const { chromium } = await import(
   process.env.RDSH_PLAYWRIGHT_MODULE || "playwright"
 );
+process.env.RDSH_LANG = "ja";
 const repo = path.resolve(import.meta.dirname, "../..");
 const output = path.resolve(
   process.env.RDSH_OUTCOMES_OUTPUT ||
@@ -166,7 +167,7 @@ try {
     "修正を提出しました",
     "受入条件を確認する",
     "レビューを待っています",
-    "done（鮮度未確認・作業の申告）",
+    "完了の申告（鮮度未確認・作業の申告）",
   ])
     assert.ok((await task.innerText()).includes(value), value);
   await capture(page, "after-unchecked");
@@ -221,7 +222,7 @@ try {
     .getByText("推定", { exact: true })
     .waitFor();
   await freshnessTask
-    .getByText("done（推定・作業の申告）", { exact: true })
+    .getByText("完了の申告（推定・作業の申告）", { exact: true })
     .waitFor();
   assert.equal(await freshnessPanel.getAttribute("data-freshness"), "fresh");
   assert.equal(
@@ -257,7 +258,7 @@ try {
     { timeout: 8000 },
   );
   await freshnessTask
-    .getByText("done（古い情報・作業の申告）", { exact: true })
+    .getByText("完了の申告（古い情報・作業の申告）", { exact: true })
     .waitFor();
   assert.equal(
     await freshnessTask.locator(".decision-heading .status").getAttribute("class"),

@@ -1,0 +1,234 @@
+[
+  {
+    "name": "fmt",
+    "command": [
+      "cargo",
+      "fmt",
+      "--check"
+    ],
+    "exit": 0,
+    "seconds": 0.18
+  },
+  {
+    "name": "clippy",
+    "command": [
+      "cargo",
+      "clippy",
+      "--all-targets",
+      "--",
+      "-D",
+      "warnings"
+    ],
+    "exit": 0,
+    "seconds": 0.85
+  },
+  {
+    "name": "release",
+    "command": [
+      "cargo",
+      "test",
+      "--release"
+    ],
+    "exit": 0,
+    "seconds": 23.86
+  },
+  {
+    "name": "benchmark-extended-tests",
+    "command": [
+      "cargo",
+      "test",
+      "--release",
+      "--example",
+      "benchmark_extended"
+    ],
+    "exit": 0,
+    "seconds": 0.1
+  },
+  {
+    "name": "benchmark-models-tests",
+    "command": [
+      "cargo",
+      "test",
+      "--release",
+      "--example",
+      "benchmark_models"
+    ],
+    "exit": 0,
+    "seconds": 0.08
+  },
+  {
+    "name": "model-fence",
+    "command": [
+      "node",
+      "--test",
+      "tests/model_benchmark/fence.test.mjs"
+    ],
+    "exit": 0,
+    "seconds": 0.08
+  },
+  {
+    "name": "regress",
+    "command": [
+      "sh",
+      "tests/regress.sh"
+    ],
+    "exit": 0,
+    "seconds": 26.83
+  },
+  {
+    "name": "build",
+    "command": [
+      "cargo",
+      "build",
+      "--release"
+    ],
+    "exit": 0,
+    "seconds": 0.17
+  },
+  {
+    "name": "CLI follow-up clippy",
+    "command": [
+      "cargo",
+      "clippy",
+      "--all-targets",
+      "--",
+      "-D",
+      "warnings"
+    ],
+    "exit": 0
+  },
+  {
+    "name": "CLI follow-up release",
+    "command": [
+      "cargo",
+      "test",
+      "--release"
+    ],
+    "exit": 0
+  },
+  {
+    "name": "CLI follow-up regress",
+    "command": [
+      "sh",
+      "tests/regress.sh"
+    ],
+    "exit": 0
+  },
+  {
+    "name": "CLI PTY",
+    "command": [
+      "python3",
+      "tests/e2e/cli-tty.py"
+    ],
+    "exit": 0
+  },
+  {
+    "name": "PR review fmt",
+    "command": [
+      "cargo",
+      "fmt",
+      "--check"
+    ],
+    "exit": 0
+  },
+  {
+    "name": "PR review clippy",
+    "command": [
+      "cargo",
+      "clippy",
+      "--all-targets",
+      "--",
+      "-D",
+      "warnings"
+    ],
+    "exit": 0
+  },
+  {
+    "name": "PR review release",
+    "command": [
+      "cargo",
+      "test",
+      "--release"
+    ],
+    "exit": 0
+  },
+  {
+    "name": "PR review targeted CLI",
+    "command": [
+      "cargo",
+      "test",
+      "--release",
+      "--test",
+      "cli_localization"
+    ],
+    "exit": 0
+  },
+  {
+    "name": "PR review regress",
+    "command": [
+      "env",
+      "PATH=/opt/homebrew/bin:$PATH",
+      "sh",
+      "tests/regress.sh"
+    ],
+    "exit": 0
+  },
+  {
+    "name": "PR review PTY",
+    "command": [
+      "/opt/homebrew/bin/python3",
+      "tests/e2e/cli-tty.py"
+    ],
+    "exit": 0
+  },
+  {
+    "name": "PR review browser",
+    "command": [
+      "env",
+      "RDSH_E2E_BIN=./target/release/rdsh",
+      "RDSH_CHROME_PATH=/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+      "npm",
+      "test",
+      "--prefix",
+      "tests/e2e"
+    ],
+    "exit": 0
+  },
+  {
+    "name": "PR review macOS dashboard",
+    "command": [
+      "npm",
+      "test"
+    ],
+    "exit": 0
+  },
+  {
+    "name": "PR review Windows dashboard",
+    "command": [
+      "npm",
+      "test"
+    ],
+    "cwd": "dashboard",
+    "exit": 0,
+    "tests": 336,
+    "pass": 330,
+    "fail": 0,
+    "skip": 6,
+    "source_record": "windows-suite-source.json",
+    "cleanup_record": "windows-final-audit.json"
+  },
+  {
+    "name": "CI portability fixture CLI",
+    "command": [
+      "cargo",
+      "test",
+      "--release",
+      "--test",
+      "cli_localization"
+    ],
+    "exit": 0,
+    "tests": 13,
+    "pass": 13,
+    "fail": 0
+  }
+]

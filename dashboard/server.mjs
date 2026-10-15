@@ -1,4 +1,5 @@
 import http from "node:http";
+import { loadProductLocale } from "./product-locale.mjs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -73,6 +74,8 @@ const handoffMaximum = 1024 * 1024;
 const dashboardAssets = new Set([
   "/",
   "/app.mjs",
+  "/locale.mjs",
+  "/locale-details.mjs",
   "/devices-ui.mjs",
   "/provider-status.mjs",
   "/provider-status-ui.mjs",
@@ -220,6 +223,10 @@ async function readBody(req, maximum = 131072) {
 }
 export async function startDashboard(options) {
   const { kind = "project", tailscale = true, overviewProjects = [] } = options;
+  const displayLocale = await loadProductLocale(
+    options.language,
+    options.environment ?? process.env,
+  );
   let project = options.project;
   if (
     !Array.isArray(overviewProjects) ||
@@ -243,7 +250,7 @@ export async function startDashboard(options) {
       project = await identity(project.root, projectHome);
     }
     port =
-      options.port ||
+      options.port ??
       (kind === "harness"
         ? 38081
         : 38100 + (parseInt(project.id.slice(0, 4), 16) % 1000));
@@ -273,7 +280,7 @@ export async function startDashboard(options) {
   const instanceId = randomUUID();
   const startedAt = new Date().toISOString();
   const connections = new ConnectionObservations();
-  const localUrl = `http://127.0.0.1:${port}/`;
+  let localUrl = `http://127.0.0.1:${port}/`;
   const cookieName = `rdsh_${kind === "project" ? project.id : "harness"}`;
   let store, eventsHub, devices, notificationInbox, runHistory, humanAnnotations, humanMetrics, observedCli, instructionQueueWorker, reviewEvidence, projectCrossOverview, projectCrossSearch;
   try {
@@ -1021,6 +1028,8 @@ export async function startDashboard(options) {
         return json(res, 403, { error: "Harness UI requires its owner session" });
         (route === "/" ||
           route === "/app.mjs" ||
+          route === "/locale.mjs" ||
+          route === "/locale-details.mjs" ||
           route === "/deep-links.mjs" ||
           route === "/deep-link-ui.mjs" ||
           route === "/human-annotations-ui.mjs" ||
@@ -1159,12 +1168,14 @@ export async function startDashboard(options) {
       }
       if (req.method === "GET" && route === "/") {
         res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-        return res.end(await fs.readFile(path.join(here, "ui.html")));
+        return res.end((await fs.readFile(path.join(here, "ui.html"), "utf8")).replaceAll("__RDSH_LOCALE__", displayLocale));
       }
       if (
         req.method === "GET" &&
         [
           "/app.mjs",
+          "/locale.mjs",
+          "/locale-details.mjs",
           "/attention.mjs",
           "/attention-view.mjs",
           "/devices-ui.mjs",
@@ -1930,6 +1941,8 @@ export async function startDashboard(options) {
       server.once("error", reject);
       server.listen(port, "127.0.0.1", resolve);
     });
+    port = server.address().port;
+    localUrl = `http://127.0.0.1:${port}/`;
     if (kind === "harness")
       harness = await startHarness(options.harnessPort || 3081, port, {
         ...options.harnessOptions,
