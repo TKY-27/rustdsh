@@ -179,6 +179,7 @@ test("readiness settles during release without an unhandled rejection or prematu
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const providerUrl = new URL("../harness-providers.mjs", import.meta.url).href;
   const harnessUrl = new URL("../harness.mjs", import.meta.url).href;
+  const identityUrl = new URL("../process-identity.mjs", import.meta.url).href;
   const script = `
     import assert from 'node:assert/strict';
     import { EventEmitter } from 'node:events';
@@ -210,6 +211,13 @@ test("readiness settles during release without an unhandled rejection or prematu
           return { confirmed: true, status: 'exit_confirmed' };
         },
       }),
+    } });
+    const realIdentity = await import(${JSON.stringify(identityUrl)});
+    mock.module(${JSON.stringify(identityUrl)}, { namedExports: {
+      ...realIdentity,
+      readProcessIdentity: async (pid) => ({ status: 'observed', identity: {
+        platform: process.platform, pid, birth: '1', scope: 'a'.repeat(64),
+      } }),
     } });
     const { startHarness } = await import(${JSON.stringify(harnessUrl)});
     const root = process.argv[1];
