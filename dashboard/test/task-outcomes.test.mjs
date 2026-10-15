@@ -54,7 +54,14 @@ test("existing HTTP MCP task publication accepts outcome metadata without adding
     }),
   );
   const advertised = (await client.listTools()).tools;
-  assert.equal(advertised.length, 6);
+  // Track the module's own registry instead of a hardcoded count: every tool
+  // added to mcp.mjs (handoffs, review evidence, contracts, ...) otherwise
+  // leaves this assertion behind and turns the suite red for unrelated work.
+  assert.equal(advertised.length, tools.length);
+  assert.deepEqual(
+    advertised.map((tool) => tool.name).sort(),
+    tools.map((tool) => tool.name).sort(),
+  );
   assert.ok(
     advertised.find((tool) => tool.name === "dashboard_upsert_task").inputSchema
       .properties.outcome,
