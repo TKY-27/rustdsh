@@ -12,6 +12,7 @@ import { renderBudget } from "./budget-ui.mjs";
 import { renderModelRouting } from "./model-routing-ui.mjs";
 import { createTaskOutcomesPanel } from "./task-outcomes-ui.mjs";
 import { createHumanAnnotationPanel } from "./human-annotations-ui.mjs";
+import { createHumanMetricsPanel } from "./human-metrics-ui.mjs";
 import { setupObservedCli } from "./observed-cli-ui.mjs";
 
 const $ = (id) => document.getElementById(id);
@@ -295,11 +296,22 @@ const renderHumanAnnotations = createHumanAnnotationPanel(
   $("human-annotations-panel"),
   { api, node, navigateTo },
 );
+const renderHumanMetrics = createHumanMetricsPanel($("human-metrics"), {
+  api,
+  node,
+  confirm: (message) => window.confirm(message),
+});
+let humanMetricsRevision = -1;
 function render(state) {
   if (state.revision < renderedRevision) return;
   renderedRevision = state.revision;
   latestState = state;
   observedCli?.render(state);
+  renderHumanMetrics.render(state);
+  if (state.revision !== humanMetricsRevision) {
+    humanMetricsRevision = state.revision;
+    void renderHumanMetrics.reload();
+  }
   renderInstructions(state);
   renderCosts(state);
   renderCatalog();
