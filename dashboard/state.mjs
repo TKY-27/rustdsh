@@ -161,6 +161,11 @@ export class ProjectStore {
     validateTaskOutcomes(next);
     return this.commit(next, operation, input);
   }
+  async recordHandoff() {
+    // Expose snapshot creation as a revision change without publishing it as a
+    // task or progress event; MCP resource subscribers still need the update.
+    return this.commit(this.clone());
+  }
   async mutateReply(operation, input, context) {
     let next = this.clone();
     const handlers = {
