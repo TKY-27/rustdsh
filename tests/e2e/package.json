@@ -9,9 +9,11 @@
     "test:language": "node harness-language.mjs",
     "test:answer-guard": "node answer-guard-native.mjs",
     "test:muse": "node muse-subscription.mjs",
+    "test:review": "node review-evidence.mjs",
     "test:updates": "node update-banner.mjs"
   },
   "devDependencies": {
+    "@modelcontextprotocol/sdk": "1.32.1",
     "esbuild": "0.28.2",
     "playwright": "1.64.0",
     "react": "19.3.0",

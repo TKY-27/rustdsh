@@ -12,6 +12,7 @@ import { renderSurface } from "./ui/blocks.mjs";
 import { renderBudget } from "./budget-ui.mjs";
 import { createUpdateSummary } from "./update-summary.mjs";
 import { renderModelRouting } from "./model-routing-ui.mjs";
+import { renderReviewEvidence } from "./review-evidence-ui.mjs";
 import { createTaskOutcomesPanel } from "./task-outcomes-ui.mjs";
 import { createHumanAnnotationPanel } from "./human-annotations-ui.mjs";
 import { createHumanMetricsPanel } from "./human-metrics-ui.mjs";
@@ -441,6 +442,7 @@ function render(state) {
     summarySources.sourceEventIds,
     previewArtifact,
   );
+  renderReviewEvidence($("review-evidence"), state, node);
   const unanswered = state.questions.filter((question) => question.answer === null);
   renderTaskOutcomes(state);
   renderQuestionCards($("questions"), unanswered, state.question_contracts, {

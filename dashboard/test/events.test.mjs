@@ -303,7 +303,7 @@ test("MCP 2.0 discovers events and serves the same tools on an authenticated end
   assert.ok(discovery.supportedVersions.includes("2026-07-28"));
   assert.deepEqual(discovery.capabilities.events, {});
   assert.equal((await request("events/list")).events.length, 5);
-  assert.equal((await request("tools/list")).tools.length, 8);
+  assert.equal((await request("tools/list")).tools.length, 10);
   const resources = await request("resources/list");
   assert.ok(
     resources.resources.some((resource) => resource.uri === "dashboard://handoff"),

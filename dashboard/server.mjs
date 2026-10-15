@@ -32,6 +32,8 @@ import { AcceptanceStore } from "./acceptance.mjs";
 import { modelRoutingViews } from "./model-routing-view.mjs";
 import { inspectTaskOutcomes } from "./task-outcomes-view.mjs";
 import { ObservedCliStore } from "./observed-cli.mjs";
+import { ReviewEvidenceStore } from "./review-evidence.mjs";
+import { WorkerWorkspaces } from "./workers.mjs";
 import {
   acceptanceHandoffView,
   buildHandoff,
@@ -184,7 +186,7 @@ export async function startDashboard(options) {
   const connections = new ConnectionObservations();
   const localUrl = `http://127.0.0.1:${port}/`;
   const cookieName = `rdsh_${kind === "project" ? project.id : "harness"}`;
-  let store, eventsHub, humanAnnotations, humanMetrics, observedCli, instructionQueueWorker;
+  let store, eventsHub, humanAnnotations, humanMetrics, observedCli, instructionQueueWorker, reviewEvidence;
   try {
     if (kind === "project") {
       instructionQueueWorker = options.instructionQueueWorker || null;
@@ -202,6 +204,7 @@ export async function startDashboard(options) {
     } else store = null;
     humanAnnotations = store ? await HumanAnnotationStore.open(project) : null;
     humanMetrics = store ? await HumanMetricsStore.open(project) : null;
+    reviewEvidence = store ? await ReviewEvidenceStore.open(project) : null;
     eventsHub = store
       ? await EventsHub.open(project, () => store.value, options.webhookPost)
       : null;
@@ -221,13 +224,17 @@ export async function startDashboard(options) {
   const applications = store
     ? new AnswerApplicationServer(project, () => store.value, mutateReply)
     : null;
-  const visibleState = async () =>
-    publicState(
+  const visibleState = async () => {
+    const state = publicState(
       store.value,
       await applications.observations(),
       eventsHub.deliveries(),
       budgets.observations(),
     );
+    if (reviewEvidence)
+      state.review_evidence = await reviewEvidence.list({ tasks: store.value.tasks });
+    return state;
+  };
   const budgets = store ? new BudgetAdmissionServer(mutateBudget) : null;
   const modern = store
     ? modernMcpHandler(
@@ -490,6 +497,36 @@ export async function startDashboard(options) {
     updateQueue = task.catch(() => {});
     return task;
   }
+  async function recordReview(input) {
+    if (!reviewEvidence || !project)
+      throw new Error("Review evidence is unavailable in Harness mode");
+    const task = updateQueue.then(async () => {
+      const workerInspection = await WorkerWorkspaces.open(project).then((workers) =>
+        workers.inspect(),
+      );
+      const saved = await reviewEvidence.record(input, {
+        state: store.value,
+        workerInspection,
+      });
+      for (const response of live)
+        response.write(`event: changed\ndata: ${store.value.revision}\n\n`);
+      for (const { mcp } of sessions.values()) void mcp.notify();
+      const evidence = await reviewEvidence.list({
+        tasks: store.value.tasks,
+        taskId: saved.report.task_id,
+      });
+      const report = evidence.reports.find(
+        (item) => item.review_id === saved.report.review_id,
+      );
+      return {
+        revision: saved.revision,
+        idempotent: saved.idempotent,
+        report,
+      };
+    });
+    updateQueue = task.catch(() => {});
+    return task;
+  }
   async function mutateReply(operation, input, context) {
     const task = updateQueue.then(async () => {
       const result = await store.mutateReply(operation, input, context);
@@ -692,6 +729,7 @@ export async function startDashboard(options) {
           route === "/budget-ui.mjs" ||
           route === "/update-summary.mjs" ||
           route === "/model-routing-ui.mjs" ||
+          route === "/review-evidence-ui.mjs" ||
           route === "/task-outcomes-ui.mjs" ||
           route === "/observed-cli-ui.mjs" ||
           route === "/ui/registry.mjs" ||
@@ -804,6 +842,7 @@ export async function startDashboard(options) {
           "/budget-ui.mjs",
           "/update-summary.mjs",
           "/model-routing-ui.mjs",
+          "/review-evidence-ui.mjs",
           "/task-outcomes-ui.mjs",
           "/observed-cli-ui.mjs",
           "/ui/registry.mjs",
@@ -1238,6 +1277,7 @@ export async function startDashboard(options) {
               getHandoff,
               getAcceptance,
               presentUi: mutateUiSurface,
+              recordReview,
             });
             const transport = new StreamableHTTPServerTransport({
               sessionIdGenerator: randomUUID,
