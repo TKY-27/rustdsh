@@ -34,6 +34,8 @@ It ports frequently used CLI operations (token calculation, code search, session
   - [Credential sharing with rdsh auth](#credential-sharing-with-rdsh-auth)
   - [Agent Tool Isolation](#agent-tool-isolation)
   - [Hook Guard](#hook-guard-rdsh-guard)
+  - [Context Injection](#context-injection-rdsh-context)
+  - [Dependency Graph and Change Impact](#dependency-graph-and-change-impact-rdsh-deps)
 - [Web UI & Dashboard](#web-ui--dashboard)
 - [Using with Smart-DSH](#using-with-smart-dsh)
 - [Benchmarks](#benchmarks)
@@ -327,6 +329,62 @@ enforcement.
 }
 ```
 
+### Context Injection (`rdsh context`)
+
+`rdsh context inject` assembles this turn's context — goal, constraints,
+decisions, working set, git state, retrieved code, and curated memory — and
+emits it in the DSH `UserPromptSubmit` hook contract, so the model sees it
+without any copy-paste:
+
+```sh
+rdsh features on context_engine        # the engine is opt-in
+rdsh context hook install              # merges $DSH_HOME/hooks.json (idempotent)
+rdsh context hook status --json
+```
+
+The hook is fail-open: it never blocks a prompt and always exits 0. Only an
+unreadable settings document or an unparseable payload inject nothing at all; a
+corrupt index or a missed deadline drops just what depends on them — the graph
+or the code search — and still injects goal, constraints, and memory. Injection
+has its own
+budget (`context.inject_budget`, default 1200 tokens) and deadline
+(`context.inject_deadline_ms`, default 1200 ms); once the deadline passes the
+code search is skipped and only memory, goal, and constraints go out.
+
+Memory holds curated items, not a transcript dump:
+
+```sh
+rdsh context remember "Keep the API compatible" --kind constraint
+rdsh context distill --session ~/.dsh/sessions/<project>/<session>/session.v4.jsonl.zstd --apply
+rdsh context memory --json      # active and superseded entries
+rdsh context forget mem_ab12cd34ef56
+```
+
+`distill` reads user turns only (zstd session logs included) and extracts
+decisions, constraints, and retractions with deterministic markers, superseding
+an older overlapping entry instead of guessing. `rdsh context build
+--require-stable` exits 3 unless the snapshot is provably stable: a file or git
+state that changed during assembly counts, and so does a git state it cannot
+read, so a stale or unknown snapshot is never reported as fresh.
+
+### Dependency Graph and Change Impact (`rdsh deps`)
+
+```sh
+rdsh deps build                    # incremental index under $DSH_HOME/rdsh-index
+rdsh deps query engine_score       # where a symbol is defined and referenced
+rdsh deps impact src/context.rs    # direct/transitive dependents + affected tests
+```
+
+The extractor covers Rust, JavaScript/TypeScript, Python, and Go and records
+imports, definitions, and static call sites per file. Unchanged files (same size
+and mtime) are reused, so repeated runs stay fast. It is a static approximation:
+dynamic dispatch, indirect calls, macros, and generated code remain explicitly
+`unknown` and are reported as unresolved counts rather than guessed, and a
+missing index means "no information", never "no dependencies".
+
+When the index exists, `rdsh context build` and `rdsh context inject` also pull
+in the graph neighbours of the files their search matched, so a retrieved
+excerpt arrives with the files it actually depends on.
 Native execution overhead is ~1 ms per invocation.
 
 ## Web UI & Dashboard
@@ -348,7 +406,7 @@ Optional Node.js dashboard for project metrics, human-in-the-loop Q&A, and mobil
 rdsh-dashboard project --project <directory>
 ```
 
-*On native Windows, the dashboard runs in the system tray and can be opened or stopped from the taskbar (`--no-tray` keeps it in the terminal). See [dashboard/README.md](dashboard/README.md).*
+*On native Windows, the dashboard runs in the system tray and can be opened or stopped from the taskbar (`--no-tray` keeps it in the terminal). See [dashboard/README.md](dashboard/README.md). External agent CLIs (cursor-agent, devin) can be run as supervised jobs: see [docs/AGENT-RUNNERS.md](docs/AGENT-RUNNERS.md).*
 
 ## Desktop App (Electron)
 
@@ -390,6 +448,48 @@ rdsh --profile web                             # boot web with plugins enabled
 ```
 
 Ports never collide (DSH Web: `3080`, rdsh serve: `38080`).
+Ports never collide (dsh web GUI :3080, `rdsh serve` :38080). With
+`install.sh --as-dsh`, point Smart-DSH helper scripts at `dsh-orig` or
+export `DSH_PACKAGE_DIR`.
+
+## Web dashboard
+
+For the read-only workflow member board in DSH's conversation GUI, use the [verified source-patch preparation tool](plugins/workflow-board/README.md) with an isolated compatible source checkout. It includes the 18-file board/UI projection patch, compatibility diagnostics and fixture tests; building and adopting the patched DSH are separate steps.
+
+For bounded MCP resource artifacts and explicit resource-link reads, use the [verified source-patch preparation tool](plugins/mcp-resource-artifacts/README.md) with an isolated checkout at its pinned DSH revision. Resource links are never fetched automatically, binary payloads stay out of model text, and building or adopting the patched DSH are separate steps.
+
+```sh
+rdsh settings set extras.enable serve  # replaces the enabled-extra list
+rdsh serve
+# open the URL containing #key=... printed by rdsh (localhost only)
+```
+
+| API | Purpose |
+| --- | --- |
+| `GET /api/version` | version (requires key) |
+| `GET /api/doctor` | health check |
+| `POST /api/tokens` | token estimate for `{"text"}` |
+| `POST /api/prune` | prune `{"text","max_tokens"}` to budget |
+| `GET /api/bench?n=3` | startup measurement |
+| `GET /api/sessions?limit=20` | recent sessions |
+| `GET /api/skills`, `/api/profiles` | name lists |
+
+All APIs require the per-launch key in the `X-RDSH-Token` header (the
+browser UI reads it from its URL). No CDN is used; the page works offline.
+
+`rdsh serve` is the quick local status page. For project metrics, human
+Q&A, and phone access, use the optional [Node.js dashboard](dashboard/README.md)
+(needs Node.js 22+): `rdsh-dashboard project --project <directory>` or
+`rdsh-dashboard harness` for the original Harness Web UI. On native Windows
+the launcher can live in the tray (right-click Open / Exit,
+double-click opens; `--no-tray` stays in the terminal).
+
+The original Harness update banner appears right after an update is recorded,
+every two hours from its update time, and on every full page reload.
+Dismiss / X or a successful updater check closes the current occurrence; the
+two-hour schedule continues. Unchanged release checks do not record a new update. Switching projects keeps it closed until the next slot, and close
+events reach other GUI ports of the same OS user. Activating new code needs one
+normal GUI restart/reload; see [browser verification](docs/evidence/update-notice-repeat/README.md).
 
 rdsh bundles only Smart-DSH's phone-width layout, as
 [`plugins/rdsh-mobile-ui`](plugins/rdsh-mobile-ui/README.md) (MIT, adapted from
@@ -453,6 +553,7 @@ Measurements conducted on Linux x86_64:
 ## Community
 
 - Contributions: See [CONTRIBUTING.md](CONTRIBUTING.md).
+- Rust development setup: [Rust development guide](docs/RUST-DEVELOPMENT.md).
 - Issues & Ideas: [Issue tracker](https://github.com/jimoto-no-llm/rustdsh/issues/new/choose) (Japanese or English).
 - Security: Please report vulnerabilities privately according to [SECURITY.md](SECURITY.md).
 - Support: [SUPPORT.md](SUPPORT.md) / Code of Conduct: [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
