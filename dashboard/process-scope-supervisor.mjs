@@ -3,6 +3,7 @@ import readline from "node:readline";
 import {
   linuxScope,
   windowsScope,
+  dockerWorkerScope,
   cleanupScope,
 } from "./process-scope-backends.mjs";
 import { readProcessIdentity } from "./process-identity.mjs";
@@ -48,15 +49,24 @@ input.on("line", (line) => {
         )
           throw new Error();
         const stdio = frame.framed ? ["pipe", "pipe", "pipe"] : [3, 4, 5];
-        scope = await (process.platform === "linux"
+        scope = await (frame.docker_worker === true
+          ? dockerWorkerScope(frame)
+          : process.platform === "linux"
           ? linuxScope(frame, stdio)
           : process.platform === "win32" && !frame.framed
-            ? windowsScope(frame)
+            ? windowsScope(frame, frame.defer_start === true)
             : Promise.reject(new Error()));
         scope.child.on("exit", (code, signal) =>
-          send({ type: "root_exit", code, signal }),
+          send({ type: "root_exit", code, signal }, () => {
+            // The container is the remote ownership boundary. Once its only
+            // workload exits, end this PID 1 supervisor so Engine inspection
+            // can supply the exact exited proof.
+            if (frame.docker_worker === true) process.exit(0);
+          }),
         );
-        scope.child.on("error", () => send({ type: "monitor_error" }));
+        scope.child.on("error", () => {
+          if (!closing) send({ type: "monitor_error" });
+        });
         if (frame.framed) {
           for (const name of ["stdout", "stderr"])
             scope.child[name].on("data", (buf) =>
@@ -70,15 +80,20 @@ input.on("line", (line) => {
           );
           return;
         }
-        const observation = await readProcessIdentity(scope.child.pid);
+        const observation = frame.docker_worker === true
+          ? { status: "unavailable", identity: null }
+          : await readProcessIdentity(scope.child.pid);
         if (inputClosed) return;
         send({
           type: "ready",
-          pid: scope.child.pid,
+          pid: frame.docker_worker === true ? null : scope.child.pid,
           identity:
             observation.status === "observed" ? observation.identity : null,
           kind: scope.kind,
           kernel_id: scope.kernel_id,
+          scope_path: scope.scope_path ?? null,
+          execution_platform: scope.execution_platform ?? null,
+          transport: scope.transport ?? null,
         });
         return;
       }
@@ -93,8 +108,15 @@ input.on("line", (line) => {
       }
       let result;
       if (frame.op === "release") {
-        await scope.release();
-        result = { released: true };
+        const released = await scope.release();
+        const observation = await readProcessIdentity(scope.child.pid);
+        result = {
+          released: true,
+          ...(released && typeof released === "object" ? released : {}),
+          root_pid: scope.child.pid,
+          root_identity:
+            observation.status === "observed" ? observation.identity : null,
+        };
       } else if (frame.op === "snapshot") result = await scope.snapshot();
       else if (frame.op === "term") result = await scope.term();
       else if (frame.op === "kill") result = await scope.kill();
@@ -102,8 +124,10 @@ input.on("line", (line) => {
         result = { closed: await scope.close() };
         if (result.closed) closing = true;
       } else throw new Error();
-      send({ type: "response", id: frame.id, result });
-      if (closing) process.stdout.end(() => process.exit(0));
+      send(
+        { type: "response", id: frame.id, result },
+        closing ? () => process.exit(0) : undefined,
+      );
     } catch (error) {
       if (frame?.op === "start")
         startupCleanupConfirmed =

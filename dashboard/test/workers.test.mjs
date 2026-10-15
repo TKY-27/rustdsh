@@ -13,6 +13,8 @@ import {
   declarationResults,
   policyResults as evaluateWorkerPolicy,
 } from "../worker-scopes.mjs";
+import { repository as workerGitRepository } from "../worker-git.mjs";
+import * as workerGit from "../worker-git.mjs";
 
 const exec = promisify(execFile);
 const cli = fileURLToPath(new URL("../cli.mjs", import.meta.url));
@@ -26,6 +28,67 @@ const scope = (id, writes = ["src/a.txt"], role = "edit") => ({
   lease_seconds: 60,
 });
 const error = (code) => (e) => e.code === code;
+test("native worker Git request deadline covers the observe command budget", () => {
+  const maxGitCommands = 5;
+  const gitCommandTimeoutMs = 30_000;
+  const cleanupAllowanceMs = 30_000;
+  assert.ok(
+    workerGit.NATIVE_REQUEST_TIMEOUT_MS >=
+      maxGitCommands * gitCommandTimeoutMs + cleanupAllowanceMs,
+    `request deadline ${workerGit.NATIVE_REQUEST_TIMEOUT_MS}ms is shorter than the worst-case Git budget`,
+  );
+});
+
+test("worker Git rejects a relative RDSH_BIN override", async () => {
+  const previous = process.env.RDSH_BIN;
+  process.env.RDSH_BIN = "./target/debug/rdsh";
+  try {
+    await assert.rejects(
+      workerGitRepository(process.cwd()),
+      /RDSH_BIN must be an absolute path/,
+    );
+  } finally {
+    if (previous === undefined) delete process.env.RDSH_BIN;
+    else process.env.RDSH_BIN = previous;
+  }
+});
+
+test("worker Git ignores relative PATH entries when probing binaries", {
+  skip: process.platform === "win32",
+}, async (t) => {
+  const f = await setup(t);
+  const previousCwd = process.cwd();
+  const previousPath = process.env.PATH;
+  const previousBinary = process.env.RDSH_BIN;
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "rdsh-worker-git-path-"));
+  const marker = path.join(cwd, "called");
+  const fake = path.join(cwd, "rdsh");
+  await fs.writeFile(
+    fake,
+    `#!/bin/sh\nprintf 'called\\n' >> '${marker}'\nprintf 'Internal JSON bridge for dashboard Git observations\\n'\n`,
+  );
+  await fs.chmod(fake, 0o755);
+  t.after(async () => {
+    process.chdir(previousCwd);
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+    if (previousBinary === undefined) delete process.env.RDSH_BIN;
+    else process.env.RDSH_BIN = previousBinary;
+    await fs.rm(cwd, { recursive: true, force: true });
+  });
+
+  process.chdir(cwd);
+  process.env.PATH = [
+    ".",
+    ...(previousPath ?? "").split(path.delimiter).filter(path.isAbsolute),
+  ].join(path.delimiter);
+  delete process.env.RDSH_BIN;
+
+  const repository = await workerGitRepository(f.repo);
+  assert.equal(repository.root, await fs.realpath(f.repo));
+  await assert.rejects(fs.access(marker), { code: "ENOENT" });
+});
+
 async function setup(t, { policyEvaluator } = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "rdsh-workers-qa-"));
   const repo = path.join(root, "project");

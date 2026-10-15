@@ -6,19 +6,27 @@ on:
     tags: ['v*']
     paths:
       - "dashboard/**"
+      - "plugins/rdsh-agent-ui/**"
+      - "plugins/rdsh-subagent-optimizer/**"
+      - "plugins/rdsh-easy-work/**"
       - "assets/**"
       - "src/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - ".github/workflows/dashboard.yml"
+      - "scripts/bench-worker-git.mjs"
   pull_request:
     paths:
       - "dashboard/**"
+      - "plugins/rdsh-agent-ui/**"
+      - "plugins/rdsh-subagent-optimizer/**"
+      - "plugins/rdsh-easy-work/**"
       - "assets/**"
       - "src/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - ".github/workflows/dashboard.yml"
+      - "scripts/bench-worker-git.mjs"
   workflow_dispatch:
 
 permissions:
@@ -41,19 +49,29 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
-      - name: Build native dashboard policy helper
-        run: cargo build --locked --bin rdsh
-        working-directory: .
+      - name: Build the native dashboard bridge and policy helper
+        run: cargo build --locked --manifest-path ../Cargo.toml --bin rdsh
       - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: dashboard/package-lock.json
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y bubblewrap
+      - if: runner.os == 'Linux'
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - run: npm ci
+      - if: runner.os == 'Windows'
+        name: Measure worker Git bridge latency
+        shell: pwsh
+        run: |
+          cargo build --locked --release --manifest-path ../Cargo.toml --bin rdsh
+          $env:RDSH_BENCH_BIN = (Resolve-Path ../target/release/rdsh.exe).Path
+          node ../scripts/bench-worker-git.mjs
       - if: runner.os == 'Windows'
         # Native GUI startup must not compete with every process-heavy fixture.
         # Run every test with the same assertions and startup deadlines.
-        run: node --test --test-concurrency=1 test/*.test.mjs
+        run: node --test --test-concurrency=1 test/*.test.mjs ../plugins/rdsh-agent-ui/test/*.test.mjs ../plugins/rdsh-subagent-optimizer/test/*.test.mjs ../plugins/rdsh-easy-work/test/*.test.mjs
       - if: runner.os == 'Linux'
         shell: bash
         run: |

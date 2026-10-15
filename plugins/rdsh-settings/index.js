@@ -1,5 +1,5 @@
 import { homedir } from 'node:os';
-import { join, dirname } from 'node:path';
+import { join, dirname, posix, win32 } from 'node:path';
 import { existsSync } from 'node:fs';
 import { readFile, writeFile, mkdir, access, rename, unlink } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
@@ -24,8 +24,11 @@ function defaultExists(path) {
 // start without the login shell PATH, so RDSH_BIN wins, then PATH, then the
 // well-known install locations. Unresolved keeps the historical bare name;
 // execFile failure still resolves to ''.
-function resolveRdshBin(env = process.env, platform = process.platform, exists = defaultExists) {
+export function resolveRdshBin(env = process.env, platform = process.platform, exists = defaultExists) {
   if (typeof env.RDSH_BIN === 'string' && env.RDSH_BIN.trim() !== '') return env.RDSH_BIN;
+  // Join with the target platform's separators, not the host's: the resolver
+  // takes an explicit platform and must answer for it.
+  const join = platform === 'win32' ? win32.join : posix.join;
   const name = platform === 'win32' ? 'rdsh.exe' : 'rdsh';
   const pathSep = platform === 'win32' ? ';' : ':';
   for (const dir of (env.PATH || env.Path || '').split(pathSep)) {
@@ -172,9 +175,16 @@ async function mergeSettings(current, input) {
   return result;
 }
 
+// Rust 側 (src/rdsh_config.rs の truncate) は Unicode スカラー単位で切る。
+// String#slice は UTF-16 コード単位なので、サロゲートペアの途中で切ると孤立
+// サロゲートができ、rdsh.json を serde_json が読めず CLI が exit 1 になる。
+function cut(s, maxC) {
+  return Array.from(s).slice(0, maxC).join('');
+}
+
 function strList(v, maxN, maxC) {
   if (!Array.isArray(v)) return [];
-  return v.filter((x) => typeof x === 'string').map((s) => s.slice(0, maxC)).filter((s) => s.trim() !== '').slice(0, maxN);
+  return v.filter((x) => typeof x === 'string').map((s) => cut(s, maxC)).filter((s) => s.trim() !== '').slice(0, maxN);
 }
 
 function sanitize(j) {
@@ -185,7 +195,7 @@ function sanitize(j) {
   for (const k of ['enable_retriever', 'enable_packer', 'enable_verifier']) {
     if (typeof j[k] === 'boolean') out[k] = j[k];
   }
-  if (typeof j.goal === 'string') out.goal = j.goal.slice(0, 2000);
+  if (typeof j.goal === 'string') out.goal = cut(j.goal, 2000);
   out.decisions = strList(j.decisions, 50, 500);
   out.constraints = strList(j.constraints, 50, 500);
   out.working_files = strList(j.working_files ?? j.files, 50, 300);
@@ -204,14 +214,14 @@ function bool(v, fb) {
 }
 
 function str(v, maxC, fb) {
-  return typeof v === 'string' ? v.slice(0, maxC) : fb;
+  return typeof v === 'string' ? cut(v, maxC) : fb;
 }
 
 function obj(v) {
   return v && typeof v === 'object' && !Array.isArray(v) ? v : {};
 }
 
-function sanitizeSettings(j) {
+export function sanitizeSettings(j) {
   const d = settingsDefaults();
   const src = obj(j);
   const g = obj(src.general); const dg = d.general;
@@ -233,8 +243,9 @@ function sanitizeSettings(j) {
       slim: bool(g.slim, dg.slim),
       passthrough: bool(g.passthrough, dg.passthrough),
       dry_run: bool(g.dry_run, dg.dry_run),
-      default_profile: str(g.default_profile, 500, dg.default_profile),
-      language: ['auto', 'en', 'zh-CN', 'ja'].includes(g.language) ? g.language : dg.language,
+        // Rust 側の PROFILE_CHARS と同じ上限（src/rdsh_config.rs）。
+        default_profile: str(g.default_profile, 200, dg.default_profile),
+        language: ['auto', 'en', 'zh-CN', 'ja'].includes(g.language) ? g.language : dg.language,
     },
     tokens: {
       default_budget: clampInt(tk.default_budget, 500, 200000, d.tokens.default_budget),
@@ -243,7 +254,8 @@ function sanitizeSettings(j) {
       dir: str(se.dir, 300, d.search.dir),
       max: clampInt(se.max, 1, 100, d.search.max),
       web_limit: clampInt(se.web_limit, 1, 100, d.search.web_limit),
-      searxng_url: str(se.searxng_url, 500, d.search.searxng_url),
+      // Rust 側の URL_CHARS と同じ上限（src/rdsh_config.rs）。
+      searxng_url: str(se.searxng_url, 2000, d.search.searxng_url),
     },
     compact: {
       max_tokens: clampInt(co.max_tokens, 500, 200000, d.compact.max_tokens),

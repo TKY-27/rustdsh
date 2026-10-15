@@ -48,26 +48,14 @@ async function host(fetch, browserLanguage = "ja") {
   const context = {
     navigator: { language: browserLanguage },
     fetch,
-    TextEncoder,
-    URL,
-    setInterval: () => 1,
-    clearInterval: () => {},
-    window: {
-      __ModuleLoader__: {
-        load(module) {
-          module
-            .factory(() => React)
-            .apply({
-              slots: {
-                inject: (_name, install) => install(),
-                register: (_options, section) => {
-                  component = section;
-                },
-              },
-            });
-        },
-      },
-    },
+    TextEncoder, URL,
+    setInterval: () => 1, clearInterval: () => {},
+    window: { __ModuleLoader__: { load(module) {
+      module.factory(() => React).apply({ slots: {
+        inject: (_name, install) => install(),
+        register: (_options, section) => { component = section; },
+      }, locale: {} });
+    } } },
   };
   vm.runInNewContext(source, context);
   return {

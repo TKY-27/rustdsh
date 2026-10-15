@@ -11,6 +11,7 @@ use std::sync::atomic::{AtomicU8, Ordering};
 
 const PRELOAD: &str = include_str!("../security/preload.mjs");
 const ISOLATION: &str = include_str!("../security/tool-isolation.mjs");
+const SECCOMP: &str = include_str!("../security/seccomp.mjs");
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct AuditedAdapter {
@@ -272,6 +273,7 @@ pub fn command(
         &directory.join("tool-isolation.mjs").to_string_lossy(),
         ISOLATION,
     )?;
+    crate::auth::write_creds(&directory.join("seccomp.mjs").to_string_lossy(), SECCOMP)?;
     let mut command = std::process::Command::new(node);
     command
         .arg("--import")
@@ -290,10 +292,10 @@ pub fn command(
         "[rdsh security] {}",
         match locale {
             crate::locale::Locale::English =>
-                "tools: explicitly shared files only; network and writes denied",
-            crate::locale::Locale::Chinese => "工具：仅允许显式共享的文件；网络和写入已拒绝",
+                "rdsh_inspect is isolated; other DSH tools use upstream permissions",
+            crate::locale::Locale::Chinese => "rdsh_inspect 已隔离；其他 DSH 工具使用上游权限",
             crate::locale::Locale::Japanese =>
-                "ツール: 明示的に共有したファイルのみ使用可。ネットワークと書き込みは拒否されます",
+                "rdsh_inspect は分離されています。その他の DSH ツールは上流の権限を使用します",
         }
     );
     Ok(command)

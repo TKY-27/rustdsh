@@ -1,4 +1,5 @@
 import { text, formatDateTime } from "./locale.mjs";
+import { deepLinkButton } from "./deep-link-ui.mjs";
 
 const labels = {
   saved: text("queue.phase.saved"),
@@ -44,7 +45,7 @@ const inputText = (state, c) =>
     : state.feedback.find((m) => m.sequence === c.feedback_sequence)?.answer ||
       "";
 
-export function createInstructionPanel(root, { node, api, refreshState }) {
+export function createInstructionPanel(root, { node, api, refreshState, makeDeepLink }) {
   let confirmedActiveId = null,
     posting = false;
   let state,
@@ -59,7 +60,7 @@ export function createInstructionPanel(root, { node, api, refreshState }) {
   const status = node("p", text("queue.intro"), "sub"),
     interrupt = node("input"),
     interruptLabel = node("label"),
-    targetNote = node("p", "", "sub");
+    targetNote = node("div", undefined, "sub");
   const submit = node("button", text("queue.submit")),
     clear = node("button", text("queue.clear")),
     cards = node("div", undefined, "decision-grid");
@@ -156,16 +157,19 @@ export function createInstructionPanel(root, { node, api, refreshState }) {
     area.readOnly = frozen;
     timing.disabled = frozen;
     interruptLabel.hidden = timing.value !== "interrupt";
-    targetNote.textContent = consumer
+    targetNote.replaceChildren(node("span", consumer
       ? text("queue.targetSummary", {
           task: consumer.task_id || text("queue.unlinked"),
           run: consumer.run_id,
           session: consumer.session_id,
-          active: active
-            ? text("queue.active", { id: active.command_id })
-            : text("queue.noActive"),
+          active: active ? text("queue.active", { id: active.command_id }) : text("queue.noActive"),
         })
-      : text("queue.noTarget");
+      : text("queue.noTarget")));
+    if (consumer) {
+      const link = deepLinkButton(node, makeDeepLink, "session", consumer.session_id,
+        `session ${consumer.session_id}`, consumer.run_id);
+      if (link) targetNote.append(link);
+    }
     submit.disabled =
       posting ||
       !consumer ||
@@ -456,12 +460,13 @@ export function createInstructionPanel(root, { node, api, refreshState }) {
     renderRequests();
   };
   render.selectTarget = (id) => {
-    if (posting || !state.answer_applications?.consumers[id] || id === target)
-      return;
+    if (posting || !state.answer_applications?.consumers[id]) return false;
+    if (id === target) return true;
     target = id;
     select.value = target;
     load();
     renderRequests();
+    return true;
   };
   return render;
 }

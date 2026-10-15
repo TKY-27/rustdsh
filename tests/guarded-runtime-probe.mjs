@@ -2,76 +2,49 @@
 import assert from 'node:assert/strict';
 import { pathToFileURL } from 'node:url';
 import path from 'node:path';
+import { apply as applyPtcCatalog } from '../plugins/rdsh-ptc-catalog/index.js';
+
 const root = path.resolve(process.env.RDSH_TOOL_RUNTIME, '../../..');
 const { Context } = await import(pathToFileURL(path.join(root, 'cordis/lib/index.js')));
 const { createScope } = await import(pathToFileURL(path.join(root, 'dsh-scope/lib/index.js')));
-const { default: ToolRuntime, TOOL_RUNTIME_SCHEDULER } = await import(pathToFileURL(process.env.RDSH_TOOL_RUNTIME));
+const { default: ToolRuntime } = await import(pathToFileURL(process.env.RDSH_TOOL_RUNTIME));
+
 const ctx = new Context();
 ctx.provide('systemPrompt', { tools() {}, section() {}, getSectionOrder() { return 1; } });
 const tools = new ToolRuntime(ctx, { mode: 'ptc' });
-assert.equal(tools.defaultMode, 'native');
-assert.equal(tools.modeFor(), 'native');
+
+// The catalog bundle requires an already authorized PTC composition. The
+// guarded launcher must refuse it before any registration or prompt wiring.
+assert.throws(() => applyPtcCatalog(ctx), { code: 'RDSH_CATALOG_GUARDED_NATIVE' });
+assert.equal(tools.get('rdsh_catalog_search'), undefined);
+assert.equal(tools.get('rdsh_catalog_describe'), undefined);
+
+// The preload must leave DSH's selected mode and ordinary middleware intact.
+assert.equal(tools.defaultMode, 'ptc');
+assert.equal(tools.modeFor(), 'ptc');
 const agent = {};
 const scoped = createScope(ctx, agent);
 agent.ctx = scoped.ctx;
 scoped.ctx.tools.presentAs('ptc');
-assert.equal(scoped.ctx.tools.modeFor(), 'native');
-assert.equal(scoped.ctx.tools.collapses('rdsh_inspect', undefined, false), false);
-assert.deepEqual(tools.wireSchemas(agent).schemas.map(schema => schema.name), ['rdsh_inspect']);
-assert.ok(tools.guardReason({ name: 'bash' }));
-assert.ok(tools.guardReason({ name: 'run_code' }));
-assert.equal(tools.guardReason({ name: 'rdsh_inspect' }), undefined);
-const result = await tools.get('rdsh_inspect').execute({ command: 'printf DUMMY_GUARDED_RUNTIME' });
+assert.equal(scoped.ctx.tools.modeFor(), 'ptc');
+assert.equal(tools.guardReason({ name: 'bash', agent }), undefined);
+assert.equal(tools.guardReason({ name: 'run_code', agent }), undefined);
+assert.equal(tools.guardReason({ name: 'rdsh_inspect', agent }), undefined);
+
+const inspector = tools.get('rdsh_inspect');
+assert.ok(inspector, 'the isolated inspection tool should be registered');
+const result = await inspector.execute({ command: 'printf DUMMY_GUARDED_RUNTIME' });
 assert.equal(result.exitCode, 0, result.stderr);
 assert.equal(result.stdout, 'DUMMY_GUARDED_RUNTIME');
-const dispatched = await tools.execute({ name: 'rdsh_inspect', arguments: { command: 'printf DUMMY_MODEL_DISPATCH' }, agent, callId: 'dummy-dispatch', signal: new AbortController().signal });
-assert.match(JSON.stringify(dispatched), /DUMMY_MODEL_DISPATCH/);
-let invoked = false;
-let blockedPrePolicy = false;
-ctx.on('tools/pre-execute', async (exec, next) => {
-  if (exec.callId === 'dummy-blocked' || exec.callId === 'dummy-staged-blocked') blockedPrePolicy = true;
-  return next();
+
+const dispatched = await tools.execute({
+  name: 'rdsh_inspect',
+  arguments: { command: 'printf DUMMY_MODEL_DISPATCH' },
+  agent,
+  callId: 'dummy-dispatch',
+  signal: new AbortController().signal,
 });
-tools.register({ ...tools.get('rdsh_inspect'), name: 'blocked_probe', async execute() { invoked = true; return {}; } });
-const blocked = await tools.execute({ name: 'blocked_probe', arguments: {}, agent, callId: 'dummy-blocked', signal: new AbortController().signal });
-assert.equal(invoked, false);
-assert.equal(blockedPrePolicy, false, 'a forbidden tool must not reach approval middleware');
-assert.match(JSON.stringify(blocked), /RDSH_SECURITY/);
-const scheduler = tools[TOOL_RUNTIME_SCHEDULER];
-const stagedBlocked = await scheduler.prepare({ name: 'blocked_probe', arguments: {}, agent, callId: 'dummy-staged-blocked', signal: new AbortController().signal });
-assert.equal(stagedBlocked.kind, 'final-result');
-assert.equal(stagedBlocked.result.isError, true);
-assert.equal(invoked, false);
-assert.equal(blockedPrePolicy, false, 'a staged forbidden tool must not reach approval middleware');
-assert.match(JSON.stringify(stagedBlocked.result), /RDSH_SECURITY/);
-let shadowInvoked = false;
-const stagedAgent = {};
-const stagedScoped = createScope(ctx, stagedAgent);
-stagedAgent.ctx = stagedScoped.ctx;
-stagedScoped.ctx.tools.presentAs('ptc');
-ctx.on('tools/execute', async (exec, next) => {
-  if (exec.callId === 'dummy-after-policy' || exec.callId === 'dummy-staged-after-policy') exec.name = 'blocked_probe';
-  if (exec.callId === 'dummy-late-shadow') {
-    scoped.ctx.tools.register({ ...tools.get('rdsh_inspect'), async execute() { shadowInvoked = true; return { exitCode: 0, stdout: 'DUMMY_SHADOW', stderr: '' }; } });
-  }
-  if (exec.callId === 'dummy-staged-late-shadow') {
-    stagedScoped.ctx.tools.register({ ...tools.get('rdsh_inspect'), async execute() { shadowInvoked = true; return { exitCode: 0, stdout: 'DUMMY_STAGED_SHADOW', stderr: '' }; } });
-  }
-  return next();
-});
-for (const callId of ['dummy-staged-after-policy', 'dummy-staged-late-shadow']) {
-  const prepared = await scheduler.prepare({ name: 'rdsh_inspect', arguments: { command: 'printf DUMMY_STAGED' }, agent: stagedAgent, callId, signal: new AbortController().signal });
-  assert.equal(prepared.kind, 'dispatch');
-  const dispatchedStage = await scheduler.dispatch(prepared.exec);
-  assert.equal(invoked, false, 'staged around-dispatch middleware must not switch to a blocked tool');
-  assert.equal(shadowInvoked, false, 'a staged late scoped replacement must not bypass the body guard');
-  assert.equal(dispatchedStage.result.isError, true);
-  assert.match(JSON.stringify(dispatchedStage.result), /RDSH_SECURITY/);
-}
-for (const callId of ['dummy-after-policy', 'dummy-late-shadow']) {
-  const rewritten = await tools.execute({ name: 'rdsh_inspect', arguments: { command: 'printf DUMMY_REWRITTEN' }, agent, callId, signal: new AbortController().signal });
-  assert.equal(invoked, false, 'around-dispatch middleware must not switch to a blocked tool');
-  assert.equal(shadowInvoked, false, 'a late scoped replacement must not bypass the guard');
-  assert.match(JSON.stringify(rewritten), /RDSH_SECURITY/);
-}
-console.log('guarded runtime dispatched inspection and rejected other tools with kernel isolation');
+assert.equal(dispatched.isError, true);
+assert.match(JSON.stringify(dispatched), /only `run_code` is callable directly/);
+
+console.log('guarded runtime refused the PTC catalog, preserved DSH modes and kept isolated inspection available');

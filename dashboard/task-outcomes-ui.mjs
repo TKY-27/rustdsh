@@ -1,5 +1,6 @@
 import { text, formatDateTime } from "./locale.mjs";
 import { observationView } from "./observations.mjs";
+import { deepLinkButton } from "./deep-link-ui.mjs";
 
 const statusNames = {
   pass: text("outcome.pass"),
@@ -77,7 +78,11 @@ function checkLabel(condition) {
   if (condition.status === "pass") return text("outcome.reportedPass");
   return statusNames[condition.status] || text("outcome.unknown");
 }
-export function createTaskOutcomesPanel(tasks, milestones, { node, api }) {
+export function createTaskOutcomesPanel(
+  tasks,
+  milestones,
+  { node, api, makeDeepLink },
+) {
   let generation = 0;
   let renderedRevision = -1;
   let observationTimer = null;
@@ -225,7 +230,35 @@ export function createTaskOutcomesPanel(tasks, milestones, { node, api }) {
           details: observationDetails,
           task,
         });
-        card.append(header, node("h3", task.title), observationDetails);
+        card.append(header, node("h3", task.title));
+        const reference = task.decision_reference;
+        if (reference) {
+          const successorStatus = {
+            current: "現行",
+            replaced: "置換済み",
+            withdrawn: "撤回",
+            hold: "保留",
+          }[reference.replacement_status];
+          const label = reference.confirmation_required
+            ? `要確認 · ${reference.reason} · 参照: ${reference.policy || reference.id}` +
+              (reference.replacement_policy
+                ? ` → 後継${successorStatus ? `（${successorStatus}）` : ""}: ${reference.replacement_policy}`
+                : "")
+            : `決定 ${reference.id} · ${reference.policy}`;
+          card.append(
+            node("div", label, reference.confirmation_required ? "warn" : "sub"),
+          );
+        }
+        // #57: task への project deep link は main 側のカード描画へ引き継ぐ。
+        const deepLink = deepLinkButton(
+          node,
+          makeDeepLink,
+          "task",
+          task.id,
+          `タスク ${task.id}`,
+        );
+        if (deepLink) header.append(deepLink);
+        card.append(observationDetails);
         const facts = node("dl", undefined, "decision-details");
         for (const [label, value] of [
           [text("outcome.purpose"), report.purpose],

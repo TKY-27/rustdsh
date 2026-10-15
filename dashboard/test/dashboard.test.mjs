@@ -5,16 +5,21 @@ import os from "node:os";
 import path from "node:path";
 import net from "node:net";
 import http from "node:http";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { ResourceUpdatedNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
 import { identity, applyOperation, ProjectStore } from "../state.mjs";
+import { publicDecisionReferences } from "../decision-log.mjs";
 import { startDashboard } from "../server.mjs";
+import { readLocalRuntime } from "../private-runtime.mjs";
 import { checkPortConfig } from "../tailscale.mjs";
 import { feedbackSince } from "../mcp.mjs";
 import { proxyHarness } from "../harness.mjs";
+import { RunHistory } from "../run-history.mjs";
 
 async function freePort() {
   const server = net.createServer();
@@ -126,15 +131,14 @@ test("project state, HTTP/stdio MCP, subscriptions, answers, and auth work toget
     project: alpha,
     port: await freePort(),
     tailscale: false,
+    sandboxProbe: async () => ({ supported: false, reason: "sandbox_runner_unavailable" }),
   });
   other = await startDashboard({
     project: beta,
     port: await freePort(),
     tailscale: false,
   });
-  const runtime = JSON.parse(
-    await fs.readFile(path.join(alpha.directory, "runtime.json"), "utf8"),
-  );
+  const runtime = await readLocalRuntime(alpha.directory);
   const headers = {
     authorization: `Bearer ${runtime.token}`,
     "content-type": "application/json",
@@ -175,11 +179,33 @@ test("project state, HTTP/stdio MCP, subscriptions, answers, and auth work toget
   assert.equal(rebindingStatus, 403);
   const browserToken = new URL(runtime.browser_url).hash.slice("#key=".length);
   const browserHeaders = { "x-rdsh-browser-token": browserToken };
+  const runHistory = await RunHistory.open(alpha);
+  const sampleRunId = "run_00000000-0000-4000-8000-000000000001";
+  await runHistory.register(sampleRunId, "fixture-session-private");
+  assert.equal(
+    (await fetch(dashboard.localUrl + "api/run-diagnostics")).status,
+    401,
+  );
+  const runDiagnostics = await fetch(dashboard.localUrl + "api/run-diagnostics", {
+    headers: browserHeaders,
+  });
+  assert.equal(runDiagnostics.status, 200);
+  const runReport = await runDiagnostics.json();
+  assert.equal(runReport.schema, 1);
+  assert.ok(Number.isFinite(Date.parse(runReport.observed_at)));
+  assert.equal(runReport.runs.length, 1);
+  assert.equal(runReport.runs[0].run_id, sampleRunId);
+  assert.equal(
+    runReport.runs[0].stall_diagnosis.classification,
+    "insufficient_evidence",
+  );
+  assert.equal(Object.hasOwn(runReport.runs[0], "native_session_id"), false);
   const bootstrap = await fetch(runtime.browser_url);
   assert.equal(bootstrap.status, 200);
   assert.equal(bootstrap.headers.get("set-cookie"), null);
   const html = await bootstrap.text();
   assert.match(html, /未回答の質問/);
+  assert.match(html, /run-diagnostics-refresh/);
   assert.equal(
     (await fetch(dashboard.localUrl + "api/qr.svg", { headers })).status,
     409,
@@ -205,7 +231,13 @@ test("project state, HTTP/stdio MCP, subscriptions, answers, and auth work toget
       },
     }),
   );
-  assert.equal((await client.listTools()).tools.length, 6);
+  const listed = (await client.listTools()).tools;
+  assert.equal(listed.length, 19);
+  assert.ok(listed.some((tool) => tool.name === "dashboard_record_review"));
+  assert.ok(
+    listed.some((tool) => tool.name === "dashboard_get_review_evidence"),
+  );
+  assert.ok(listed.some((tool) => tool.name === "dashboard_check_task_contract"));
   let notified;
   const notification = new Promise((resolve) => {
     notified = resolve;
@@ -236,18 +268,79 @@ test("project state, HTTP/stdio MCP, subscriptions, answers, and auth work toget
     },
   });
   const reported = await call("dashboard_get_state", {});
+  assert.equal(reported.review_evidence.revision, 0);
+  assert.deepEqual(reported.review_evidence.reports, []);
+  const emptyReviews = await call("dashboard_get_review_evidence", {
+    task_id: "M3.6",
+  });
+  assert.deepEqual(emptyReviews.reports, []);
   assert.equal(reported.metric_observations.total_cost_usd.kind, "measured");
   assert.equal(reported.metric_observations.total_cost_usd.session_id, "test-only");
   assert.equal(reported.metric_observations.total_cost_usd.reference, "fixture-request-1");
   const observationAsset = await fetch(dashboard.localUrl + "observations.mjs");
   assert.equal(observationAsset.status, 200);
   assert.match(observationAsset.headers.get("content-type"), /javascript/);
+  const decisionUiAsset = await fetch(dashboard.localUrl + "decision-log-ui.mjs");
+  assert.equal(decisionUiAsset.status, 200);
+  assert.match(decisionUiAsset.headers.get("content-type"), /javascript/);
   await call("dashboard_upsert_task", {
     id: "M3.6",
     title: "A test task",
     status: "doing",
     milestone: "M3",
   });
+  const contractInput = {
+    task_id: "M3.6", expected_version: 0, purpose: "Validate locally",
+    repository: alpha.root, allowed_scope: "Only alpha",
+    write_roots: [alpha.root], forbidden_actions: ["No publication"],
+    completion_conditions: ["Tests pass"], change_reason: "Initial scope",
+    worker_roles: ["review", "implementation"],
+  };
+  const contractRequest = (credential, input, route = "contracts/update") =>
+    fetch(dashboard.localUrl + "api/" + route, {
+      method: "POST", headers: { ...credential, "content-type": "application/json" },
+      body: JSON.stringify(input),
+    });
+  const agentHeaders = { authorization: `Bearer ${runtime.mcp_token}` };
+  assert.equal((await contractRequest(agentHeaders, contractInput)).status, 401);
+  assert.equal((await contractRequest(browserHeaders, contractInput)).status, 403);
+  assert.equal((await contractRequest(agentHeaders, contractInput, "update/contract")).status, 401);
+  assert.equal((await contractRequest(headers, contractInput, "update/contract")).status, 403);
+  assert.equal((await contractRequest(headers, contractInput)).status, 200);
+  const preflight = {
+    task_id: "M3.6", contract_version: 1, repository: alpha.root,
+    cwd: alpha.root, write_paths: ["new-test-file"],
+  };
+  assert.equal((await call("dashboard_check_task_contract", preflight)).decision, "within_scope");
+  assert.equal((await contractRequest({}, preflight, "contracts/check")).status, 401);
+  for (const credential of [headers, agentHeaders, browserHeaders])
+    assert.equal((await contractRequest(credential, preflight, "contracts/check")).status, 200);
+  assert.equal((await call("dashboard_check_task_contract", { ...preflight, cwd: beta.root })).decision, "block");
+  const beforeCheck = dashboard.store.value.revision;
+  const deniedCheck = await contractRequest(agentHeaders, { ...preflight, repository: beta.root }, "contracts/check");
+  assert.equal(deniedCheck.status, 409);
+  assert.equal((await deniedCheck.json()).reason, "repository_outside_contract");
+  assert.equal(dashboard.store.value.revision, beforeCheck);
+  const revisions = await Promise.all([
+    contractRequest(headers, { ...contractInput, expected_version: 1, purpose: "Second scope" }),
+    contractRequest(headers, { ...contractInput, expected_version: 1, purpose: "Competing scope" }),
+  ]);
+  assert.deepEqual(revisions.map((response) => response.status).sort(), [200, 400]);
+  assert.equal((await call("dashboard_check_task_contract", preflight)).reason, "contract_version_changed");
+  assert.equal((await call("dashboard_check_task_contract", { ...preflight, contract_version: 2 })).decision, "within_scope");
+  const policyInput = {
+    task_id: "M3.6", contract_version: 2, repository: alpha.root,
+    operation: { schema: "rdsh.operation.v1", tool_name: "file.write", tool_input: { cwd: alpha.root, path: "new-file", content: "dummy-secret-policy-content" } },
+  };
+  const policyResult = await call("dashboard_check_operation", policyInput);
+  assert.equal(policyResult.decision, "within_policy");
+  assert.equal(policyResult.execution, "hold");
+  assert.ok(!JSON.stringify(policyResult).includes("dummy-secret-policy-content"));
+  const policyDenied = await contractRequest(agentHeaders, {
+    ...policyInput, operation: { ...policyInput.operation, tool_input: { ...policyInput.operation.tool_input, cwd: beta.root } },
+  }, "policy/check");
+  assert.equal(policyDenied.status, 409);
+  assert.equal((await policyDenied.json()).reason, "cwd_outside_contract");
   await call("dashboard_ask_question", {
     id: "Q1",
     question: "Choose a test answer",
@@ -259,6 +352,87 @@ test("project state, HTTP/stdio MCP, subscriptions, answers, and auth work toget
     type: "artifact",
     artifact: "reference-only.png",
   });
+  assert.equal(
+    (await fetch(dashboard.localUrl + "api/changes?after_revision=3")).status,
+    401,
+  );
+  const changeDelta = await fetch(
+    dashboard.localUrl + "api/changes?after_revision=3",
+    { headers: browserHeaders },
+  );
+  assert.equal(changeDelta.status, 200);
+  const changeView = await changeDelta.json();
+  assert.equal(changeView.revision, 8);
+  assert.deepEqual(
+    changeView.records.map((record) => record.name),
+    [
+      "dashboard.contract.updated",
+      "dashboard.policy.checked",
+      "dashboard.policy.checked",
+      "dashboard.question.created",
+      "dashboard.progress.updated",
+    ],
+  );
+  assert.equal("summary" in changeView.records[0], false);
+  assert.equal(
+    (
+      await fetch(dashboard.localUrl + "api/changes?after_revision=-1", {
+        headers: browserHeaders,
+      })
+    ).status,
+    400,
+  );
+  const handoff = await call("dashboard_create_handoff", { task_id: "M3.6" });
+  assert.deepEqual(Object.keys(handoff.sections), [
+    "purpose",
+    "remaining",
+    "constraints",
+    "decisions",
+    "deliverables",
+    "verification",
+    "next_step",
+  ]);
+  assert.equal(
+    handoff.sections.purpose.items[0].reported_task_title,
+    "A test task",
+  );
+  assert.equal(handoff.sections.verification.status, "unverified");
+  assert.equal(
+    handoff.sections.verification.items[0].reason,
+    "acceptance_criteria_not_defined",
+  );
+  assert.equal(handoff.sections.deliverables.items[0].contents, "not_opened");
+  assert.equal(handoff.freshness.status, "current");
+  const durableHandoff = JSON.parse(
+    await fs.readFile(path.join(alpha.directory, "handoff.json"), "utf8"),
+  );
+  assert.equal(durableHandoff.packet_id, handoff.packet_id);
+  const handoffResource = await client.readResource({
+    uri: "dashboard://handoff",
+  });
+  assert.equal(
+    JSON.parse(handoffResource.contents[0].text).packet_id,
+    handoff.packet_id,
+  );
+  const acceptanceResource = await client.readResource({
+    uri: "dashboard://acceptance",
+  });
+  assert.equal(
+    JSON.parse(acceptanceResource.contents[0].text).acceptance_defined,
+    false,
+  );
+  await call("dashboard_upsert_task", {
+    id: "M3.6",
+    title: "Changed after handoff",
+    status: "doing",
+  });
+  const staleHandoff = await call("dashboard_get_handoff", {});
+  assert.equal(staleHandoff.freshness.status, "stale");
+  assert.ok(
+    staleHandoff.freshness.stale_references.some(
+      (source) => source.id === "task:M3.6" && source.state === "changed",
+    ),
+  );
   const forgedAnswer = await fetch(dashboard.localUrl + "api/update/answer", {
     method: "POST",
     headers: { ...headers, authorization: `Bearer ${runtime.mcp_token}` },
@@ -272,6 +446,29 @@ test("project state, HTTP/stdio MCP, subscriptions, answers, and auth work toget
     body: JSON.stringify({ id: "Q1", answer: "admin forged" }),
   });
   assert.equal(adminAnswer.status, 403);
+  const adminDecision = await fetch(dashboard.localUrl + "api/decision-log", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      id: "D-forged",
+      subject: "test",
+      policy: "admin must not create this",
+    }),
+  });
+  assert.equal(adminDecision.status, 403);
+  const mcpDecision = await fetch(dashboard.localUrl + "api/decision-log", {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${runtime.mcp_token}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      id: "D-forged-mcp",
+      subject: "test",
+      policy: "MCP must not create this",
+    }),
+  });
+  assert.equal(mcpDecision.status, 401);
   assert.equal(other.store.value.tasks.length, 0);
   assert.equal(other.store.value.questions.length, 0);
   const error = await client.callTool({
@@ -290,6 +487,75 @@ test("project state, HTTP/stdio MCP, subscriptions, answers, and auth work toget
     body: JSON.stringify({ id: "Q1", answer: "Approved for test" }),
   });
   assert.equal(answer.status, 200);
+  const saveDecision = (record) =>
+    fetch(dashboard.localUrl + "api/decision-log", {
+      method: "POST",
+      headers: {
+        ...browserHeaders,
+        "content-type": "application/json",
+        origin: new URL(dashboard.localUrl).origin,
+      },
+      body: JSON.stringify(record),
+    });
+  const decisionA = await saveDecision({
+    id: "D-A",
+    subject: "provider policy",
+    policy: "Use provider A",
+    rationale: "Initial selection",
+    question_id: "Q1",
+    task_id: "M3.6",
+  });
+  assert.equal(decisionA.status, 200);
+  await call("dashboard_upsert_task", {
+    id: "M3.6",
+    title: "A test task using A",
+    status: "doing",
+    policy_decision_id: "D-A",
+  });
+  const decisionB = await saveDecision({
+    id: "D-B",
+    subject: "provider policy",
+    policy: "Use provider B",
+    rationale: "",
+    change_summary: "A no longer meets the current requirement",
+    question_id: "Q1",
+    task_id: "M3.6",
+    supersedes_id: "D-A",
+  });
+  assert.equal(decisionB.status, 200);
+  await call("dashboard_upsert_task", {
+    id: "M3.6",
+    title: "Old plan still references A",
+    status: "doing",
+  });
+  const stateAfterReplacement = await call("dashboard_get_state", {});
+  assert.deepEqual(
+    stateAfterReplacement.decision_log.records.map((item) => [item.id, item.status]),
+    [["D-A", "replaced"], ["D-B", "current"]],
+  );
+  assert.equal(stateAfterReplacement.decision_log.records[1].rationale, "");
+  assert.equal(
+    stateAfterReplacement.decision_log.records[1].rationale_status,
+    "missing",
+  );
+  assert.equal(
+    stateAfterReplacement.decision_log.records[1].question.answer,
+    "Approved for test",
+  );
+  assert.equal(stateAfterReplacement.tasks[0].policy_decision_id, "D-A");
+  assert.equal(
+    stateAfterReplacement.tasks[0].decision_reference.confirmation_required,
+    true,
+  );
+  assert.equal(
+    stateAfterReplacement.tasks[0].decision_reference.replacement_id,
+    "D-B",
+  );
+  assert.equal(
+    stateAfterReplacement.decision_log.records[1].status,
+    "current",
+  );
+  assert.equal(dashboard.store.value.contracts[0].versions.length, 2);
   await Promise.race([
     notification,
     new Promise((_, reject) =>
@@ -333,8 +599,68 @@ test("project state, HTTP/stdio MCP, subscriptions, answers, and auth work toget
     JSON.parse(stdioFeedback.content[0].text).messages[0].answer,
     "Approved for test",
   );
+  const stdioCheck = await stdio.callTool({
+    name: "dashboard_check_task_contract", arguments: preflight,
+  });
+  assert.notEqual(stdioCheck.isError, true);
+  assert.equal(JSON.parse(stdioCheck.content[0].text).reason, "contract_version_changed");
+  const stdioPolicy = await stdio.callTool({ name: "dashboard_check_operation", arguments: policyInput });
+  assert.notEqual(stdioPolicy.isError, true);
+  assert.equal(JSON.parse(stdioPolicy.content[0].text).operation_digest, policyResult.operation_digest);
+  const approvalBound = { ...policyInput, run_id: "integration-run", command_id: "integration-command" };
+  const approvalRequest = { ...approvalBound, id: "integration-approval", expected_version: 0,
+    worker_role: "implementation",
+    source_ref: "fixture:integration-command", expires_at: new Date(Date.now() + 60000).toISOString(),
+    limits: { max_cost_usd: 1, max_attempts: 1 } };
+  const requested = await stdio.callTool({ name: "dashboard_request_approval", arguments: approvalRequest });
+  assert.notEqual(requested.isError, true);
+  assert.equal(JSON.parse(requested.content[0].text).status, "pending");
+  const approvalUse = { ...approvalBound, id: approvalRequest.id, request_version: 1, attempt: 1, cost_usd: 0.5 };
+  assert.equal((await call("dashboard_check_approval", approvalUse)).reason, "approval_pending");
+  assert.equal((await contractRequest(browserHeaders,
+    { id: approvalRequest.id, request_version: 1, decision: "grant" }, "approvals/decide")).status, 200);
+  const claimed = await call("dashboard_claim_approval", approvalUse);
+  assert.equal(claimed.reservation, "reserved");
+  assert.equal(claimed.execution, "hold");
+  const replay = await stdio.callTool({ name: "dashboard_claim_approval", arguments: approvalUse });
+  assert.notEqual(replay.isError, true);
+  assert.equal(JSON.parse(replay.content[0].text).reason, "approval_retry_limit_or_replay");
+  const workerInput = { task_id: "M3.6", contract_version: 2, repository: alpha.root, run_id: "held-run", worker_role: "implementation" };
+  const worker = await call("dashboard_check_worker_start", workerInput);
+  assert.equal(worker.decision, "hold");
+  assert.equal(worker.reason, "sandbox_runner_unavailable");
+  assert.equal(worker.effective_permissions, null);
+  assert.equal((await contractRequest(agentHeaders, workerInput, "workers/check")).status, 409);
+  const stdioWorker = await stdio.callTool({ name: "dashboard_check_worker_start", arguments: workerInput });
+  assert.notEqual(stdioWorker.isError, true);
+  assert.deepEqual(JSON.parse(stdioWorker.content[0].text), worker);
+  const contractFile = path.join(temporary, "contract.json");
+  await fs.writeFile(contractFile, JSON.stringify({ ...contractInput, expected_version: 2, purpose: "CLI revision" }));
+  const runContractCli = () => promisify(execFile)(process.execPath, [
+    path.resolve("cli.mjs"), "set-contract", "--project", alpha.root, "--file", contractFile,
+  ], { env: { ...process.env }, windowsHide: true });
+  const cliResult = await runContractCli();
+  assert.match(cliResult.stdout, /saved: v3/);
+  assert.ok(!cliResult.stdout.includes(runtime.token));
+  await fs.writeFile(contractFile, "{invalid:dummy-secret-json}");
+  await assert.rejects(runContractCli, (error) =>
+    /readable JSON/.test(error.stderr) && !error.stderr.includes("dummy-secret-json"));
   const persisted = await ProjectStore.open(alpha);
   assert.equal(persisted.value.questions[0].answer, "Approved for test");
+  assert.equal(persisted.value.decision_log.records[0].status, "replaced");
+  assert.equal(persisted.value.decision_log.records[1].rationale, "");
+  assert.equal(
+    persisted.value.decision_log.records[1].question.answer,
+    "Approved for test",
+  );
+  assert.equal(persisted.value.tasks[0].policy_decision_id, "D-A");
+  assert.equal(
+    publicDecisionReferences(persisted.value)[0].decision_reference
+      .confirmation_required,
+    true,
+  );
+  assert.deepEqual(persisted.value.contracts, dashboard.store.value.contracts);
+  assert.equal(persisted.value.contracts[0].versions.at(-1).version, 3);
   assert.deepEqual(persisted.value.metric_observations, dashboard.store.value.metric_observations);
   await assert.rejects(
     () => startDashboard({ project: alpha, port: 39099, tailscale: false }),
@@ -399,9 +725,7 @@ test("failed state startup releases the instance lock and administrative stop cl
     tailscale: false,
   });
   t.after(() => dashboard.close());
-  const runtime = JSON.parse(
-    await fs.readFile(path.join(project.directory, "runtime.json"), "utf8"),
-  );
+  const runtime = await readLocalRuntime(project.directory);
   const stopped = new Promise((resolve) =>
     dashboard.server.once("close", resolve),
   );

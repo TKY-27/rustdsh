@@ -1,7 +1,13 @@
 //! Read repository files through no-follow, directory-relative handles.
 //! Callers pass an absolute, canonical root and target; unavailable hosts fail closed.
+//!
+//! Unix closes the check/open race: every component is opened with
+//! `openat`/`O_NOFOLLOW` under a held directory fd. Windows opens the target
+//! without following a final reparse point, then checks the opened handle's
+//! final path and hard-link count before returning it. Hosts without a secure
+//! handle path fail closed.
 use std::path::Path;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use std::path::PathBuf;
 
 /// A command-scoped capability for the directory selected by the caller.
@@ -13,6 +19,8 @@ pub(crate) struct Root {
     directory: std::fs::File,
     #[cfg(target_os = "macos")]
     nofollow_any: bool,
+    #[cfg(windows)]
+    path: PathBuf,
 }
 
 impl Root {
@@ -52,7 +60,13 @@ impl Root {
         })
     }
 
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    pub(crate) fn new(root: &Path) -> Option<Self> {
+        let path = std::fs::canonicalize(root).ok()?;
+        path.is_dir().then_some(Self { path })
+    }
+
+    #[cfg(not(any(unix, windows)))]
     pub(crate) fn new(_root: &Path) -> Option<Self> {
         None
     }
@@ -148,10 +162,141 @@ impl Root {
         Ok((metadata.is_file() && metadata.nlink() == 1).then_some(file))
     }
 
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    pub(crate) fn open(&self, target: &Path) -> Option<std::fs::File> {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+        const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x0000_0010;
+        // Canonicalize before opening to accept ordinary and verbatim Windows
+        // path spellings consistently. The opened handle is checked again
+        // below, so a parent junction swapped after this check still fails.
+        let canonical = std::fs::canonicalize(target).ok()?;
+        if !windows_path_is_beneath(&self.path, &canonical) {
+            return None;
+        }
+        let mut options = std::fs::OpenOptions::new();
+        options
+            .read(true)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+        let file = options.open(target).ok()?;
+        let metadata = file.metadata().ok()?;
+        let (attributes, links) = windows_handle_information(&file)?;
+        if !metadata.is_file()
+            || attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
+            || attributes & FILE_ATTRIBUTE_DIRECTORY != 0
+            || links != 1
+        {
+            return None;
+        }
+        let final_path = windows_final_handle_path(&file)?;
+        windows_path_is_beneath(&self.path, &final_path).then_some(file)
+    }
+
+    #[cfg(not(any(unix, windows)))]
     pub(crate) fn open(&self, _target: &Path) -> Option<std::fs::File> {
         None
     }
+}
+
+#[cfg(windows)]
+#[repr(C)]
+#[derive(Default)]
+struct WindowsFileTime {
+    low: u32,
+    high: u32,
+}
+
+#[cfg(windows)]
+#[repr(C)]
+#[derive(Default)]
+struct WindowsByHandleFileInformation {
+    attributes: u32,
+    creation: WindowsFileTime,
+    access: WindowsFileTime,
+    write: WindowsFileTime,
+    volume_serial: u32,
+    size_high: u32,
+    size_low: u32,
+    links: u32,
+    index_high: u32,
+    index_low: u32,
+}
+
+#[cfg(windows)]
+#[link(name = "kernel32")]
+#[allow(non_snake_case)]
+unsafe extern "system" {
+    fn GetFileInformationByHandle(
+        handle: *mut std::ffi::c_void,
+        information: *mut WindowsByHandleFileInformation,
+    ) -> i32;
+    fn GetFinalPathNameByHandleW(
+        handle: *mut std::ffi::c_void,
+        path: *mut u16,
+        path_len: u32,
+        flags: u32,
+    ) -> u32;
+}
+
+#[cfg(windows)]
+fn windows_handle_information(file: &std::fs::File) -> Option<(u32, u32)> {
+    use std::os::windows::io::AsRawHandle;
+
+    let mut information = WindowsByHandleFileInformation::default();
+    // SAFETY: the handle and output structure remain live for the call.
+    let ok = unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut information) };
+    (ok != 0).then_some((information.attributes, information.links))
+}
+
+#[cfg(windows)]
+fn windows_final_handle_path(file: &std::fs::File) -> Option<PathBuf> {
+    use std::os::windows::ffi::OsStringExt;
+    use std::os::windows::io::AsRawHandle;
+
+    let mut buffer = vec![0u16; 512];
+    loop {
+        // SAFETY: `buffer` is writable for its declared UTF-16 capacity.
+        let len = unsafe {
+            GetFinalPathNameByHandleW(
+                file.as_raw_handle(),
+                buffer.as_mut_ptr(),
+                buffer.len() as u32,
+                0,
+            )
+        } as usize;
+        if len == 0 || len > 32_768 {
+            return None;
+        }
+        if len >= buffer.len() {
+            buffer.resize(len + 1, 0);
+            continue;
+        }
+        buffer.truncate(len);
+        return Some(PathBuf::from(std::ffi::OsString::from_wide(&buffer)));
+    }
+}
+
+#[cfg(windows)]
+fn windows_path_is_beneath(root: &Path, target: &Path) -> bool {
+    fn normalize(path: &Path) -> String {
+        let text = path.to_string_lossy().replace('/', "\\");
+        let text = if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+            format!(r"\\{rest}")
+        } else if let Some(rest) = text.strip_prefix(r"\\?\") {
+            rest.to_string()
+        } else {
+            text
+        };
+        text.trim_end_matches('\\').to_ascii_lowercase()
+    }
+    let root = normalize(root);
+    let target = normalize(target);
+    target == root
+        || target
+            .strip_prefix(&root)
+            .is_some_and(|suffix| suffix.starts_with('\\'))
 }
 
 #[cfg(target_os = "macos")]
@@ -502,5 +647,137 @@ mod secure_open_tests {
         assert!(open_beneath(Path::new(&root), &linked).is_none());
         assert!(reader.open(&linked).is_none());
         std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
+    }
+}
+
+/// Lenient pre-check for `--share-file` entries before they reach the tool
+/// boundary: the JS snapshot remains the enforcer (dotfiles, key names,
+/// sizes), so Rust only rejects what is definitely unusable — empty,
+/// absolute, parent-escaping, or over-count selections — with a clear error
+/// instead of a late sandbox failure.
+pub(crate) fn validate_share_files(files: &[String]) -> Result<(), String> {
+    if files.len() > 256 {
+        return Err(format!("too many --share-file entries ({})", files.len()));
+    }
+    for f in files {
+        if f.is_empty() || f.len() > 1024 {
+            return Err(format!("invalid --share-file entry {f:?}"));
+        }
+        let path_bytes = f.as_bytes();
+        let has_windows_drive_root = path_bytes.len() >= 3
+            && path_bytes[0].is_ascii_alphabetic()
+            && path_bytes[1] == b':'
+            && matches!(path_bytes[2], b'/' | b'\\');
+        if f.starts_with('/') || f.starts_with('\\') || has_windows_drive_root {
+            return Err(format!("--share-file must be workspace-relative: {f:?}"));
+        }
+        if f.split(['/', '\\']).any(|part| part == "..") {
+            return Err(format!("--share-file must not escape: {f:?}"));
+        }
+        if f.bytes().any(|b| b == 0) {
+            return Err(format!("invalid --share-file entry {f:?}"));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod share_validation_tests {
+    use super::validate_share_files;
+
+    #[test]
+    fn accepts_plain_relative_paths() {
+        assert!(validate_share_files(&["AGENTS.md".into(), "docs/a b.txt".into()]).is_ok());
+        assert!(validate_share_files(&[]).is_ok());
+    }
+
+    #[test]
+    fn rejects_absolute_parent_and_overflow() {
+        for bad in [
+            "",
+            "/etc/passwd",
+            "C:\\Windows\\win.ini",
+            "C:/Windows/win.ini",
+            "a/../../b",
+            "..\\x",
+            "a\0b",
+        ] {
+            assert!(validate_share_files(&[bad.into()]).is_err(), "{bad:?}");
+        }
+        let many = vec!["a".to_string(); 257];
+        assert!(validate_share_files(&many).is_err());
+    }
+}
+#[cfg(all(test, windows))]
+mod windows_secure_open_tests {
+    use super::Root;
+    use std::io::Read;
+
+    struct Temp(std::path::PathBuf);
+    impl Temp {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "rdsh-windows-open-{}-{}",
+                std::process::id(),
+                crate::local_http::random_token().unwrap()
+            ));
+            std::fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+    }
+    impl Drop for Temp {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn opens_regular_file_under_root() {
+        let temp = Temp::new();
+        let root = temp.0.join("project");
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("source.rs");
+        std::fs::write(&path, "approved").unwrap();
+        let root = std::fs::canonicalize(root).unwrap();
+        let reader = Root::new(&root).unwrap();
+        let mut text = String::new();
+        reader
+            .open(&path)
+            .unwrap()
+            .read_to_string(&mut text)
+            .unwrap();
+        assert_eq!(text, "approved");
+    }
+
+    #[test]
+    fn rejects_hard_links_by_open_handle_link_count() {
+        let temp = Temp::new();
+        let root = temp.0.join("project");
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("source.rs");
+        std::fs::write(&path, "linked").unwrap();
+        std::fs::hard_link(&path, temp.0.join("outside.rs")).unwrap();
+        let root = std::fs::canonicalize(root).unwrap();
+        let reader = Root::new(&root).unwrap();
+        assert!(reader.open(&path).is_none());
+    }
+
+    #[test]
+    fn rejects_parent_reparse_points_that_resolve_outside_root() {
+        use std::os::windows::fs::symlink_dir;
+
+        let temp = Temp::new();
+        let root = temp.0.join("project");
+        let outside = temp.0.join("outside");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("secret.rs"), "outside").unwrap();
+        let junction = root.join("junction");
+        if symlink_dir(&outside, &junction).is_err() {
+            return;
+        }
+        let canonical_root = std::fs::canonicalize(root).unwrap();
+        let reader = Root::new(&canonical_root).unwrap();
+        assert!(reader.open(&junction.join("secret.rs")).is_none());
     }
 }

@@ -1,5 +1,7 @@
-/// Env overrides for drop-in `dsh` mode (see install.sh --as-dsh).
-/// RDSH_PASSTHROUGH=1 disables slim env; RDSH_DRY_RUN=1 only prints the exec.
+//! Env overrides for drop-in `dsh` mode (see install.sh --as-dsh).
+//! RDSH_PASSTHROUGH=1 disables slim env; RDSH_DRY_RUN=1 only prints the exec.
+use crate::executable::is_executable as is_executable_candidate;
+
 pub fn env_passthrough() -> bool {
     std::env::var("RDSH_PASSTHROUGH").is_ok_and(|v| v == "1")
 }
@@ -21,39 +23,36 @@ fn origin_file() -> Option<String> {
     }
 }
 
-/// Check a PATH candidate without spawning it. On Unix, query whether the
-/// current effective user can execute this regular file; mode bits alone can
-/// accept a file whose only execute bit belongs to another permission class.
-fn is_executable_candidate(path: &std::path::Path) -> bool {
-    let Ok(metadata) = std::fs::metadata(path) else {
-        return false;
+/// Warn when an explicitly selected original (env var or origin file) looks
+/// risky: not a regular file, not owned by us, or group/world-writable.
+/// Advisory only — the selection still wins so existing setups keep working.
+#[cfg(unix)]
+fn warn_if_risky_origin(path: &str, via: &str) {
+    use std::os::unix::fs::MetadataExt;
+    let Ok(md) = std::fs::metadata(path) else {
+        return;
     };
-    if !metadata.is_file() {
-        return false;
+    let mut why: Vec<&str> = vec![];
+    if !md.is_file() {
+        why.push("not a regular file");
     }
-    #[cfg(unix)]
-    {
-        use std::ffi::CString;
-        use std::os::unix::ffi::OsStrExt;
-        let Ok(c_path) = CString::new(path.as_os_str().as_bytes()) else {
-            return false;
-        };
-        // SAFETY: c_path is NUL-terminated and AT_FDCWD makes this a read-only query.
-        unsafe {
-            libc::faccessat(
-                libc::AT_FDCWD,
-                c_path.as_ptr(),
-                libc::X_OK,
-                libc::AT_EACCESS,
-            ) == 0
-        }
+    // SAFETY: getuid takes no arguments and always succeeds.
+    if md.uid() != unsafe { libc::getuid() } {
+        why.push("not owned by you");
     }
-    #[cfg(not(unix))]
-    {
-        true
+    if md.mode() & 0o022 != 0 {
+        why.push("group/world-writable");
+    }
+    if !why.is_empty() {
+        eprintln!(
+            "[rdsh] warning: original dsh from {via} ({path}) is {} — check it before delegating",
+            why.join(" and ")
+        );
     }
 }
 
+#[cfg(not(unix))]
+fn warn_if_risky_origin(_path: &str, _via: &str) {}
 /// True when `path` is runnable as the original DSH: an executable binary,
 /// or a `.js` entry launched via Node (regular file suffices there).
 fn is_runnable_original(path: &std::path::Path) -> bool {
@@ -126,12 +125,14 @@ pub fn find_original_dsh() -> Option<String> {
     for key in ["RDSH_ORIG_BIN", "DSH_ORIG_BIN"] {
         if let Ok(p) = std::env::var(key) {
             if !p.is_empty() {
+                warn_if_risky_origin(&p, key);
                 return Some(p);
             }
         }
     }
     if let Some(p) = origin_file() {
         if is_runnable_original(std::path::Path::new(&p)) {
+            warn_if_risky_origin(&p, "origin file");
             return Some(p);
         }
     }
@@ -343,23 +344,28 @@ fn node_for_dsh(orig: &str) -> Option<String> {
     None
 }
 
+/// Read-only runtime selection shared by delegation and doctor.
+pub(crate) fn selected_node(orig: &str) -> Option<String> {
+    node_for_dsh(orig).or_else(find_node_bin)
+}
+
 fn base_cmd(
     orig: &str,
     dry: bool,
     metadata_only: bool,
     locale: crate::locale::Locale,
 ) -> anyhow::Result<std::process::Command> {
-    let selected_node = || node_for_dsh(orig).or_else(find_node_bin);
     if dry || metadata_only {
         if is_node_entrypoint(orig) {
-            let mut command =
-                std::process::Command::new(selected_node().unwrap_or_else(|| "node".to_string()));
+            let mut command = std::process::Command::new(
+                selected_node(orig).unwrap_or_else(|| "node".to_string()),
+            );
             command.arg(orig);
             return Ok(command);
         }
         return Ok(std::process::Command::new(orig));
     }
-    let bin = selected_node().ok_or_else(|| {
+    let bin = selected_node(orig).ok_or_else(|| {
         anyhow::anyhow!(match locale {
             crate::locale::Locale::English => "RDSH_SECURITY: compatible Node runtime is required",
             crate::locale::Locale::Chinese => "RDSH_SECURITY：需要兼容的 Node 运行时",

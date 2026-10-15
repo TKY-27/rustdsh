@@ -5,6 +5,9 @@ Issue [#19](https://github.com/jimoto-no-llm/rustdsh/issues/19) の追指示投�
 [回答適用](ANSWER-APPLICATION.md) の契約を使い、元のACPクライアントの
 `send` / `interrupt` に配送します。
 
+問題が起きた区間は、画面の[指示・回答の相関](CAUSAL-TIMELINE.md)で
+受領・native入力結果・試験・質問revisionごとに確認できます。
+
 ## 対象と入力処理の確認
 
 `reply-consumer serve` で元のrun/sessionへ明示接続し、表示されたconsumer IDを使います。
@@ -55,7 +58,7 @@ JSONのフィールド順は一致判定に影響しません。同じIDで別�
 
 ## 管理エージェントとローカルCLI
 
-既存6つのMCP toolは変更せず、明示的なHTTP/CLI投稿を追加します。
+既存MCP toolは変更せず、明示的なHTTP/CLI投稿を追加します。
 
 ```sh
 rdsh-dashboard instruction context --project /path/to/project --consumer-id consumer_id

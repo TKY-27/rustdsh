@@ -11,7 +11,7 @@ publish, or charge money. Permission decisions belong to the approval ledger
 Legacy `{id, question, urgency?, default_action?}` calls retain their existing
 question and feedback field shapes. `default_action` is informational and does
 not turn a consultation into an approval request. The state schema remains 1
-and both MCP transports still expose six tools. Optional `question_contracts`
+and both MCP transports still expose seven tools. Optional `question_contracts`
 metadata has its own schema 1 and is written atomically with questions/answers
 in the same project state file. Unsupported or inconsistent metadata prevents
 startup without overwriting the file.
@@ -108,4 +108,8 @@ an SSE event; the server always checks the deadline at submission.
 Expired and cancelled cards remain visible with disabled answer controls.
 Saved replies are labeled as saved; older replies stay visible as invalidated
 history. Responsive cards keep their content visible in a narrow viewport.
+If a cancelled or expired revision is replaced, its terminal status, recorded
+time and optional attention report stay with that superseded revision and remain
+available after reopening the project. The replacement begins as a separate
+open revision; the old report does not transfer to it.
 See the [actual captures and validation](evidence/question-contracts.md).

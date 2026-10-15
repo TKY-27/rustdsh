@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { normalizeAttention } from "./attention.mjs";
 
 const own = (value) =>
   value && typeof value === "object" && !Array.isArray(value);
@@ -33,6 +34,11 @@ const identifier = (value, label) => {
 };
 const digest = (value) =>
   createHash("sha256").update(JSON.stringify(value)).digest("hex");
+const evidenceId = (value) =>
+  typeof value === "string" &&
+  /^evi_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(
+    value,
+  );
 function timestamp(value) {
   if (value == null) return null;
   check(
@@ -57,6 +63,7 @@ export function normalizeDecision(input) {
     "cost",
     "expires_at",
     "consumer_id",
+    "causal_source_evidence_ids",
   ]);
   check(
     ["consultation", "approval"].includes(input.kind),
@@ -153,6 +160,18 @@ export function normalizeDecision(input) {
       "An answer consumer requires exact run/session IDs",
     );
   }
+  if (input.causal_source_evidence_ids !== undefined) {
+    const ids = input.causal_source_evidence_ids;
+    check(
+      Array.isArray(ids) &&
+        ids.length > 0 &&
+        ids.length <= 20 &&
+        ids.every(evidenceId) &&
+        new Set(ids).size === ids.length,
+      "Invalid causal_source_evidence_ids",
+    );
+    result.causal_source_evidence_ids = [...ids];
+  }
   if (result.kind === "approval") {
     check(
       target?.action_id &&
@@ -247,12 +266,20 @@ export function changeQuestionContract(state, input) {
     createdAt = now;
   if (action === "revise") {
     const card = current(state, id, input.expected_revision);
+    const previousQuestion = state.questions.find(
+      (question) => question.id === id,
+    );
     check(digest(value) !== card.fingerprint, "Question contract is unchanged");
     check(
       card.history.length < 1000,
       "Question revision history limit reached; create a new question id",
     );
     const { history: oldHistory, ...old } = card;
+    const previousStatus =
+      previousQuestion && previousQuestion.answer !== null
+        ? "answered"
+        : contractStatus(card, Date.parse(now));
+    const terminal = ["cancelled", "expired"].includes(previousStatus);
     history = [
       ...oldHistory,
       {
@@ -260,6 +287,19 @@ export function changeQuestionContract(state, input) {
         status: "superseded",
         invalidated_at: now,
         invalidation_reason: "question_contract_changed",
+        ...(terminal
+          ? {
+              terminal_status: previousStatus,
+              terminal_recorded_at:
+                previousStatus === "expired"
+                  ? card.snapshot.decision.expires_at
+                  : card.updated_at,
+              ...(previousQuestion &&
+              Object.hasOwn(previousQuestion, "attention")
+                ? { attention: structuredClone(previousQuestion.attention) }
+                : {}),
+            }
+          : {}),
       },
     ];
     revision = card.revision + 1;
@@ -457,7 +497,13 @@ export function validateQuestionContracts(state) {
         "answer",
         "cancel_reason",
         ...(index < card.history.length
-          ? ["invalidated_at", "invalidation_reason"]
+          ? [
+              "invalidated_at",
+              "invalidation_reason",
+              "terminal_status",
+              "terminal_recorded_at",
+              "attention",
+            ]
           : ["history"]),
       ]);
       keys(record.snapshot, [
@@ -505,6 +551,29 @@ export function validateQuestionContracts(state) {
             record.invalidation_reason === "question_contract_changed",
           "Invalid superseded question",
         );
+      if (index < card.history.length) {
+        const hasTerminalStatus = Object.hasOwn(record, "terminal_status");
+        check(
+          hasTerminalStatus === Object.hasOwn(record, "terminal_recorded_at") &&
+            (hasTerminalStatus || !Object.hasOwn(record, "attention")),
+          "Incomplete terminal question history",
+        );
+        if (hasTerminalStatus) {
+          check(
+            ["cancelled", "expired"].includes(record.terminal_status) &&
+              typeof record.terminal_recorded_at === "string" &&
+              Number.isFinite(Date.parse(record.terminal_recorded_at)) &&
+              (record.terminal_status === "expired"
+                ? record.snapshot.decision.expires_at ===
+                  record.terminal_recorded_at
+                : typeof record.cancel_reason === "string" &&
+                  record.terminal_recorded_at === record.updated_at),
+            "Invalid terminal question history",
+          );
+          if (Object.hasOwn(record, "attention"))
+            normalizeAttention(record.attention, "question");
+        }
+      }
     }
     const question = state.questions.find((question) => question.id === id);
     check(

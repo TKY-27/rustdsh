@@ -13,6 +13,12 @@ import { constants } from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { identity, stateHome } from "./state.mjs";
+import {
+  applyProjectMove,
+  previewProjectMove,
+  rollbackProjectMove,
+} from "./project-identity.mjs";
+import { readLocalRuntime } from "./private-runtime.mjs";
 import { startDashboard } from "./server.mjs";
 import { runStdio } from "./mcp.mjs";
 import { adapterCatalog, createCliAdapter } from "./adapters.mjs";
@@ -24,13 +30,24 @@ import { RetryHistory } from "./retry.mjs";
 import { probeCliWithRetry } from "./retry-probe.mjs";
 import { Checkpoints } from "./checkpoints.mjs";
 import { AcceptanceStore } from "./acceptance.mjs";
+import { ExecutionPlans } from "./execution-plan.mjs";
 import { registerDashboardShutdown } from "./shutdown.mjs";
+import { WorkflowRecipes, recipeApprovalQuestion } from "./workflow-recipes.mjs";
 import { ModelRouting } from "./model-routing.mjs";
 import { requestedSelection, validSelection } from "./model-selection.mjs";
 import { ReplyConsumer } from "./reply-consumer.mjs";
 import { instructionRequest } from "./instruction-client.mjs";
 import { costRequest } from "./cost-client.mjs";
 import { budgetRequest } from "./budget-client.mjs";
+import { GpuLeases } from "./gpu-leases.mjs";
+import { gpuRequest, GpuError } from "./gpu-telemetry.mjs";
+import {
+  ResourceAdmission,
+} from "./resource-admission.mjs";
+import {
+  resourceRunSummary,
+  runResourceCommand,
+} from "./resource-runner.mjs";
 import { backupRequest } from "./backup-client.mjs";
 import {
   readBackupJson,
@@ -40,6 +57,13 @@ import {
 import { allInputCommands } from "./instruction-queue.mjs";
 import { createPrivateJsonFile, PrivateJsonFileError } from "./private-json-file.mjs";
 import { ProjectStore, publicState } from "./state.mjs";
+import {
+  applyStateMigration,
+  clearStaleStateMigrationLock,
+  dryRunStateMigration,
+  inspectStateMigrations,
+  rollbackStateMigration,
+} from "./state-migrations.mjs";
 import { setTimeout as delay } from "node:timers/promises";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
@@ -54,37 +78,60 @@ import {
 } from "./connection-diagnostics.mjs";
 
 function helpFor(language) {
-  return `rdsh-dashboard [--language en|zh-CN|ja] <${cliText(language, "arg.command")}> ...
-rdsh-dashboard project --project <${cliText(language, "arg.directory")}> [--port <${cliText(language, "arg.port")}>] [--no-tailscale] [--open]
+  return `rdsh-dashboard [--language en|zh-CN|ja] project --project <${cliText(language, "arg.directory")}> [--include-project <${cliText(language, "arg.directory")}> ...] [--port <${cliText(language, "arg.port")}>] [--no-tailscale] [--open]
 rdsh-dashboard harness [--port 38081] [--harness-port 3081] [--no-tailscale] [--open]
+rdsh-dashboard project-id --project <${cliText(language, "arg.directory")}>
+rdsh-dashboard project-move preview|apply --project <new-directory> --from-id <project_id> [--expected-revision <n>]
+rdsh-dashboard project-move rollback --migration-id <migration_id>
 rdsh-dashboard open --project <${cliText(language, "arg.directory")}> | --harness
 rdsh-dashboard stop --project <${cliText(language, "arg.directory")}> | --harness
 rdsh-dashboard revoke-events --project <${cliText(language, "arg.directory")}>
+rdsh-dashboard set-contract --project <${cliText(language, "arg.directory")}> --file <contract.json>
 rdsh-dashboard tunnel --project <${cliText(language, "arg.directory")}> --tunnel-id <tunnel_id>
 rdsh-dashboard diagnostics --project <${cliText(language, "arg.directory")}>
+rdsh-dashboard state-migrate inspect|dry-run|apply --project <${cliText(language, "arg.directory")}>
+rdsh-dashboard state-migrate rollback --project <${cliText(language, "arg.directory")}> --migration-id <id>
+rdsh-dashboard state-migrate clear-stale-lock --project <${cliText(language, "arg.directory")}> --confirm-stale-lock
 rdsh-dashboard mcp --project <${cliText(language, "arg.directory")}>
 rdsh-dashboard adapters [--cli dsh] [--executable <original-dsh>] [--entrypoint <bin.js>] [--project <${cliText(language, "arg.directory")}>] [--retry] [--retry-attempts <n>] [--retry-total-ms <ms>]
 rdsh-dashboard adapter-smoke --executable <original-dsh> [--entrypoint <bin.js>] [--project <${cliText(language, "arg.directory")}>]
 rdsh-dashboard preflight --project <${cliText(language, "arg.directory")}> [--requirements <json>] [--executable <original-dsh>] [--entrypoint <bin.js>] [--verify-auth]
-rdsh-dashboard run-history list|inspect|events --project <${cliText(language, "arg.directory")}> [--run-id <run_id>] [--cursor <${cliText(language, "arg.number")}>] [--limit <${cliText(language, "arg.number")}>]
+rdsh-dashboard run-history list|inspect|events --project <${cliText(language, "arg.directory")}> [--run-id <run_id>] [--cursor <number>] [--limit <number>]
 rdsh-dashboard retry-history list|inspect --project <${cliText(language, "arg.directory")}> [--operation-id <id>]
-rdsh-dashboard checkpoint record|list|inspect|resume|start-new --project <${cliText(language, "arg.directory")}> [--run-id <id>] [--checkpoint-id <id>] [--executable <original-dsh>] [--entrypoint <bin.js>] [--verify-native] [--retry-operation-id <id>] [--summary-file <${cliText(language, "arg.file")}> --accept-context-loss]
-rdsh-dashboard acceptance define|run|report|inspect --project <${cliText(language, "arg.directory")}> --task-id <id> [--criterion-id <id>] [--criteria-file <json>] [--argv-file <json>] [--result-file <json>] [--scope full|partial] [--timeout-ms <ms>] [--image <${cliText(language, "arg.relative-path")}>]
-rdsh-dashboard routing bind|inspect|probe|allow-change --project <${cliText(language, "arg.directory")}> --run-id <id> [--route-file <json>] [--authorization-file <json>] [--executable <original-dsh>] [--entrypoint <bin.js>]
-rdsh-dashboard session-ledger list|record|resolve|start|resume --project <${cliText(language, "arg.directory")}> [--run-id <run_id>] [--task-id <id>] [--session-id <id>] [--label <${cliText(language, "arg.name")}>] [--provider <${cliText(language, "arg.name")}>] [--cwd <${cliText(language, "arg.directory")}>] [--cli <${cliText(language, "arg.name")}>] [--executable <original-dsh>] [--entrypoint <bin.js>]
+rdsh-dashboard checkpoint record|list|inspect|resume|start-new --project <${cliText(language, "arg.directory")}> [--run-id <id>] [--checkpoint-id <id>] [--executable <original-dsh>] [--entrypoint <bin.js>] [--verify-native] [--retry-operation-id <id>] [--summary-file <file> --accept-context-loss]
+rdsh-dashboard acceptance define|run|report|inspect --project <${cliText(language, "arg.directory")}> --task-id <id> [--criterion-id <id>] [--criteria-file <json>] [--argv-file <json>] [--result-file <json>] [--scope full|partial] [--timeout-ms <ms>] [--image <relative-path>] [--causal-source-command-id <command_id> ...]
+rdsh-dashboard plan define --project <${cliText(language, "arg.directory")}> --input-file <json>
+rdsh-dashboard plan enforce --project <${cliText(language, "arg.directory")}> --plan-id <id> --run-id <confirmed-run>
+rdsh-dashboard plan inspect|stop --project <${cliText(language, "arg.directory")}> [--plan-id <id>]
+rdsh-dashboard recipe save --project <${cliText(language, "arg.directory")}> --input-file <recipe.json> --expected-revision <n>
+rdsh-dashboard recipe list --project <${cliText(language, "arg.directory")}>
+rdsh-dashboard recipe inspect --project <${cliText(language, "arg.directory")}> --recipe-id <id> [--expected-revision <n>]
+rdsh-dashboard recipe preview|apply --project <${cliText(language, "arg.directory")}> --recipe-id <id> [--expected-revision <n>] --run-id <confirmed-run> --plan-id <id> --input-file <bindings.json> [--preview-token <token>]
+rdsh-dashboard routing bind|enforce|inspect|probe|allow-change --project <${cliText(language, "arg.directory")}> --run-id <id> [--route-file <json>] [--authorization-file <json>] [--executable <original-dsh>] [--entrypoint <bin.js>]
+rdsh-dashboard session-ledger list|record|resolve|start|resume --project <${cliText(language, "arg.directory")}> [--run-id <run_id>] [--task-id <id>] [--session-id <id>] [--label <name>] [--provider <name>] [--cwd <${cliText(language, "arg.directory")}>] [--cli <name>] [--executable <original-dsh>] [--entrypoint <bin.js>] [--docker-linux-worker --docker-worker-mount-root <${cliText(language, "arg.directory")}>]
 rdsh-dashboard reply-consumer inspect|once|serve --project <${cliText(language, "arg.directory")}> [--run-id <run_id>] [--command-id <reply_id>] [--executable <original-dsh>] [--entrypoint <bin.js>]
 rdsh-dashboard instruction context --project <${cliText(language, "arg.directory")}> --consumer-id <consumer_id>
 rdsh-dashboard instruction submit|resolve --project <${cliText(language, "arg.directory")}> --input-file <json>
 rdsh-dashboard cost-ledger declare|report --project <${cliText(language, "arg.directory")}> --input-file <json>
 rdsh-dashboard cost-ledger inspect --project <${cliText(language, "arg.directory")}>
-rdsh-dashboard cost-ledger validate|public|schema --input-file <request-json>
+rdsh-dashboard cost-ledger validate|public|schema --input-file <request-json>   (native Rust)
 rdsh-dashboard task-outcomes apply|validate|schema --input-file <request-json>
 rdsh-dashboard budget-admission apply|validate|public --input-file <request-json>
 rdsh-dashboard question-contracts apply|validate|public --input-file <request-json>
 rdsh-dashboard answer-applications apply|validate|public|schema --input-file <request-json>
 rdsh-dashboard instruction-queue validate|context|submit|resolve|control --input-file <request-json>
 rdsh-dashboard budget policy|usage --project <${cliText(language, "arg.directory")}> --input-file <json>
+rdsh-dashboard question-contracts apply|validate|public --input-file <request-json>
+rdsh-dashboard answer-applications apply|validate|public|schema --input-file <request-json>
+rdsh-dashboard budget policy|usage --project <${cliText(language, "arg.directory")}> --input-file <json>
 rdsh-dashboard budget inspect --project <${cliText(language, "arg.directory")}>
+rdsh-dashboard gpu inspect|reconcile
+rdsh-dashboard session-ledger retry-start --project <${cliText(language, "arg.directory")}> --run-id <pending-GPU-run> [--executable <original-dsh> --entrypoint <bin.js>]
+rdsh-dashboard session-ledger start|resume --gpu-request <json> --project <${cliText(language, "arg.directory")}> [--run-id <id>] [--executable <original-dsh> --entrypoint <bin.js>]
+rdsh-dashboard reply-consumer once|serve --gpu-request <json> --project <${cliText(language, "arg.directory")}> --run-id <id> [--executable <original-dsh> --entrypoint <bin.js>]
+rdsh-dashboard resources inspect
+rdsh-dashboard resources policy --max-heavy-builds <n>
+rdsh-dashboard resources run --request-file <json> --argv-file <json>
 rdsh-dashboard integration init --project <${cliText(language, "arg.directory")}> --input-file <checks-json> --expected-revision 0 --expected-head <sha>
 rdsh-dashboard integration enqueue|reject --project <${cliText(language, "arg.directory")}> --input-file <json> --expected-revision <n>
 rdsh-dashboard integration inspect --project <${cliText(language, "arg.directory")}>
@@ -140,6 +187,13 @@ try {
     tokens: true,
     options: {
       language: { type: "string" },
+      "from-id": { type: "string" },
+      "migration-id": { type: "string" },
+      "include-project": { type: "string", multiple: true },
+      file: { type: "string" },
+      "plan-id": { type: "string" },
+      "recipe-id": { type: "string" },
+      "preview-token": { type: "string" },
       project: { type: "string" },
       port: { type: "string" },
       "harness-port": { type: "string" },
@@ -177,6 +231,10 @@ try {
       scope: { type: "string" },
       "timeout-ms": { type: "string" },
       image: { type: "string", multiple: true },
+      "causal-source-command-id": { type: "string", multiple: true },
+      "request-file": { type: "string" },
+      "max-heavy-builds": { type: "string" },
+      "gpu-request": { type: "string" },
       "route-file": { type: "string" },
       "authorization-file": { type: "string" },
       "command-id": { type: "string" },
@@ -191,6 +249,7 @@ try {
       "archive-file": { type: "string" },
       "output-file": { type: "string" },
       "expected-revision": { type: "string" },
+      "confirm-stale-lock": { type: "boolean" },
       "archive-id": { type: "string" },
       "release-id": { type: "string" },
       "selection-revision": { type: "string" },
@@ -204,6 +263,8 @@ try {
       "trust-workspace": { type: "boolean" },
       wait: { type: "boolean" },
       probe: { type: "boolean" },
+      "docker-linux-worker": { type: "boolean" },
+      "docker-worker-mount-root": { type: "string", multiple: true },
       help: { type: "boolean", short: "h" },
     },
   }));
@@ -488,6 +549,16 @@ async function pinnedAttachment(project, options) {
     return { delegated: true };
   return { attached: await releases.attach(project, plan, options) };
 }
+function requestedGpu() {
+  if (values["gpu-request"] === undefined) return null;
+  if (Buffer.byteLength(values["gpu-request"]) > 2048)
+    throw new GpuError("invalid_gpu_request");
+  try {
+    return gpuRequest(JSON.parse(values["gpu-request"]));
+  } catch {
+    throw new GpuError("invalid_gpu_request");
+  }
+}
 try {
   if (argumentError)
     throw new CliDiagnosticError("error.argumentParsing", {
@@ -513,10 +584,37 @@ try {
     ? resolveProductLocale(explicitLanguage)
     : await loadProductLocale(explicitLanguage);
   if (
+    values["gpu-request"] !== undefined &&
+    !(
+      (command === "session-ledger" &&
+        ["start", "resume", "retry-start"].includes(positionals[1])) ||
+      (command === "reply-consumer" &&
+        ["once", "serve"].includes(positionals[1]))
+    )
+  )
+    throw new CliDiagnosticError("error.gpuAttachment");
+  if (
+    command !== "project-move" &&
+    (values["from-id"] !== undefined || values["migration-id"] !== undefined)
+  )
+    throw new CliDiagnosticError("error.projectMoveOptions");
+  if (
+    values["include-project"]?.length &&
+    command !== "project"
+  )
+    throw new CliDiagnosticError("error.includeProjectMode");
+  if (
     command !== "release" &&
     ["release-id", "selection-revision"].some((k) => values[k] !== undefined)
   )
     throw new CliDiagnosticError("error.releaseOptions");
+  if (
+    !["state-migrate", "project-move"].includes(command) &&
+    ["migration-id", "confirm-stale-lock"].some(
+      (key) => values[key] !== undefined,
+    )
+  )
+    throw new CliDiagnosticError("error.migrationOptions");
   if (
     ["managed-release-id", "managed-revision"].some(
       (k) => values[k] !== undefined,
@@ -528,7 +626,7 @@ try {
       ) &&
         !(
           command === "session-ledger" &&
-          ["start", "resume"].includes(positionals[1])
+          ["start", "resume", "retry-start"].includes(positionals[1])
         ) &&
         !(
           command === "reply-consumer" &&
@@ -549,9 +647,10 @@ try {
     throw new CliDiagnosticError("error.backupOptions");
   if (
     values["expected-revision"] !== undefined &&
-    !["backup", "integration", "workers"].includes(command)
+    !["backup", "integration", "workers", "recipe"].includes(command) &&
+    !(command === "project-move" && positionals[1] === "apply")
   )
-    throw new CliDiagnosticError("error.backupOptions");
+    throw new CliDiagnosticError("error.expectedRevisionTargets");
   if (
     values["expected-head"] !== undefined &&
     !["integration", "workers"].includes(command)
@@ -565,7 +664,7 @@ try {
   ) {
     const permitted =
       (command === "session-ledger" &&
-        ["start", "resume"].includes(positionals[1])) ||
+        ["start", "resume", "retry-start"].includes(positionals[1])) ||
       (command === "reply-consumer" &&
         ["once", "serve"].includes(positionals[1]));
     if (!permitted || !values["budget-guard"] || !values["worker-id"])
@@ -594,15 +693,15 @@ try {
     throw new CliDiagnosticError("error.checkpointOptions");
   if (
     command !== "acceptance" &&
-    [
+    ([
       "criterion-id",
       "criteria-file",
-      "argv-file",
       "result-file",
       "scope",
       "timeout-ms",
       "image",
-    ].some((key) => values[key] !== undefined)
+    ].some((key) => values[key] !== undefined) ||
+      (command !== "resources" && values["argv-file"] !== undefined))
   )
     throw new CliDiagnosticError("error.acceptanceOptions");
   if (
@@ -612,8 +711,322 @@ try {
     )
   )
     throw new CliDiagnosticError("error.routingOptions");
+  if (!["plan", "recipe"].includes(command) && values["plan-id"] !== undefined)
+    throw new CliDiagnosticError("error.planOptions");
   if (values.help || !command) {
     console.log(helpFor(language));
+  } else if (command === "set-contract") {
+    if (values.harness || !values.file)
+      throw new CliDiagnosticError("error.contractFileProjectOnly");
+    const project = await identity(values.project || process.cwd());
+    const runtime = await readLocalRuntime(project.directory);
+    if (runtime.kind !== "project" || runtime.project_id !== project.id)
+      throw new CliDiagnosticError("error.contractDifferentProject");
+    let input;
+    try {
+      const contents = await fs.readFile(values.file, "utf8");
+      if (Buffer.byteLength(contents) > 131072) throw new CliDiagnosticError("error.contractTooLarge");
+      input = JSON.parse(contents);
+    } catch {
+      throw new CliDiagnosticError("error.contractFileInvalid");
+    }
+    const response = await fetch(runtime.local_url + "api/contracts/update", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${runtime.token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(input),
+      signal: AbortSignal.timeout(15000),
+    });
+    let state;
+    try {
+      state = await response.json();
+    } catch {
+      throw new CliDiagnosticError("error.contractResponseInvalid");
+    }
+    if (!response.ok)
+      throw new Error(
+        typeof state?.error === "string"
+          ? state.error
+          : `HTTP ${response.status}`,
+      );
+    const history = Array.isArray(state?.contracts)
+      ? state.contracts.find((item) => item?.task_id === input.task_id)
+      : null;
+    const version = Array.isArray(history?.versions)
+      ? history.versions.at(-1)?.version
+      : null;
+    if (!Number.isSafeInteger(version) || version < 1)
+      throw new CliDiagnosticError("error.contractVersionMissing");
+    console.log(
+      `[rdsh-dashboard] Task contract saved: v${version}; prior approvals require revalidation`,
+    );
+  } else if (command === "state-migrate") {
+    const action = positionals[1];
+    const allowed = new Set([
+      "project",
+      "migration-id",
+      "confirm-stale-lock",
+      "help",
+    ]);
+    if (
+      positionals.length !== 2 ||
+      ![
+        "inspect",
+        "dry-run",
+        "apply",
+        "rollback",
+        "clear-stale-lock",
+      ].includes(action) ||
+      Object.keys(values).some((key) => !allowed.has(key)) ||
+      (action === "rollback"
+        ? !values["migration-id"] || values["confirm-stale-lock"]
+        : Boolean(values["migration-id"])) ||
+      (action === "clear-stale-lock"
+        ? !values["confirm-stale-lock"]
+        : Boolean(values["confirm-stale-lock"]))
+    )
+      throw new CliDiagnosticError("error.stateMigrateAction");
+    const project = await identity(values.project || process.cwd());
+    const report =
+      action === "inspect"
+        ? await inspectStateMigrations(project)
+        : action === "dry-run"
+          ? await dryRunStateMigration(project)
+          : action === "apply"
+            ? await applyStateMigration(project)
+            : action === "rollback"
+              ? await rollbackStateMigration(project, values["migration-id"])
+              : await clearStaleStateMigrationLock(project, {
+                  confirmed: values["confirm-stale-lock"],
+                });
+    console.log(JSON.stringify(report, null, 2));
+  } else if (command === "project-id") {
+    const allowed = new Set(["project", "help"]);
+    if (
+      positionals.length !== 1 ||
+      Object.keys(values).some((key) => !allowed.has(key))
+    )
+      throw new CliDiagnosticError("error.projectIdAction");
+    const project = await identity(values.project || process.cwd());
+    console.log(
+      JSON.stringify(
+        {
+          project_id: project.id,
+          root: project.root,
+          state_directory: project.directory,
+        },
+        null,
+        2,
+      ),
+    );
+  } else if (command === "project-move") {
+    const action = positionals[1];
+    let result;
+    if (action === "rollback") {
+      const allowed = new Set(["migration-id", "help"]);
+      if (
+        positionals.length !== 2 ||
+        !values["migration-id"] ||
+        Object.keys(values).some((key) => !allowed.has(key))
+      )
+        throw new CliDiagnosticError("error.projectMoveRollbackAction");
+      result = await rollbackProjectMove(values["migration-id"]);
+    } else {
+      const allowed = new Set([
+        "project",
+        "from-id",
+        "expected-revision",
+        "help",
+      ]);
+      if (
+        positionals.length !== 2 ||
+        !["preview", "apply"].includes(action) ||
+        !values.project ||
+        !values["from-id"] ||
+        Object.keys(values).some((key) => !allowed.has(key)) ||
+        (action === "preview" && values["expected-revision"] !== undefined) ||
+        (action === "apply" && values["expected-revision"] === undefined)
+      )
+        throw new CliDiagnosticError("error.projectMoveAction");
+      if (action === "preview")
+        result = await previewProjectMove(values.project, values["from-id"]);
+      else {
+        const revision = Number(values["expected-revision"]);
+        if (!Number.isSafeInteger(revision) || revision < 0)
+          throw new CliDiagnosticError("error.expectedRevisionInteger");
+        result = await applyProjectMove(
+          values.project,
+          values["from-id"],
+          revision,
+        );
+      }
+    }
+    console.log(JSON.stringify(result, null, 2));
+  } else if (command === "plan") {
+    const action = positionals[1],
+      allowed = new Set(["project", "plan-id", "run-id", "input-file", "help"]);
+    if (
+      positionals.length !== 2 ||
+      !["define", "enforce", "inspect", "stop"].includes(action) ||
+      Object.keys(values).some((key) => !allowed.has(key))
+    )
+      throw new CliDiagnosticError("error.planAction");
+    const project = await identity(values.project || process.cwd()),
+      plans = ExecutionPlans.open(project);
+    let result;
+    if (action === "define") {
+      if (!values["input-file"] || values["run-id"] || values["plan-id"])
+        throw new CliDiagnosticError("error.planDefineInput");
+      result = await plans.define(await localJson(values["input-file"]));
+    } else if (action === "enforce") {
+      if (!values["plan-id"] || !values["run-id"] || values["input-file"])
+        throw new CliDiagnosticError("error.planEnforceIds");
+      result = await plans.enforce(
+        values["plan-id"],
+        await (await SessionLedger.open(project)).resolve(values["run-id"]),
+      );
+    } else {
+      if (
+        values["input-file"] ||
+        values["run-id"] ||
+        (action === "stop" && !values["plan-id"])
+      )
+        throw new CliDiagnosticError("error.planInspectId");
+      result =
+        action === "stop"
+          ? await plans.stop(values["plan-id"])
+          : await plans.inspect(values["plan-id"] ?? null);
+    }
+    console.log(JSON.stringify(result, null, 2));
+  } else if (command === "recipe") {
+    const action = positionals[1],
+      allowed = new Set([
+        "project",
+        "recipe-id",
+        "run-id",
+        "plan-id",
+        "input-file",
+        "expected-revision",
+        "preview-token",
+        "help",
+      ]);
+    if (
+      positionals.length !== 2 ||
+      !["save", "list", "inspect", "preview", "apply"].includes(action) ||
+      Object.keys(values).some((key) => !allowed.has(key))
+    )
+      throw new CliDiagnosticError("error.recipeAction");
+    const project = await identity(values.project || process.cwd()),
+      recipes = WorkflowRecipes.open(project);
+    let result;
+    if (action === "save") {
+      if (values["recipe-id"] || values["run-id"] || values["plan-id"] || values["preview-token"] || values["expected-revision"] === undefined)
+        throw new CliDiagnosticError("error.recipeSaveOnly");
+      result = await recipes.save(
+        await localJson(values["input-file"]),
+        Number(values["expected-revision"]),
+      );
+    } else if (action === "list") {
+      if ([values["recipe-id"], values["run-id"], values["plan-id"], values["input-file"], values["expected-revision"], values["preview-token"]].some((item) => item !== undefined))
+        throw new CliDiagnosticError("error.recipeListOnly");
+      result = await recipes.list();
+    } else if (action === "inspect") {
+      if (!values["recipe-id"] || [values["run-id"], values["plan-id"], values["input-file"], values["preview-token"]].some((item) => item !== undefined))
+        throw new CliDiagnosticError("error.recipeInspectId");
+      result = await recipes.get(
+        values["recipe-id"],
+        values["expected-revision"] === undefined ? null : Number(values["expected-revision"]),
+      );
+    } else {
+      if (!values["recipe-id"] || !values["run-id"] || !values["plan-id"] || !values["input-file"] ||
+        (action === "preview" && values["preview-token"] !== undefined) ||
+        (action === "apply" && !values["preview-token"]))
+        throw new CliDiagnosticError("error.recipeApplyOptions");
+      const bindings = await localJson(values["input-file"]);
+      result = await recipes.preview(
+        values["recipe-id"],
+        values["expected-revision"] === undefined ? null : Number(values["expected-revision"]),
+        values["run-id"],
+        bindings,
+        values["plan-id"],
+      );
+      if (action === "apply") {
+        if (result.status !== "ready" || !result.plan_definition) {
+          process.exitCode = 2;
+        } else {
+          if (result.preview_token !== values["preview-token"])
+            throw new CliDiagnosticError("error.recipePreviewChanged");
+          const version = await recipes.get(values["recipe-id"], result.recipe.revision),
+            ledger = await SessionLedger.open(project),
+            run = await ledger.resolve(values["run-id"]),
+            projectStore = await ProjectStore.open(project),
+            plans = ExecutionPlans.open(project),
+            existing = (await plans.read()).plans.some(
+              (item) => item.definition.plan_id === values["plan-id"],
+            );
+          if (existing) throw new CliDiagnosticError("error.planIdUnavailable");
+          const definition = structuredClone(result.plan_definition),
+            questionIds = [],
+            bindingsByStep = bindings;
+          try {
+            for (const step of version.definition.steps) {
+              if (!step.approval) continue;
+              const taskId = bindingsByStep[step.key],
+                questionId = "recipe_" + randomUUID(),
+                { ref, ...question } = recipeApprovalQuestion({
+                  questionId,
+                  planId: values["plan-id"],
+                  targetHash: definition.recipe.target_hash,
+                  run,
+                  taskId,
+                  step,
+                  budget: version.definition.max_budget_usd,
+                  expiresAt: definition.limits.stop_at,
+                });
+              await projectStore.mutate("question", question);
+              questionIds.push(questionId);
+              const card = projectStore.value.question_contracts.cards[questionId];
+              const node = definition.nodes.find((item) => item.task_id === taskId);
+              if (!node) throw new CliDiagnosticError("error.recipeStepBindingChanged");
+              node.approval = {
+                question_id: questionId,
+                revision: card.revision,
+                fingerprint: card.fingerprint,
+                action_id: ref.action_id,
+                action_revision: ref.action_revision,
+              };
+            }
+            const plan = await plans.define(definition);
+            result = {
+              status: "disabled_plan_created",
+              execution_started: false,
+              plan,
+              approval_question_ids: questionIds,
+              next_step:
+                "Review each typed approval in the dashboard, then explicitly run plan enforce for the confirmed native session.",
+            };
+          } catch (error) {
+            for (const id of questionIds) {
+              const card = projectStore.value.question_contracts.cards[id];
+              if (card?.status === "open") {
+                await projectStore
+                  .mutate("question", {
+                    id,
+                    action: "cancel",
+                    expected_revision: card.revision,
+                    cancel_reason: "Recipe plan creation did not complete",
+                  })
+                  .catch(() => {});
+              }
+            }
+            throw error;
+          }
+        }
+      }
+    }
+    console.log(JSON.stringify(result, null, 2));
   } else if (command === "release") {
     const action = positionals[1];
     const allowed = new Set([
@@ -1025,6 +1438,54 @@ try {
         2,
       ),
     );
+  } else if (command === "resources") {
+    const action = positionals[1];
+    const admission = new ResourceAdmission();
+    if (
+      positionals.length !== 2 ||
+      !["inspect", "policy", "run"].includes(action)
+    )
+      throw new CliDiagnosticError("error.resourcesAction");
+    if (action === "inspect") {
+      if (
+        Object.keys(values).some((key) => key !== "help") ||
+        positionals.length !== 2
+      )
+        throw new CliDiagnosticError("error.resourcesInspectOnly");
+      console.log(JSON.stringify(await admission.inspect(), null, 2));
+    } else if (action === "policy") {
+      if (
+        Object.keys(values).some(
+          (key) => !["max-heavy-builds", "help"].includes(key),
+        ) ||
+        !/^\d+$/.test(values["max-heavy-builds"] || "")
+      )
+        throw new CliDiagnosticError("error.resourcesPolicyRange");
+      console.log(
+        JSON.stringify(
+          await admission.configure({
+            max_heavy_builds: Number(values["max-heavy-builds"]),
+          }),
+          null,
+          2,
+        ),
+      );
+    } else {
+      if (
+        Object.keys(values).some(
+          (key) => !["request-file", "argv-file", "help"].includes(key),
+        ) ||
+        !values["request-file"] ||
+        !values["argv-file"]
+      )
+        throw new CliDiagnosticError("error.resourcesRunOptions");
+      const request = await localJson(values["request-file"]);
+      const argv = await localJson(values["argv-file"]);
+      process.exitCode = await runResourceCommand(admission, request, argv, {
+        onReserved: (lease) =>
+          console.error(JSON.stringify(resourceRunSummary(lease), null, 2)),
+      });
+    }
   } else if (command === "instruction") {
     const action = positionals[1],
       allowed = new Set(["project", "consumer-id", "input-file", "help"]);
@@ -1056,6 +1517,7 @@ try {
       "help",
       "budget-guard",
       "worker-id",
+      "gpu-request",
       "managed-release-id",
       "managed-revision",
     ]);
@@ -1090,6 +1552,7 @@ try {
       const ledger = await SessionLedger.open(project);
       const managed = await pinnedAttachment(project, {
         ledger,
+        gpu: requestedGpu(),
         run_id: values["run-id"],
         budget: values["budget-guard"]
           ? { worker_id: values["worker-id"] }
@@ -1143,7 +1606,7 @@ try {
     const action = positionals[1];
     if (
       positionals.length !== 2 ||
-      !["bind", "inspect", "probe", "allow-change"].includes(action)
+      !["bind", "enforce", "inspect", "probe", "allow-change"].includes(action)
     )
       throw new CliDiagnosticError("error.routingAction");
     const allowed = new Set([
@@ -1176,6 +1639,7 @@ try {
     store.file(record);
     let result;
     if (action === "inspect") result = await store.inspect(record);
+    else if (action === "enforce") result = await store.enforceNative(record);
     else if (action === "bind") {
       const input = await localJson(values["route-file"]);
       let persisted;
@@ -1241,6 +1705,7 @@ try {
       "scope",
       "timeout-ms",
       "image",
+      "causal-source-command-id",
       "help",
     ]);
     if (Object.keys(values).some((key) => !acceptanceOptions.has(key)))
@@ -1259,7 +1724,12 @@ try {
       throw new CliDiagnosticError("error.acceptanceMatch");
     if (
       ["define", "inspect"].includes(action) &&
-      [values["criterion-id"], values.scope, values.image].some(
+      [
+        values["criterion-id"],
+        values.scope,
+        values.image,
+        values["causal-source-command-id"],
+      ].some(
         (value) => value !== undefined,
       )
     )
@@ -1277,6 +1747,7 @@ try {
         criterion_id: values["criterion-id"],
         scope: values.scope || "full",
         images: values.image || [],
+        causal_source_command_ids: values["causal-source-command-id"] || [],
         ...(action === "run"
           ? {
               argv: await localJson(values["argv-file"]),
@@ -1411,7 +1882,9 @@ try {
     const action = positionals[1];
     if (
       positionals.length !== 2 ||
-      !["list", "record", "resolve", "start", "resume"].includes(action)
+      !["list", "record", "resolve", "start", "resume", "retry-start"].includes(
+        action,
+      )
     )
       throw new CliDiagnosticError("error.sessionAction");
     const ledger = await SessionLedger.open(
@@ -1428,7 +1901,15 @@ try {
       task_id: values["task-id"] || null,
       label: values.label || null,
       provider: values.provider || null,
+      dockerWorker: values["docker-linux-worker"]
+        ? { mountRoots: values["docker-worker-mount-root"] || [] }
+        : null,
     };
+    if (
+      !values["docker-linux-worker"] &&
+      values["docker-worker-mount-root"] !== undefined
+    )
+      throw new CliDiagnosticError("error.dockerMountRootRequiresWorker");
     let result;
     if (action === "list") result = { runs: await ledger.list() };
     else if (action === "resolve")
@@ -1446,10 +1927,10 @@ try {
       if (values["session-id"]) throw new CliDiagnosticError("error.nativeId");
       if (action === "start" && values["run-id"])
         throw new CliDiagnosticError("error.startRun");
-      if (action === "resume" && !values["run-id"])
+      if (["resume", "retry-start"].includes(action) && !values["run-id"])
         throw new CliDiagnosticError("error.resumeRun");
       if (
-        action === "resume" &&
+        ["resume", "retry-start"].includes(action) &&
         [values.cwd, values["task-id"], values.label, values.provider].some(
           (value) => value !== undefined,
         )
@@ -1457,7 +1938,9 @@ try {
         throw new CliDiagnosticError("error.resumeRecorded");
       const managed = await pinnedAttachment(ledger.project, {
         ...options,
-        run_id: action === "resume" ? values["run-id"] : null,
+        gpu: requestedGpu(),
+        run_id: action === "start" ? null : values["run-id"],
+        retryStart: action === "retry-start",
         budget: values["budget-guard"]
           ? { worker_id: values["worker-id"] }
           : null,
@@ -1475,10 +1958,31 @@ try {
         history: await attached.history.inspect(attached.record.run_id),
         lifecycle: "attachment_verified_process_stopped",
         process: stopped,
+        ...(attached.gpu ? { gpu: attached.gpu } : {}),
         ...(attached.release ? { release: attached.release } : {}),
       };
     }
     console.log(JSON.stringify(result, null, 2));
+  } else if (command === "gpu") {
+    if (
+      positionals.length !== 2 ||
+      !["inspect", "reconcile"].includes(positionals[1]) ||
+      Object.keys(values).some((key) => key !== "help")
+    )
+      throw new CliDiagnosticError("error.gpuAction");
+    const leases = new GpuLeases();
+    const reconciled =
+      positionals[1] === "reconcile" ? await leases.reconcile() : null;
+    console.log(
+      JSON.stringify(
+        {
+          ...(reconciled ? { reconciliation: reconciled } : {}),
+          ...(await leases.inspect()),
+        },
+        null,
+        2,
+      ),
+    );
   } else if (command === "adapters" || command === "adapter-smoke") {
     const argv = values.executable ? [values.executable] : null;
     if (values.entrypoint && !argv)
@@ -1543,9 +2047,7 @@ try {
     const directory = project
       ? project.directory
       : path.join(stateHome(), "harness");
-    const runtime = JSON.parse(
-      await fs.readFile(path.join(directory, "runtime.json"), "utf8"),
-    );
+    const runtime = await readLocalRuntime(directory);
     try {
       process.kill(runtime.pid, 0);
     } catch {
@@ -1579,9 +2081,7 @@ try {
     const project = await identity(values.project || process.cwd());
     let report;
     try {
-      const runtime = await localJson(
-        path.join(project.directory, "runtime.json"),
-      );
+      const runtime = await readLocalRuntime(project.directory);
       if (
         runtime.kind !== "project" ||
         runtime.project_id !== project.id ||
@@ -1630,9 +2130,7 @@ try {
     if (!process.env.CONTROL_PLANE_API_KEY)
       throw new CliDiagnosticError("error.tunnelKey");
     const project = await identity(values.project || process.cwd());
-    const runtime = JSON.parse(
-      await fs.readFile(path.join(project.directory, "runtime.json"), "utf8"),
-    );
+    const runtime = await readLocalRuntime(project.directory);
     const base = loopbackBase(runtime.local_url);
     if (!/^[0-9a-f]{64}$/.test(runtime.mcp_token || ""))
       throw new CliDiagnosticError("error.mcpCredential");
@@ -1716,13 +2214,30 @@ try {
   } else if (command === "project" || command === "harness") {
     if (values.tray && process.platform !== "win32")
       throw new CliDiagnosticError("error.trayWindows");
+    const project =
+      command === "project"
+        ? await identity(values.project || process.cwd())
+        : null;
+    const includedDirectories = values["include-project"] || [];
+    if (
+      includedDirectories.length > 31 ||
+      includedDirectories.some((directory) => !directory.trim())
+    )
+      throw new CliDiagnosticError("error.includeProjectCount");
+    const overviewProjects = await Promise.all(
+      includedDirectories.map((directory) => identity(directory)),
+    );
+    const projectCount = (project ? 1 : 0) + overviewProjects.length;
+    const distinctProjectCount = new Set(
+      [project, ...overviewProjects].filter(Boolean).map((item) => item.id),
+    ).size;
+    if (distinctProjectCount !== projectCount)
+      throw new CliDiagnosticError("error.includeProjectDistinct");
     const dashboard = await startDashboard({
       language,
       kind: command,
-      project:
-        command === "project"
-          ? await identity(values.project || process.cwd())
-          : null,
+      project,
+      overviewProjects,
       port: portValue(values.port),
       harnessPort: portValue(values["harness-port"]),
       tailscale: !values["no-tailscale"],
@@ -1769,5 +2284,5 @@ try {
     console.error(
       `[rdsh-dashboard] ${cliText(language, "tray.diagnostics", { detail: JSON.stringify(e.trayDiagnostics) })}`,
     );
-  process.exitCode = 1;
+  process.exitCode = e.code === "gpu_waiting_resource" ? 75 : 1;
 }

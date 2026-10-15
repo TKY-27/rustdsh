@@ -155,6 +155,7 @@ fn native_ui_catalog_has_text_for_every_supported_language() {
         UiMessage::LogFileMustStayInside,
         UiMessage::NoLogs,
         UiMessage::ContextDisabled,
+        UiMessage::DepGraphDisabled,
         UiMessage::ContextStatus,
         UiMessage::ContextBuild,
         UiMessage::ContextSearch,

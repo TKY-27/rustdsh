@@ -2,11 +2,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID, createHash } from "node:crypto";
+import { gpuRequest } from "./gpu-telemetry.mjs";
 import {
   readProcessIdentity,
   validProcessIdentity,
   matchProcessIdentity,
 } from "./process-identity.mjs";
+import { diagnoseRun } from "./stall-diagnostics.mjs";
 
 export const runStates = Object.freeze([
   "queued",
@@ -59,10 +61,11 @@ const transitions = {
     "unknown",
     "failed",
   ],
-  disconnected: ["starting", "unknown"],
+  disconnected: ["starting", "waiting-resource", "unknown"],
   stopping: ["disconnected", "unknown", "failed"],
   unknown: [
     "starting",
+    "waiting-resource",
     "running",
     "waiting-human",
     "stopping",
@@ -86,6 +89,15 @@ const reasons = [
   "failure_confirmed",
 ];
 const operations = ["start", "resume", "send", "interrupt", "stop"];
+const activityKinds = new Set([
+  "agent_message",
+  "tool_call",
+  "tool_update",
+  "usage",
+  "plan",
+  "mode",
+  "other",
+]);
 const outcomes = [
   null,
   "session_attached",
@@ -150,6 +162,97 @@ export class HistoryError extends Error {
 function check(condition, code = "invalid_history") {
   if (!condition) throw new HistoryError(code);
 }
+function observationRecord(record) {
+  return (
+    exact(record, ["run_id", "last_activity", "resource_observation"]) &&
+    uuid(record.run_id, "run") &&
+    (record.last_activity === null ||
+      (exact(record.last_activity, ["kind", "observed_at"]) &&
+        activityKinds.has(record.last_activity.kind) &&
+        time(record.last_activity.observed_at))) &&
+    (record.resource_observation === null ||
+      (exact(record.resource_observation, [
+        "kind",
+        "status",
+        "observed_at",
+      ]) &&
+        ["cpu", "memory", "gpu", "port", "unknown"].includes(
+          record.resource_observation.kind,
+        ) &&
+        ["waiting", "available"].includes(
+          record.resource_observation.status,
+        ) &&
+        time(record.resource_observation.observed_at)))
+  );
+}
+async function readObservationFile(file, projectId) {
+  let handle;
+  try {
+    handle = await fs.open(file, "r");
+    check((await handle.stat()).size <= maxBytes, "observations_too_large");
+    const bytes = await handle.readFile();
+    check(bytes.length <= maxBytes, "observations_too_large");
+    const decoded = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    const value = JSON.parse(decoded);
+    check(
+      exact(value, ["schema", "project_id", "records"]) &&
+        value.schema === 1 &&
+        value.project_id === projectId &&
+        Array.isArray(value.records) &&
+        value.records.length <= maxEvents &&
+        value.records.every(observationRecord) &&
+        new Set(value.records.map((record) => record.run_id)).size ===
+          value.records.length,
+      "invalid_observations",
+    );
+    return new Map(value.records.map((record) => [record.run_id, record]));
+  } catch (error) {
+    if (error.code === "ENOENT") return new Map();
+    if (error instanceof HistoryError) throw error;
+    throw new HistoryError("invalid_observations");
+  } finally {
+    await handle?.close();
+  }
+}
+async function writeObservationFile(file, projectId, records) {
+  const value = {
+    schema: 1,
+    project_id: projectId,
+    records: [...records.values()],
+  };
+  check(
+    value.records.length <= maxEvents && value.records.every(observationRecord),
+    "invalid_observations",
+  );
+  const bytes = Buffer.from(JSON.stringify(value) + "\n");
+  check(bytes.length <= maxBytes, "observations_too_large");
+  const temporary = file + "." + randomUUID() + ".tmp";
+  let output;
+  try {
+    output = await fs.open(temporary, "wx", 0o600);
+    await output.writeFile(bytes);
+    await output.sync();
+    await output.close();
+    output = null;
+    await fs.rename(temporary, file);
+    if (process.platform !== "win32") {
+      const parent = await fs.open(path.dirname(file), "r");
+      try {
+        await parent.sync();
+      } finally {
+        await parent.close();
+      }
+    }
+  } catch (error) {
+    if (error instanceof HistoryError) throw error;
+    throw new HistoryError("observations_write_unconfirmed");
+  } finally {
+    await output?.close();
+    await fs.unlink(temporary).catch((error) => {
+      if (error.code !== "ENOENT") throw error;
+    });
+  }
+}
 function validateData(type, data) {
   if (type === "registered")
     check(
@@ -161,7 +264,12 @@ function validateData(type, data) {
         data.native_session_id !== null &&
         nativeId(data.native_session_id),
     );
-  else if (type === "transition" || type === "transition_rejected")
+  else if (type === "gpu_requirement") {
+    check(exact(data, ["request"]));
+    check(
+      JSON.stringify(gpuRequest(data.request)) === JSON.stringify(data.request),
+    );
+  } else if (type === "transition" || type === "transition_rejected")
     check(
       exact(data, ["from", "to", "reason"]) &&
         runStates.includes(data.from) &&
@@ -187,15 +295,13 @@ function validateData(type, data) {
     check(exact(data, ["owner_id"]) && uuid(data.owner_id, "owner"));
   else if (type === "scope_bound")
     check(
-      exact(data, [
-        "owner_id",
-        "kind",
-        "kernel_id",
-        "root_identity",
-        "root_pid",
+      ((exact(data, [
+        "owner_id", "kind", "kernel_id", "root_identity", "root_pid",
       ]) &&
-        uuid(data.owner_id, "owner") &&
-        ["linux_cgroup_v2", "windows_job"].includes(data.kind) &&
+          uuid(data.owner_id, "owner") &&
+        ["linux_cgroup_v2", "linux_systemd_scope", "windows_job"].includes(
+          data.kind,
+        ) &&
         typeof data.kernel_id === "string" &&
         /^[a-z0-9_-]{1,80}$/.test(data.kernel_id) &&
         Number.isSafeInteger(data.root_pid) &&
@@ -203,7 +309,17 @@ function validateData(type, data) {
         data.root_pid <= 2147483647 &&
         (data.root_identity === null ||
           (validProcessIdentity(data.root_identity) &&
-            data.root_identity.pid === data.root_pid)),
+            data.root_identity.pid === data.root_pid))) ||
+        (exact(data, [
+          "owner_id", "kind", "kernel_id", "root_identity", "root_pid",
+          "execution_platform", "transport",
+        ]) &&
+          uuid(data.owner_id, "owner") &&
+          data.kind === "docker_linux_container" &&
+          /^[a-f0-9]{64}$/.test(data.kernel_id) &&
+          data.root_identity === null && data.root_pid === null &&
+          data.execution_platform === "linux" &&
+          data.transport === "colima_docker")),
     );
   else if (type === "stop_stage")
     check(
@@ -327,6 +443,9 @@ function apply(state, event) {
           run.native_session_id === data.native_session_id,
       );
       run.native_session_id = data.native_session_id;
+    } else if (type === "gpu_requirement") {
+      check(!run.gpu_request);
+      run.gpu_request = structuredClone(data.request);
     } else if (type === "scope_intent") {
       check(!run.scope || run.scope.status === "exit_confirmed");
       run.scope = {
@@ -468,6 +587,10 @@ export class RunHistory {
   constructor(project) {
     this.project = { ...project };
     this.file = path.join(project.directory, "run-history.jsonl");
+    this.observationsFile = path.join(
+      project.directory,
+      "run-observations.json",
+    );
     this.lock = path.join(project.directory, "run-history.lock");
     this.owner_id = "owner_" + randomUUID();
     this.queue = Promise.resolve();
@@ -503,6 +626,19 @@ export class RunHistory {
       throw new HistoryError("invalid_history");
     } finally {
       await handle?.close();
+    }
+  }
+  async observationSnapshot() {
+    try {
+      return {
+        records: await readObservationFile(
+          this.observationsFile,
+          this.project.id,
+        ),
+        status: "available",
+      };
+    } catch {
+      return { records: new Map(), status: "unavailable" };
     }
   }
   async mutate(operation) {
@@ -550,7 +686,28 @@ export class RunHistory {
           committedEventIds.push(event.event_id);
           return event;
         };
-        output = await operation(state, append);
+        const recordObservation = async (id, field, data) => {
+          check(state.runs.has(id), "run_not_found");
+          const records = await readObservationFile(
+            this.observationsFile,
+            this.project.id,
+          );
+          const current = records.get(id) || {
+            run_id: id,
+            last_activity: null,
+            resource_observation: null,
+          };
+          records.set(id, {
+            ...current,
+            [field]: { ...data, observed_at: new Date().toISOString() },
+          });
+          await writeObservationFile(
+            this.observationsFile,
+            this.project.id,
+            records,
+          );
+        };
+        output = await operation(state, append, recordObservation);
         if (added.length) {
           const bytes = Buffer.from(added.join(""));
           check(
@@ -638,6 +795,19 @@ export class RunHistory {
       }
       append(id, "registered", { native_session_id });
       return structuredClone(state.runs.get(id));
+    });
+  }
+  async gpuRequirement(id, request) {
+    request = gpuRequest(request);
+    return this.mutate((state, append) => {
+      const run = state.runs.get(id);
+      check(run, "run_not_found");
+      if (run.gpu_request) {
+        check(
+          JSON.stringify(run.gpu_request) === JSON.stringify(request),
+          "gpu_run_request_changed",
+        );
+      } else append(id, "gpu_requirement", { request });
     });
   }
   async transition(id, to, reason) {
@@ -775,6 +945,22 @@ export class RunHistory {
       return command_id;
     });
   }
+  async recordActivity(id, kind) {
+    check(activityKinds.has(kind), "invalid_activity_kind");
+    return this.mutate((_state, _append, recordObservation) => {
+      return recordObservation(id, "last_activity", { kind });
+    });
+  }
+  async recordResourceObservation(id, kind, status) {
+    check(
+      ["cpu", "memory", "gpu", "port", "unknown"].includes(kind) &&
+        ["waiting", "available"].includes(status),
+      "invalid_resource_observation",
+    );
+    return this.mutate((_state, _append, recordObservation) => {
+      return recordObservation(id, "resource_observation", { kind, status });
+    });
+  }
   async commandPhase(command_id, phase, outcome = null) {
     check(
       phases.includes(phase) &&
@@ -805,9 +991,16 @@ export class RunHistory {
     const loaded = await this.read();
     const run = loaded.runs.get(id);
     check(run, "run_not_found");
-    return this.inspectRecord(run, loaded, ui_connection, observe);
+    const observations = await this.observationSnapshot();
+    return this.inspectRecord(run, loaded, ui_connection, observe, observations);
   }
-  async inspectRecord(run, loaded, ui_connection, observe) {
+  async inspectRecord(
+    run,
+    loaded,
+    ui_connection,
+    observe,
+    observations = { records: new Map(), status: "available" },
+  ) {
     let status = ["exit_confirmed", "absence_observed"].includes(
       run.process?.status,
     )
@@ -832,20 +1025,29 @@ export class RunHistory {
       "gone",
       "pid_reused",
     ].includes(status);
+    const resourceWait =
+      run.state === "waiting-resource" && (!run.process || knownExit);
     let state = terminal(run.state)
       ? run.state
-      : knownExit
-        ? "disconnected"
-        : run.process ||
-            ["starting", "running", "waiting-human", "stopping"].includes(
-              run.state,
-            )
-          ? "unknown"
-          : run.state;
+      : resourceWait
+        ? "waiting-resource"
+        : knownExit
+          ? "disconnected"
+          : run.process ||
+              ["starting", "running", "waiting-human", "stopping"].includes(
+                run.state,
+              )
+            ? "unknown"
+            : run.state;
     if (loaded.tail_bytes && !terminal(state)) state = "unknown";
     const lock = await this.lockObservation();
+    const observed = observations.records.get(run.run_id) || null;
+    const diagnosticRun = observed ? { ...run, ...observed } : run;
     return {
       ...structuredClone(run),
+      last_activity: observed?.last_activity ?? null,
+      resource_observation: observed?.resource_observation ?? null,
+      observation_store_status: observations.status,
       scope_observation: run.scope
         ? {
             status:
@@ -865,13 +1067,15 @@ export class RunHistory {
       state,
       state_basis: terminal(run.state)
         ? "recorded_terminal_result"
-        : knownExit
-          ? "process_exit_observed; native_session_can_still_exist"
-          : status === "alive"
-            ? "process_alive; native_run_state_unobservable"
-            : state === "unknown"
-              ? "run_state_unverified"
-              : "recorded_control_state",
+        : resourceWait
+          ? "recorded_resource_wait; native_process_not_running"
+          : knownExit
+            ? "process_exit_observed; native_session_can_still_exist"
+            : status === "alive"
+              ? "process_alive; native_run_state_unobservable"
+              : state === "unknown"
+                ? "run_state_unverified"
+                : "recorded_control_state",
       observed_at: new Date().toISOString(),
       ui_connection,
       process_observation: {
@@ -879,6 +1083,11 @@ export class RunHistory {
         pid: run.process?.pid ?? null,
         scope: "owned_root_process_only; descendants_unverified",
       },
+      stall_diagnosis: diagnoseRun({
+        run: diagnosticRun,
+        processObservation: { status, observed_at: new Date().toISOString() },
+        uiConnection: ui_connection,
+      }),
       commands: run.commands.slice(-100).map((command) => ({
         ...structuredClone(command),
         recovery_outcome:
@@ -948,11 +1157,18 @@ export class RunHistory {
       "invalid_cursor",
     );
     const loaded = await this.read(),
+      observations = await this.observationSnapshot(),
       runs = [];
     const records = [...loaded.runs.values()];
     for (const run of records.slice(after, after + limit))
       runs.push(
-        await this.inspectRecord(run, loaded, "unknown", readProcessIdentity),
+        await this.inspectRecord(
+          run,
+          loaded,
+          "unknown",
+          readProcessIdentity,
+          observations,
+        ),
       );
     return {
       schema: 1,
@@ -961,6 +1177,83 @@ export class RunHistory {
       runs,
       next_cursor:
         after + runs.length < records.length ? after + runs.length : null,
+      recovery_required: loaded.tail_bytes > 0,
+    };
+  }
+  async diagnoseRecent({ limit = 5, uiConnection = "unknown" } = {}) {
+    check(
+      Number.isSafeInteger(limit) && limit >= 1 && limit <= 20,
+      "invalid_limit",
+    );
+    check(
+      ["unknown", "connected", "disconnected"].includes(uiConnection),
+      "invalid_ui_connection",
+    );
+    const loaded = await this.read();
+    const observations = await this.observationSnapshot();
+    const records = [...loaded.runs.values()].slice(-limit).reverse();
+    const observed_at = new Date().toISOString();
+    const runs = await Promise.all(
+      records.map(async (run) => {
+        let status = ["exit_confirmed", "absence_observed"].includes(
+          run.process?.status,
+        )
+          ? run.process.status
+          : "unknown";
+        if (
+          run.process &&
+          validProcessIdentity(run.process.identity) &&
+          !terminal(run.state) &&
+          !["exit_confirmed", "absence_observed"].includes(status)
+        ) {
+          try {
+            status = matchProcessIdentity(
+              run.process.identity,
+              await readProcessIdentity(run.process.pid),
+            );
+          } catch {
+            status = "unknown";
+          }
+        }
+        const knownExit = [
+          "exit_confirmed",
+          "absence_observed",
+          "gone",
+          "pid_reused",
+        ].includes(status);
+        let state = run.state;
+        if (!terminal(run.state)) {
+          if (knownExit) state = "disconnected";
+          else if (
+            run.process ||
+            ["starting", "running", "waiting-human", "stopping"].includes(
+              run.state,
+            )
+          )
+            state = "unknown";
+        }
+        if (loaded.tail_bytes && !terminal(state)) state = "unknown";
+        const observation = observations.records.get(run.run_id);
+        return {
+          run_id: run.run_id,
+          recorded_state: run.state,
+          state,
+          updated_at: run.updated_at,
+          observation_store_status: observations.status,
+          stall_diagnosis: diagnoseRun({
+            run: observation ? { ...run, ...observation } : run,
+            processObservation: { status, observed_at },
+            uiConnection,
+            now: observed_at,
+          }),
+        };
+      }),
+    );
+    return {
+      schema: 1,
+      observed_at,
+      observation_store_status: observations.status,
+      runs,
       recovery_required: loaded.tail_bytes > 0,
     };
   }

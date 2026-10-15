@@ -24,6 +24,18 @@ installer and badge links use that owner. Keep historical evidence intact.
   `release-digests-windows.tsv`, and `latest` moves forward only.
 - A project settings change does not itself request a new version release.
 
+## Development
+
+- Set up a checkout with `sh scripts/dev-setup.sh`; verify with
+  `sh scripts/check.sh` (`quick` / `full` modes) before opening a PR.
+- Branch from a fresh `origin/main`, one topic per branch and one writer per
+  worktree. Run `sh scripts/check-conflicts.sh --open-prs` before pushing and
+  coordinate when another open PR touches the same files.
+- Keep changes local to the feature: new modules and test files rather than
+  growing `src/main.rs` or shared test files; no drive-by reformatting.
+- Resolve lockfile conflicts by taking `main`'s file and regenerating it.
+  Details: `docs/DEVELOPMENT.md`.
+
 ## Repository configuration
 
 - Managed labels live in `.github/labels.yml`; the labels workflow syncs changes
@@ -55,3 +67,16 @@ installer and badge links use that owner. Keep historical evidence intact.
   (`git@github.com:jimoto-no-llm/rustdsh.git`).
 - The marketing and evidence docs follow their own format rules; runtime behavior
   changes belong in `docs/` next to the feature they describe, not in AGENTS.md.
+
+## Branch and PR maintenance
+
+- Reuse the existing topic branch and PR for related work; combine trivial lint
+  edits instead of creating one branch and PR per substitution.
+- Before removing branches, fetch the current refs and inspect every open PR and
+  worktree. Never remove active, open-PR, unmerged, `release/`, or `archive/` branches.
+  Bundle existing refs before pruning stale remote-tracking references, and compare
+  live remote heads rather than treating cached refs as GitHub branches.
+- `scripts/prune-merged-branches.py` reports candidates by default. Applying a
+  plan requires an external backup directory and verifies a Git bundle first.
+- Preserve issue labels, assignments and unresolved acceptance requirements;
+  merged code alone does not prove that an entire feature issue is complete.

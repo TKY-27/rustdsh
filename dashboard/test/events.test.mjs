@@ -12,6 +12,7 @@ import {
   CLIENT_CAPABILITIES_META_KEY,
 } from "@modelcontextprotocol/server";
 import { startDashboard } from "../server.mjs";
+import { readLocalRuntime } from "../private-runtime.mjs";
 import { identity } from "../state.mjs";
 import net from "node:net";
 
@@ -261,10 +262,9 @@ test("MCP 2.0 discovers events and serves the same tools on an authenticated end
     port,
     tailscale: false,
     webhookPost,
+    sandboxProbe: async () => ({ supported: false, reason: "sandbox_runner_unavailable" }),
   });
-  const runtime = JSON.parse(
-    await fs.readFile(path.join(project.directory, "runtime.json"), "utf8"),
-  );
+  const runtime = await readLocalRuntime(project.directory);
   async function request(method, params = {}, errorCode = null) {
     const _meta = {
       [PROTOCOL_VERSION_META_KEY]: "2026-07-28",
@@ -279,7 +279,9 @@ test("MCP 2.0 discovers events and serves the same tools on an authenticated end
         accept: "application/json, text/event-stream",
         "mcp-protocol-version": "2026-07-28",
         "mcp-method": method,
-        ...(params.name ? { "mcp-name": params.name } : {}),
+        ...(params.name || params.uri
+          ? { "mcp-name": params.name || params.uri }
+          : {}),
       },
       body: JSON.stringify({
         jsonrpc: "2.0",
@@ -300,8 +302,16 @@ test("MCP 2.0 discovers events and serves the same tools on an authenticated end
   const discovery = await request("server/discover");
   assert.ok(discovery.supportedVersions.includes("2026-07-28"));
   assert.deepEqual(discovery.capabilities.events, {});
-  assert.equal((await request("events/list")).events.length, 5);
-  assert.equal((await request("tools/list")).tools.length, 6);
+  const discoveredEvents = (await request("events/list")).events;
+  assert.equal(discoveredEvents.length, 12);
+  assert.ok(discoveredEvents.some((event) => event.name === "dashboard.contract.updated"));
+  assert.ok(discoveredEvents.every((event) => typeof event.description === "string" && event.description.length > 0));
+  const listedTools = (await request("tools/list")).tools;
+  assert.equal(listedTools.length, 19);
+  const resources = await request("resources/list");
+  assert.ok(
+    resources.resources.some((resource) => resource.uri === "dashboard://handoff"),
+  );
   const diagnostics = async () =>
     (
       await fetch(dashboard.localUrl + "api/diagnostics", {
@@ -319,6 +329,65 @@ test("MCP 2.0 discovers events and serves the same tools on an authenticated end
   });
   assert.equal(result.resultType, "complete");
   assert.equal(dashboard.store.value.tasks.length, 1);
+  const contractResponse = await fetch(dashboard.localUrl + "api/contracts/update", {
+    method: "POST",
+    headers: { authorization: "Bearer " + runtime.token, "content-type": "application/json" },
+    body: JSON.stringify({
+      task_id: "T1", expected_version: 0, purpose: "MCP 2 test",
+      repository: project.root, allowed_scope: "Read only", write_roots: [],
+      forbidden_actions: ["No writes"], completion_conditions: ["Test passes"],
+      operation_policy: { schema: 1, read_roots: [project.root], executables: [], network_origins: [] },
+      change_reason: "Initial contract",
+    }),
+  });
+  assert.equal(contractResponse.status, 200);
+  const checkInput = { task_id: "T1", contract_version: 1, repository: project.root, cwd: project.root, write_paths: [] };
+  const checked = await request("tools/call", { name: "dashboard_check_task_contract", arguments: checkInput });
+  assert.equal(JSON.parse(checked.content[0].text).decision, "within_scope");
+  const policyChecked = await request("tools/call", {
+    name: "dashboard_check_operation",
+    arguments: { task_id: "T1", contract_version: 1, repository: project.root,
+      operation: { schema: "rdsh.operation.v1", tool_name: "file.write", tool_input: { cwd: project.root, path: "new.txt", content: "fixture" } } },
+  });
+  assert.equal(JSON.parse(policyChecked.content[0].text).decision, "block");
+  assert.equal(JSON.parse(policyChecked.content[0].text).execution, "hold");
+  await fs.writeFile(path.join(project.root, "read-fixture.txt"), "isolated fixture");
+  const approvalBound = { task_id: "T1", contract_version: 1, repository: project.root,
+    run_id: "mcp2-run", command_id: "mcp2-command",
+    operation: { schema: "rdsh.operation.v1", tool_name: "file.read", tool_input: { cwd: project.root, path: "read-fixture.txt" } } };
+  const requested = await request("tools/call", { name: "dashboard_request_approval", arguments: {
+    ...approvalBound, id: "mcp2-request", expected_version: 0, source_ref: "fixture:mcp2-command",
+    expires_at: new Date(Date.now() + 60000).toISOString(), limits: { max_cost_usd: 0, max_attempts: 1 },
+  } });
+  assert.equal(JSON.parse(requested.content[0].text).status, "pending");
+  const approvalUse = { ...approvalBound, id: "mcp2-request", request_version: 1, cost_usd: 0, attempt: 1 };
+  const approvalPending = await request("tools/call", { name: "dashboard_check_approval", arguments: approvalUse });
+  assert.equal(JSON.parse(approvalPending.content[0].text).reason, "approval_pending");
+  const decision = await fetch(dashboard.localUrl + "api/approvals/decide", {
+    method: "POST", headers: { "content-type": "application/json", "x-rdsh-browser-token": new URL(runtime.browser_url).hash.slice(5) },
+    body: JSON.stringify({ id: "mcp2-request", request_version: 1, decision: "grant" }),
+  });
+  assert.equal(decision.status, 200);
+  const claimed = await request("tools/call", { name: "dashboard_claim_approval", arguments: approvalUse });
+  assert.equal(JSON.parse(claimed.content[0].text).reservation, "reserved");
+  assert.equal(JSON.parse(claimed.content[0].text).execution, "hold");
+  const workerChecked = await request("tools/call", { name: "dashboard_check_worker_start", arguments: {
+    task_id: "T1", contract_version: 1, repository: project.root, run_id: "held-mcp2-run", worker_role: "review",
+  } });
+  assert.equal(JSON.parse(workerChecked.content[0].text).reason, "sandbox_runner_unavailable");
+  assert.equal(JSON.parse(workerChecked.content[0].text).fallback, "disabled");
+  const createdHandoff = await request("tools/call", {
+    name: "dashboard_create_handoff",
+    arguments: { task_id: "T1" },
+  });
+  assert.equal(createdHandoff.resultType, "complete");
+  const handoffResource = await request("resources/read", {
+    uri: "dashboard://handoff",
+  });
+  assert.equal(
+    JSON.parse(handoffResource.contents[0].text).task_id,
+    "T1",
+  );
   await request("tools/call", {
     name: "dashboard_update_metrics",
     arguments: {
@@ -393,15 +462,16 @@ test("MCP 2.0 discovers events and serves the same tools on an authenticated end
   assert.equal(delivered.length, 1);
   assert.equal(delivered[0].data.entity_id, "Q1");
   assert.equal(delivered[0].data.summary, "Ready");
+  assert.equal("notification" in delivered[0], false);
   dashboard = await startDashboard({
     project,
     port,
     tailscale: false,
     webhookPost,
   });
-  runtime.mcp_token = JSON.parse(
-    await fs.readFile(path.join(project.directory, "runtime.json"), "utf8"),
-  ).mcp_token;
+  runtime.mcp_token = (await readLocalRuntime(project.directory)).mcp_token;
+  const resumed = await request("tools/call", { name: "dashboard_check_task_contract", arguments: checkInput });
+  assert.equal(JSON.parse(resumed.content[0].text).contract_version, 1);
   await request("events/unsubscribe", subscription);
   await request("events/unsubscribe", subscription);
 });

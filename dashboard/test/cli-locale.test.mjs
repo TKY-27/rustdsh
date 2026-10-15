@@ -82,7 +82,7 @@ test("CLI catalog has all three languages, matching placeholders and typed valid
   const diagnostics = [
     ...source.matchAll(/new CliDiagnosticError\(\s*"([^"]+)"/g),
   ].map((match) => match[1]);
-  assert.equal(new Set(diagnostics).size, 101);
+  assert.equal(new Set(diagnostics).size, 138);
   for (const key of diagnostics)
     for (const language of ["en", "ja", "zh-CN"]) {
       const diagnostic = new CliDiagnosticError(key, {

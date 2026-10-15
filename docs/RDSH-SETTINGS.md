@@ -24,6 +24,21 @@ PROFILE=web ./plugins/install.sh
 
 で入ります。`headless` の場合は `PROFILE=headless`（初期値）で同じです。
 
+## 表示言語を日本語にする
+
+言語パックに対応したDSHでは、同梱の `rdsh-settings` が日本語を登録します。
+Settings → General → Language で **日本語** を選ぶと、設定画面の一般項目と共通操作が日本語になります。
+翻訳のない項目は英語で表示されます。画面全体の翻訳ではありません。
+
+ローカルのWeb UIでは、選択した言語はDSHの設定として保存され、再起動後も反映されます。
+DSHが非ループバックのページとして扱う接続では、DSHの仕様により言語の選択はそのページを開いている間だけ有効です。
+この選択は `rdsh.json` の設定とは別です。
+
+日本語が表示されない場合は、言語パックAPI（`locale.addLanguage`）に対応したDSHへ更新し、
+同梱プラグインを入れ直して画面を再読み込みしてください。
+旧DSHでは従来の言語メニューとrdsh設定を引き続き使えます。
+別のプラグインがすでに日本語を登録している場合は、そのプラグインの翻訳を使います。
+
 ## コマンドから見る
 
 ```sh
@@ -72,7 +87,8 @@ rdsh context status   # 有効化後に記憶の状態を見る
 | discord | on | Discord Rich Presence（DSH Web が動いているときだけ表示） |
 | update_check | on | 更新確認と更新バナーの表示 |
 | update_notifications | on | 更新が見つかったときの通知 |
-| sound | off | DSH サウンド通知の導入（インストーラの SOUND=1） |
+| sound | on | DSH サウンド通知の導入（不要ならインストーラの SOUND=0／`features.sound=false`） |
+| gitview | on | DSH Git パネルの導入（不要ならインストーラの GITVIEW=0／`features.gitview=false`） |
 | serve | off | ローカル閲覧画面（rdsh serve） |
 | search-web | off | SearXNG 経由の Web 検索 |
 | context_engine | off | 実験的なコンテキストエンジン |
@@ -94,7 +110,7 @@ rdsh context status   # 有効化後に記憶の状態を見る
 
 - ネイティブ側（`serve` / `search-web` / `context_engine` / `setup_web`）は、無効なコマンドを実行すると理由と有効化方法を表示して終了します。
 - slim のヒント（`slim_lazy_plugins` / `slim_disable_voice` / `slim_disable_auto_review`）と `node_compile_cache` は、委譲して起動する DSH プロセスの環境変数に反映されます。
-- プラグイン側（`discord` / `sound` / `compute` / `budget_guard` / `answer_guard` / `release_probe` / `update_check` / `update_notifications`）は `rdsh.json` を読み込んで動作を停止します。DSH を再起動すると反映されます。
+- プラグイン側（`discord` / `sound` / `gitview` / `compute` / `budget_guard` / `answer_guard` / `release_probe` / `update_check` / `update_notifications`）は `rdsh.json` を読み込んで動作を停止します。DSH を再起動すると反映されます。
 
 ## context engine（実験的、既定OFF）
 
@@ -106,3 +122,50 @@ rdsh context build --query "認証" --json
 
 優先度は goal > constraints > related_files > git_diff > decisions >
 open_tasks > retrieved の順で、予算超過時は retrieved から削ります。
+
+## context の自動注入（inject）
+
+`rdsh context inject` は DSH の `UserPromptSubmit` フックとして毎ターンの文脈を注入します。
+組み立てに失敗してもプロンプトを止めない fail-open です。
+
+```sh
+rdsh context hook install          # $DSH_HOME/hooks.json に追記（冪等、バックアップ自動作成）
+rdsh context hook status --json
+rdsh context hook remove           # 追加した1件だけを消す
+```
+
+| 設定キー | 既定 | 範囲 | 意味 |
+| --- | --- | --- | --- |
+| `context.inject_budget` | 1200 | 200-8000 | 1回の注入に使うトークン予算 |
+| `context.inject_deadline_ms` | 1200 | 100-10000 | 組み立ての期限。超えたら検索と依存閉包を省略 |
+| `context.inject_sessions` | true | | 直近セッションの継承を含める |
+| `context.inject_session_count` | 2 | 0-10 | 継承するセッション数 |
+
+`rdsh context build --sessions N` と `--require-stable` は1回だけ既定を上書きします。
+`--require-stable` は、リポジトリが変化した場合に加えて、git 状態を読めない場合も exit 3 で終了します
+（安定性を証明できないときに成功とは言わないため）。
+
+## 記憶（memory）
+
+```sh
+rdsh context remember "APIの互換性を必ず保つ" --kind constraint
+rdsh context memory --json
+rdsh context distill --session <transcript> --json     # 既定は dry-run
+rdsh context distill --session <transcript> --apply
+rdsh context forget <id>
+```
+
+保存先は `$DSH_HOME/rdsh-context-memory.json`（schema 1）。撤回と重複は決定的な規則で
+`superseded_by` を付け、context には active な項目だけが `[mem]` 付きで入ります。
+
+## 依存グラフ（deps）
+
+`dep_graph` は既定 ON です（読み取り専用の解析コマンドのため）。
+
+```sh
+rdsh deps build --json
+rdsh deps query engine_score --json
+rdsh deps impact src/core.rs --depth 3 --json
+```
+
+索引は `$DSH_HOME/rdsh-index/<root-key>.json`。size+mtime が同じファイルは再解析しません。

@@ -97,8 +97,13 @@ pub const FEATURES: &[FeatureDef] = &[
     },
     FeatureDef {
         id: "sound",
-        default: false,
-        summary: "allow the DSH sound notifications install (installer SOUND=1)",
+        default: true,
+        summary: "allow the DSH sound notifications install (installer SOUND=0 to skip)",
+    },
+    FeatureDef {
+        id: "gitview",
+        default: true,
+        summary: "allow the DSH git panel install (installer GITVIEW=0 to skip)",
     },
     FeatureDef {
         id: "serve",
@@ -114,6 +119,11 @@ pub const FEATURES: &[FeatureDef] = &[
         id: "context_engine",
         default: false,
         summary: "experimental per-turn context engine (rdsh context)",
+    },
+    FeatureDef {
+        id: "dep_graph",
+        default: true,
+        summary: "static code-dependency graph and change impact (rdsh deps)",
     },
     FeatureDef {
         id: "compute",
@@ -385,6 +395,13 @@ pub struct ContextSection {
     pub max_code_hits: usize,
     pub max_sessions: usize,
     pub include_git_diff: bool,
+    /// Token budget for the context injection hook payload (not a turn budget).
+    pub inject_budget: usize,
+    /// Wall-clock deadline for one injection; retrieval is skipped past it.
+    pub inject_deadline_ms: usize,
+    /// Carry the newest matching sessions into an injection.
+    pub inject_sessions: bool,
+    pub inject_session_count: usize,
 }
 
 impl Default for GeneralSection {
@@ -467,6 +484,10 @@ impl Default for ContextSection {
             max_code_hits: 20,
             max_sessions: 0,
             include_git_diff: true,
+            inject_budget: 1200,
+            inject_deadline_ms: 1200,
+            inject_sessions: true,
+            inject_session_count: 2,
         }
     }
 }
@@ -535,6 +556,12 @@ pub fn load_with_locale(locale: crate::locale::Locale) -> RdshSettings {
     }
 }
 
+/// Result-returning variant of [`load_with_locale`].
+pub fn try_load_with_locale(locale: crate::locale::Locale) -> anyhow::Result<RdshSettings> {
+    let path = settings_path();
+    try_load_at(&path, locale)
+}
+
 /// `load` の実体。ファイル欠落は既定値 (Ok) を返し、有効な設定の
 /// 読み込み結果は従来と同一。存在するのに壊れた JSON はファイルパス・
 /// 行/列・復旧手順つきの Err を返す（guard 系設定の fail-open 禁止）。
@@ -542,33 +569,78 @@ pub fn try_load() -> anyhow::Result<RdshSettings> {
     try_load_with_locale(crate::locale::Locale::English)
 }
 
-/// Result-returning variant of [`load_with_locale`].
-pub fn try_load_with_locale(locale: crate::locale::Locale) -> anyhow::Result<RdshSettings> {
-    let path = settings_path();
-    try_load_at(&path, locale)
+fn settings_read_error(
+    path: &str,
+    error: &dyn std::fmt::Display,
+    locale: crate::locale::Locale,
+) -> anyhow::Error {
+    anyhow::anyhow!(
+        "{} {path}: {error}",
+        settings_text(
+            locale,
+            "cannot read settings file at",
+            "无法读取设置文件",
+            "設定ファイルを読み込めません"
+        )
+    )
+}
+
+/// Settings documents are small. The cap and the regular-file check keep a FIFO
+/// or a runaway file from stalling a reader — `context inject` loads settings on
+/// the hook path, where a blocked read would hold up a prompt.
+const SETTINGS_MAX_BYTES: u64 = 4 * 1024 * 1024;
+
+/// Read a settings document under the size cap, or `None` when it is absent.
+pub(crate) fn read_small_config(
+    path: &str,
+    locale: crate::locale::Locale,
+) -> anyhow::Result<Option<String>> {
+    use std::io::Read;
+    // Open once, then validate and read that handle. `metadata(path)` followed
+    // by `File::open(path)` allowed a checked regular file to be replaced by a
+    // FIFO between the check and open. O_NONBLOCK makes even that replacement
+    // fail promptly; symlinked settings files remain supported.
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NONBLOCK);
+    }
+    let file = match options.open(path) {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(settings_read_error(path, &e, locale)),
+    };
+    let meta = file
+        .metadata()
+        .map_err(|e| settings_read_error(path, &e, locale))?;
+    if !meta.is_file() {
+        anyhow::bail!("settings file at {path} is not a regular file");
+    }
+    if meta.len() > SETTINGS_MAX_BYTES {
+        anyhow::bail!(
+            "settings file at {path} is {} bytes (limit {SETTINGS_MAX_BYTES})",
+            meta.len()
+        );
+    }
+    let mut raw = String::new();
+    file.take(SETTINGS_MAX_BYTES + 1)
+        .read_to_string(&mut raw)
+        .map_err(|e| settings_read_error(path, &e, locale))?;
+    if raw.len() as u64 > SETTINGS_MAX_BYTES {
+        anyhow::bail!("settings file at {path} exceeds {SETTINGS_MAX_BYTES} bytes");
+    }
+    Ok(Some(raw))
 }
 
 fn try_load_at(path: &str, locale: crate::locale::Locale) -> anyhow::Result<RdshSettings> {
-    let raw: Option<String> = match std::fs::read_to_string(path) {
-        Ok(raw) => Some(raw),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-        Err(e) => {
-            return Err(anyhow::anyhow!(
-                "{} {path}: {e}",
-                settings_text(
-                    locale,
-                    "cannot read settings file at",
-                    "无法读取设置文件",
-                    "設定ファイルを読み込めません"
-                )
-            ));
-        }
-    };
+    let raw: Option<String> = read_small_config(path, locale)?;
     // Missing file: defaults + legacy complement without a failed JSON parse.
     // Same result as before (Null branch), one error allocation saved.
     let Some(raw) = raw else {
         let mut cfg = RdshSettings::default();
-        complement_from_legacy(&mut cfg, false);
+        complement_from_legacy(&mut cfg, false, locale);
         return Ok(cfg);
     };
     let parsed: serde_json::Value = match serde_json::from_str(&raw) {
@@ -622,7 +694,7 @@ fn try_load_at(path: &str, locale: crate::locale::Locale) -> anyhow::Result<Rdsh
     } else {
         RdshSettings::from_value(&parsed)
     };
-    complement_from_legacy(&mut cfg, has_context);
+    complement_from_legacy(&mut cfg, has_context, locale);
     Ok(cfg)
 }
 
@@ -765,6 +837,12 @@ impl RdshSettings {
                 max_code_hits: clamp_u64(num(&cx, "max_code_hits"), 20, 1, 100) as usize,
                 max_sessions: clamp_u64(num(&cx, "max_sessions"), 0, 0, 100) as usize,
                 include_git_diff: flag(&cx, "include_git_diff", true),
+                inject_budget: clamp_u64(num(&cx, "inject_budget"), 1200, 200, 8000) as usize,
+                inject_deadline_ms: clamp_u64(num(&cx, "inject_deadline_ms"), 1200, 100, 10_000)
+                    as usize,
+                inject_sessions: flag(&cx, "inject_sessions", true),
+                inject_session_count: clamp_u64(num(&cx, "inject_session_count"), 2, 0, 10)
+                    as usize,
             },
             extras: ExtrasSection {
                 enable: list(&sec("extras"), "enable", TEXT_CHARS)
@@ -861,6 +939,12 @@ impl RdshSettings {
         out.context.max_code_hits = clamp_u64(num(&cx, "max_code_hits"), 20, 1, 100) as usize;
         out.context.max_sessions = clamp_u64(num(&cx, "max_sessions"), 0, 0, 100) as usize;
         out.context.include_git_diff = flag(&cx, "include_git_diff", true);
+        out.context.inject_budget = clamp_u64(num(&cx, "inject_budget"), 1200, 200, 8000) as usize;
+        out.context.inject_deadline_ms =
+            clamp_u64(num(&cx, "inject_deadline_ms"), 1200, 100, 10_000) as usize;
+        out.context.inject_sessions = flag(&cx, "inject_sessions", true);
+        out.context.inject_session_count =
+            clamp_u64(num(&cx, "inject_session_count"), 2, 0, 10) as usize;
         out
     }
 
@@ -917,6 +1001,10 @@ impl RdshSettings {
                 "max_code_hits": self.context.max_code_hits,
                 "max_sessions": self.context.max_sessions,
                 "include_git_diff": self.context.include_git_diff,
+                "inject_budget": self.context.inject_budget,
+                "inject_deadline_ms": self.context.inject_deadline_ms,
+                "inject_sessions": self.context.inject_sessions,
+                "inject_session_count": self.context.inject_session_count,
             },
         })
     }
@@ -1049,6 +1137,16 @@ impl RdshSettings {
                 self.context.max_sessions = parse_usize(raw, 0, locale)? as usize
             }
             "context.include_git_diff" => self.context.include_git_diff = parse_bool(raw, locale)?,
+            "context.inject_budget" => {
+                self.context.inject_budget = parse_usize(raw, 1200, locale)? as usize
+            }
+            "context.inject_deadline_ms" => {
+                self.context.inject_deadline_ms = parse_usize(raw, 1200, locale)? as usize
+            }
+            "context.inject_sessions" => self.context.inject_sessions = parse_bool(raw, locale)?,
+            "context.inject_session_count" => {
+                self.context.inject_session_count = parse_usize(raw, 2, locale)? as usize
+            }
             k if k.starts_with("features.") => {
                 let id = &k["features.".len()..];
                 if feature_def(id).is_none() {
@@ -1245,6 +1343,10 @@ impl RdshSettings {
             "context.max_code_hits(1-100)",
             "context.max_sessions(0-100)",
             "context.include_git_diff(bool)",
+            "context.inject_budget(200-8000)",
+            "context.inject_deadline_ms(100-10000)",
+            "context.inject_sessions(bool)",
+            "context.inject_session_count(0-10)",
         ]
     }
 
@@ -1287,11 +1389,18 @@ fn legacy_context_path() -> String {
 
 /// context 節が未設定なら旧ファイルで項目ごとに補完する。
 /// 旧ファイルへの書き込みはしない。
-fn complement_from_legacy(cfg: &mut RdshSettings, has_context: bool) {
+fn complement_from_legacy(
+    cfg: &mut RdshSettings,
+    has_context: bool,
+    locale: crate::locale::Locale,
+) {
     if has_context {
         return;
     }
-    let raw = std::fs::read_to_string(legacy_context_path()).unwrap_or_default();
+    let raw = read_small_config(&legacy_context_path(), locale)
+        .ok()
+        .flatten()
+        .unwrap_or_default();
     if raw.trim().is_empty() {
         return;
     }
@@ -1342,6 +1451,26 @@ fn complement_from_legacy(cfg: &mut RdshSettings, has_context: bool) {
     if c.max_sessions == ContextSection::default().max_sessions {
         if let Some(n) = num(&v, "max_sessions") {
             c.max_sessions = n.clamp(0, 100) as usize;
+        }
+    }
+    if c.inject_budget == ContextSection::default().inject_budget {
+        if let Some(n) = num(&v, "inject_budget") {
+            c.inject_budget = n.clamp(200, 8000) as usize;
+        }
+    }
+    if c.inject_deadline_ms == ContextSection::default().inject_deadline_ms {
+        if let Some(n) = num(&v, "inject_deadline_ms") {
+            c.inject_deadline_ms = n.clamp(100, 10_000) as usize;
+        }
+    }
+    if c.inject_sessions == ContextSection::default().inject_sessions {
+        if let Some(b) = v.get("inject_sessions").and_then(|x| x.as_bool()) {
+            c.inject_sessions = b;
+        }
+    }
+    if c.inject_session_count == ContextSection::default().inject_session_count {
+        if let Some(n) = num(&v, "inject_session_count") {
+            c.inject_session_count = n.clamp(0, 10) as usize;
         }
     }
 }
@@ -1637,6 +1766,48 @@ fn split_list(s: &str, max_chars: usize) -> Vec<String> {
 #[cfg(test)]
 mod rdsh_config_tests {
     use super::*;
+
+    #[test]
+    fn bounded_config_reader_accepts_regular_files_and_rejects_oversize() {
+        let dir = std::env::temp_dir().join(format!(
+            "rdsh-config-read-{}-{}",
+            std::process::id(),
+            crate::local_http::random_token().unwrap()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        std::fs::write(&path, "{\"schema\":1}").unwrap();
+        assert_eq!(
+            read_small_config(path.to_str().unwrap(), crate::locale::Locale::English)
+                .unwrap()
+                .as_deref(),
+            Some("{\"schema\":1}")
+        );
+        std::fs::write(&path, vec![b'x'; SETTINGS_MAX_BYTES as usize + 1]).unwrap();
+        assert!(read_small_config(path.to_str().unwrap(), crate::locale::Locale::English).is_err());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bounded_config_reader_rejects_fifo_without_waiting_for_a_writer() {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+
+        let dir = std::env::temp_dir().join(format!(
+            "rdsh-config-fifo-{}-{}",
+            std::process::id(),
+            crate::local_http::random_token().unwrap()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let name = CString::new(path.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+        let error =
+            read_small_config(path.to_str().unwrap(), crate::locale::Locale::English).unwrap_err();
+        assert!(error.to_string().contains("not a regular file"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     fn lock() -> std::sync::MutexGuard<'static, ()> {
         static M: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
@@ -2024,11 +2195,20 @@ mod rdsh_config_tests {
     #[test]
     fn feature_enabled_precedence_and_defaults() {
         let mut c = RdshSettings::default();
-        // 既定値: discord は既定 on、sound は既定 off、未知 id は false。
+        // 既定値: discord/sound/gitview は on、未知 id は false。
         assert!(feature_enabled(&c, "discord"));
-        assert!(!feature_enabled(&c, "sound"));
+        assert!(feature_enabled(&c, "sound"));
+        assert!(feature_enabled(&c, "gitview"));
         assert!(!feature_enabled(&c, "no-such-feature"));
         assert!(!feature_is_explicit(&c, "discord"));
+
+        // 導入の既定値にかかわらず、利用者の明示的な opt-out を維持する。
+        c.features.values.insert("sound".to_string(), false);
+        c.features.values.insert("gitview".to_string(), false);
+        assert!(!feature_enabled(&c, "sound"));
+        assert!(!feature_enabled(&c, "gitview"));
+        assert!(feature_is_explicit(&c, "sound"));
+        assert!(feature_is_explicit(&c, "gitview"));
 
         // features.<id> が未記載なら旧キーを見る。
         c.discord.enabled = false;

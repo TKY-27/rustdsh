@@ -21,8 +21,21 @@ The runner creates isolated HOME/DSH_HOME/XDG directories, starts loopback serve
 and removes its own processes and fixtures. It never connects a provider or enables
 Tailscale. It checks persisted settings, tokens/prune, session display, actual MCP
 questions and browser answers, draft retention across SSE, process restart, and
-revocation of the previous browser key. Linux CI installs Chromium and retains PNGs
-and JSON even when the job fails.
+revocation of the previous browser key. The separate project-overview browser
+flow checks the explicit project allowlist, summary-only state, per-project detail
+authentication, and mobile layout. Linux CI installs Chromium and retains PNGs
+and JSON even when the job fails. It also emits SHA-bound `qa-matrix.json` and a
+filterable `qa-matrix.html`; missing, stale, or mismatched-mode evidence stays
+`not-run`. The loopback browser job leaves real-phone, WSL, and Tailscale paths
+unverified.
+
+The default browser suite also runs `run-health.mjs` against a local managed-child
+fixture. It verifies the dashboard-owned Harness service process card's
+process/output evidence, unavailable upstream signals, and that an authenticated
+dashboard polling gap does not change the reported process state.
+This uses no provider, model, credentials, or external network. The screenshot is
+an actual browser capture of the local dashboard, not a mockup; it does not prove
+that DSH exposes the unavailable task/API/GPU telemetry.
 
 The default command repeats native setup, native Web and project-dashboard flows
 in `en`, `zh-CN`, and `ja`, including original Japanese task/question text that
@@ -50,6 +63,20 @@ directory; `RDSH_OUTCOMES_BASELINE` optionally points to a previous `server.mjs`
 Full-panel PNGs use extra viewport height to keep the fixed action bar clear;
 separate phone PNGs and overflow checks use the actual 390 x 844 viewport.
 
+The default command also runs `causal-timeline.mjs` against an actual isolated
+project dashboard. It covers summary-only reads, problem details, stable IDs,
+unknown native intent, exact question/answer/native correlations, an actual local
+acceptance command, staleness after editing its input, refresh retention, escaped
+producer text, and 390-pixel layout. Stored native receipts are explicit fixtures;
+this test never sends a provider prompt or validates production native execution.
+Run only this flow with `npm run test:timeline --prefix tests/e2e`. Results go to
+`target/e2e/causal-timeline`; override with `RDSH_TIMELINE_E2E_OUTPUT`.
+Set `RDSH_TIMELINE_BASELINE_HTML` and `RDSH_TIMELINE_BASELINE_APP` to unchanged
+previous frontend files for real before/after screenshots over the same isolated
+backend. That comparison measures the frontend only. `runtime-observations.json`
+includes actual stage/ID observations and separates the native fixtures from
+local acceptance and browser proof. See [the contract](../../docs/CAUSAL-TIMELINE.md).
+
 ## Optional installed DSH integration
 
 ```sh
@@ -67,8 +94,17 @@ means the settings flow passed, not that mobile UX was accepted.
 For an existing browser installation, set `RDSH_CHROME_PATH`; an environment with
 bundled Playwright can set `RDSH_PLAYWRIGHT_MODULE` to its module path.
 
-See [the verification matrix](../../docs/evidence/e2e-20261008.md) for observed
-coverage and remaining environment-specific checks.
+`npm run test:language` uses the same `RDSH_HARNESS_BIN` with a DSH version that
+supports `locale.addLanguage`. It checks the actual Language menu, Japanese
+General settings, English fallback, Chinese/English switching, reload, and a
+process restart in a fresh English browser. It isolates all profiles and disables
+Discord presence. Set `RDSH_LANGUAGE_BASELINE_CLIENT` to the previous
+`rdsh-settings/client.js` for real before/after PNGs. Results go to
+`target/harness-language-e2e` (or `RDSH_E2E_OUTPUT`).
+
+See [the route-matrix contract](../../docs/evidence/qa-route-matrix.md) for
+coverage rules and [historical E2E evidence](../../docs/evidence/e2e-20261008.md)
+for earlier runs and environment-specific checks.
 
 ## Answer guard (installed DSH, no provider)
 

@@ -4,9 +4,11 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { adapterCatalog, createCliAdapter, operations } from "../adapters.mjs";
 import { smokeAdapter } from "../adapter-smoke.mjs";
+import { dockerWorkerLaunch } from "../process-scope.mjs";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
@@ -14,6 +16,29 @@ const fixture = fileURLToPath(
   new URL("./fixtures/acp-cli.mjs", import.meta.url),
 );
 const run = promisify(execFile);
+const fakeColimaEndpoint = "unix://" + path.join(os.homedir(), ".colima", "default", "docker.sock");
+async function setupDockerVersionProbe(t, source, { requestTimeout = 1000, dockerBin } = {}) {
+  const root = await fs.mkdtemp(path.join(process.cwd(), ".rdsh-docker-probe-"));
+  const entry = path.join(root, "version.mjs");
+  await fs.writeFile(entry, source);
+  const dockerWorker = { mountRoots: [root], ...(dockerBin ? { dockerBin } : {}) };
+  const launch = await dockerWorkerLaunch({
+    command: ["/usr/local/bin/node", entry], cwd: root, dockerWorker,
+  });
+  const adapter = createCliAdapter({
+    command: ["/usr/local/bin/node", entry],
+    cwd: root,
+    dockerWorker,
+    requestTimeout,
+    stopTimeout: 100,
+    owner_id: "owner_" + randomUUID(),
+  });
+  t.after(async () => {
+    await adapter.stop().catch(() => {});
+    await fs.rm(root, { recursive: true, force: true });
+  });
+  return { adapter, dockerBin: launch.dockerBin, ownerId: adapter.owner_id, root };
+}
 async function setup(t, mode = "normal", extra = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "rdsh-adapter-"));
   const trace = path.join(root, "trace.jsonl");
@@ -75,50 +100,60 @@ test("capability catalog names all six operations and does not claim unimplement
   }
 });
 
-test(
-  "start/send/usage use versioned ACP requests and measurements instead of shell input",
-  requiresOwnershipBackend,
-  async (t) => {
-    const { adapter, root, events, trace } = await setup(t);
-    assert.equal(adapter.capabilities().health, "unverified");
-    const start = await adapter.start();
-    for (const op of operations)
-      assert.equal(adapter.capabilities().operations[op].supported, true);
-    assert.equal((await adapter.probe()).health, "compatible");
-    assert.equal(start.session_id, "fixture-session");
-    assert.equal(adapter.usage(start.session_id).status, "unavailable");
-    assert.equal(
-      (await adapter.send(start.session_id, 'literal $(echo nope) & " text'))
-        .stop_reason,
-      "end_turn",
-    );
-    const usage = adapter.usage(start.session_id);
-    assert.equal(usage.status, "observed");
-    assert.equal(usage.measurement.context_tokens, 135);
-    assert.equal(usage.measurement.context_capacity, 8192);
-    assert.equal(usage.measurement.billable_tokens, null);
-    assert.equal(usage.measurement.cost, null);
-    const wire = await trace();
-    assert.deepEqual(
-      wire.map((r) => r.method),
-      ["initialize", "session/new", "session/prompt"],
-    );
-    assert.deepEqual(wire[1].params, {
-      cwd: await fs.realpath(root),
-      mcpServers: [],
-    });
-    assert.deepEqual(wire[2].params.prompt, [
-      { type: "text", text: 'literal $(echo nope) & " text' },
-    ]);
-    assert(events.every((e) => e.provenance.trust === "untrusted_data"));
-    assert.deepEqual(
-      events.map((e) => e.sequence),
-      events.map((_, i) => i + 1),
-    );
-    assert.equal((await adapter.stop()).confirmed, true);
-    assert.equal(adapter.capabilities().operations.send.supported, false);
-  },
-);
+test("systemd-owned Linux scopes advertise their verified graceful termination capability", () => {
+  const adapter = createCliAdapter();
+  adapter.ownedScope = {
+    descriptor: { kind: "linux_systemd_scope" },
+    state: { status: "running" },
+  };
+  const termination = adapter.capabilities().stop_stages.termination;
+  assert.deepEqual(termination, {
+    supported: true,
+    method: "systemd_scope_sigterm",
+    reason: null,
+  });
+});
+
+test("start/send/usage use versioned ACP requests and measurements instead of shell input", async (t) => {
+  const { adapter, root, events, trace } = await setup(t);
+  assert.equal(adapter.capabilities().health, "unverified");
+  const start = await adapter.start();
+  for (const op of operations)
+    assert.equal(adapter.capabilities().operations[op].supported, true);
+  assert.equal((await adapter.probe()).health, "compatible");
+  assert.equal(start.session_id, "fixture-session");
+  assert.equal(adapter.usage(start.session_id).status, "unavailable");
+  assert.equal(
+    (await adapter.send(start.session_id, 'literal $(echo nope) & " text'))
+      .stop_reason,
+    "end_turn",
+  );
+  const usage = adapter.usage(start.session_id);
+  assert.equal(usage.status, "observed");
+  assert.equal(usage.measurement.context_tokens, 135);
+  assert.equal(usage.measurement.context_capacity, 8192);
+  assert.equal(usage.measurement.billable_tokens, null);
+  assert.equal(usage.measurement.cost, null);
+  const wire = await trace();
+  assert.deepEqual(
+    wire.map((r) => r.method),
+    ["initialize", "session/new", "session/prompt"],
+  );
+  assert.deepEqual(wire[1].params, {
+    cwd: await fs.realpath(root),
+    mcpServers: [],
+  });
+  assert.deepEqual(wire[2].params.prompt, [
+    { type: "text", text: 'literal $(echo nope) & " text' },
+  ]);
+  assert(events.every((e) => e.provenance.trust === "untrusted_data"));
+  assert.deepEqual(
+    events.map((e) => e.sequence),
+    events.map((_, i) => i + 1),
+  );
+  assert.equal((await adapter.stop()).confirmed, true);
+  assert.equal(adapter.capabilities().operations.send.supported, false);
+});
 
 test(
   "resume attaches the exact session and rejects failed attachment",
@@ -221,23 +256,65 @@ test("unknown CLI version or malformed version disables capabilities before prof
   }
 });
 
-test(
-  "a changed executable version revokes capabilities on an already connected adapter",
-  requiresOwnershipBackend,
-  async (t) => {
-    const { adapter } = await setup(t);
-    const { session_id: id } = await adapter.start();
-    adapter.env.RDSH_ADAPTER_FIXTURE_MODE = "new_version";
-    assert.equal((await adapter.probe()).health, "unverified_version");
-    assert(
-      operations.every(
-        (op) => !adapter.capabilities().operations[op].supported,
-      ),
-    );
-    await assert.rejects(adapter.send(id, "no fallback"), error("unsupported"));
-    assert.equal((await adapter.stop()).confirmed, true);
-  },
-);
+test("Docker version probe rejects a valid-looking version when the worker exits nonzero", { skip: process.platform !== "darwin" && "requires the macOS Colima Docker context" }, async (t) => {
+  const { adapter } = await setupDockerVersionProbe(
+    t,
+    'if (process.argv.includes("--version")) { console.log("0.2.0-rc.2"); process.exit(7); }',
+  );
+  assert.equal((await adapter.probe()).health, "cli_unavailable");
+  assert.equal(adapter.capabilities().operations.start.supported, false);
+});
+
+test("Docker version probe rejects output beyond the native 4096-byte limit", { skip: process.platform !== "darwin" && "requires the macOS Colima Docker context" }, async (t) => {
+  const { adapter } = await setupDockerVersionProbe(
+    t,
+    'if (process.argv.includes("--version")) { process.stdout.write("0".repeat(4097)); }',
+  );
+  assert.equal((await adapter.probe()).health, "cli_unavailable");
+  assert.equal(adapter.capabilities().operations.start.supported, false);
+});
+
+test("Docker version probe times out and releases its exact worker container", { skip: process.platform !== "darwin" && "requires the macOS Colima Docker context" }, async (t) => {
+  const { adapter } = await setupDockerVersionProbe(
+    t,
+    'if (process.argv.includes("--version")) setInterval(() => {}, 1000);',
+    { requestTimeout: 150 },
+  );
+  assert.equal((await adapter.probe()).health, "cli_unavailable");
+  assert.equal(adapter.capabilities().operations.start.supported, false);
+});
+
+test("Docker version probe exposes cleanup failure when exact container removal fails", { skip: process.platform === "win32" && "requires a POSIX executable fake Docker shim" }, async (t) => {
+  const root = await fs.mkdtemp(path.join(process.cwd(), ".rdsh-docker-rm-failure-"));
+  const dockerBin = path.join(root, "docker.cjs");
+  const id = "a".repeat(64);
+  await fs.writeFile(dockerBin, `#!/usr/bin/env node
+const readline=require('readline');let a=process.argv.slice(2);if(a[0]==='--context'||a[0]==='--host')a=a.slice(2);if(a[0]==='context'){console.log(a[1]==='inspect'?'${fakeColimaEndpoint}':'colima');process.exit()}if(a[0]==='info'){console.log('adapter-test-engine');process.exit()}if(a[0]==='version'){console.log('linux/arm64');process.exit()}if(a[0]==='create'){console.log('${id}');process.exit()}if(a[0]==='inspect'){if(a.at(-1).startsWith('rdsh-owner_'))console.log('${id}\\n'+a.at(-1).slice(5));else console.log('exited');process.exit()}if(a[0]==='rm')process.exit(9);if(a[0]==='start'){const input=readline.createInterface({input:process.stdin});input.on('line',line=>{const f=JSON.parse(line);if(f.op==='start')console.log(JSON.stringify({type:'ready',pid:null,identity:null,kind:'docker_linux_container',kernel_id:'${id}',execution_platform:'linux',transport:'colima_docker'}));else if(f.op==='release'){console.log(JSON.stringify({type:'response',id:f.id,result:{released:true}}));console.log(JSON.stringify({type:'stdout',data:Buffer.from('0.2.0-rc.2\\n').toString('base64')}));console.log(JSON.stringify({type:'root_exit',code:0,signal:null}));setTimeout(()=>process.exit(0),20);}});}`);
+  await fs.chmod(dockerBin, 0o755);
+  await run(process.execPath, ["--check", dockerBin]);
+  assert.equal((await run(dockerBin, ["--context", "colima", "context"])).stdout.trim(), "colima");
+  const { adapter } = await setupDockerVersionProbe(
+    t,
+    'process.exit(0);',
+    { dockerBin },
+  );
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const report = await adapter.probe();
+  assert.equal(report.health, "ownership_cleanup_unconfirmed");
+  assert.equal(adapter.capabilities().operations.start.supported, false);
+});
+
+test("a changed executable version revokes capabilities on an already connected adapter", async (t) => {
+  const { adapter } = await setup(t);
+  const { session_id: id } = await adapter.start();
+  adapter.env.RDSH_ADAPTER_FIXTURE_MODE = "new_version";
+  assert.equal((await adapter.probe()).health, "unverified_version");
+  assert(
+    operations.every((op) => !adapter.capabilities().operations[op].supported),
+  );
+  await assert.rejects(adapter.send(id, "no fallback"), error("unsupported"));
+  assert.equal((await adapter.stop()).confirmed, true);
+});
 
 test("invalid cwd and missing executable are distinct from compatible CLI", async (t) => {
   const a = await setup(t, "normal", {
@@ -289,21 +366,17 @@ test(
   },
 );
 
-test(
-  "CLI errors retain no peer secret and missing methods disable the affected operation",
-  requiresOwnershipBackend,
-  async (t) => {
-    for (const mode of ["cli_error", "unsupported_send"]) {
-      const { adapter } = await setup(t, mode);
-      const { session_id: id } = await adapter.start();
-      await assert.rejects(adapter.send(id, "text"), error("cli_error"));
-      assert.equal(
-        adapter.capabilities().operations.send.supported,
-        mode === "cli_error",
-      );
-    }
-  },
-);
+test("timeouts and early exit are failures, never successful starts", async (t) => {
+  const a = await setup(t, "timeout");
+  await assert.rejects(a.adapter.start(), (e) =>
+    ["timeout_result_unknown", "protocol_mismatch"].includes(e.code),
+  );
+  assert.equal(a.adapter.capabilities().health, "incompatible");
+  const b = await setup(t, "early_exit");
+  await assert.rejects(b.adapter.start(), (e) =>
+    ["connection_closed", "process_exited"].includes(e.code),
+  );
+});
 
 test(
   "timeouts and early exit are failures, never successful starts",

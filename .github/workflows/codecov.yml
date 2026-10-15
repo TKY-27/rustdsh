@@ -1,0 +1,57 @@
+name: Codecov Coverage
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codecov-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-tarpaulin
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-tarpaulin
+
+      # The suite shells out to zstd, exactly as the ci.yml test job assumes.
+      - name: Ensure zstd is available
+        run: command -v zstd || (sudo apt-get update && sudo apt-get install -y zstd)
+
+      - name: Generate code coverage
+        run: cargo tarpaulin --workspace --out xml
+
+      # A missing secret must be visible: without it the upload fails with
+      # "Token required because branch is protected" while the job stays green
+      # (fork pull requests legitimately have no secret).
+      - name: Note a missing upload token
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+        run: test -n "$CODECOV_TOKEN" || echo "::warning::CODECOV_TOKEN is empty; the Codecov upload is skipped"
+
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@v7
+        with:
+          # v5 renamed `file` to `files`; v7 is the current major.
+          files: cobertura.xml
+          flags: rust
+          # Codecov rejects tokenless uploads to a protected branch
+          # ("Token required because branch is protected"), so `main` needs the
+          # repository upload token stored in the CODECOV_TOKEN secret.
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false

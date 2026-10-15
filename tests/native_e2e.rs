@@ -199,6 +199,7 @@ fn raw_frame(body: &[u8], known_size: bool) -> Vec<u8> {
     frame
 }
 
+#[cfg(unix)]
 #[test]
 fn sessions_known_and_concatenated_frames_cache_and_growth() {
     let f = Fixture::new();
@@ -227,6 +228,7 @@ fn sessions_known_and_concatenated_frames_cache_and_growth() {
     assert_eq!(f.sessions(), rows);
 }
 
+#[cfg(unix)]
 #[test]
 fn sessions_json_preserves_legacy_object_key_order() {
     let f = Fixture::new();
@@ -360,6 +362,7 @@ fn streaming_growth_stays_inexact_until_recomputed_single_and_parallel() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn concurrent_session_writers_leave_parseable_correct_cache() {
     let f = Fixture::new();
@@ -603,6 +606,8 @@ fn setup_save_extras_restart_serve_and_use_real_http_api() {
     let f = Fixture::new();
     let mut setup = Server::start(&f, &["setup", "--web", "--port", "0"]);
     assert_eq!(setup.request("GET", "/api/status", "", false, "").0, 401);
+    assert_eq!(setup.request("POST", "/api/done", "{}", false, "").0, 401);
+    assert_eq!(setup.request("GET", "/api/status", "", true, "").0, 200);
     assert_eq!(
         setup
             .request(
@@ -629,7 +634,10 @@ fn setup_save_extras_restart_serve_and_use_real_http_api() {
         400
     );
     assert_eq!(fs::read(f.0.join("dsh/rdsh.json")).unwrap(), saved);
-    assert_eq!(setup.request("POST", "/api/done", "{}", true, "").0, 200);
+    assert_eq!(
+        setup.request("POST", "/api/done", "{}", true, ""),
+        (200, r#"{"ok":true}"#.to_owned())
+    );
     setup.stopped();
     fs::create_dir_all(f.0.join("dsh/skills/available")).unwrap();
     fs::create_dir_all(f.0.join("dsh/profiles/default")).unwrap();

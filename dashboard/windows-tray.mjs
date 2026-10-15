@@ -155,7 +155,7 @@ export async function startWindowsTray({
       timer = setTimeout(() => {
         record("ready-timeout");
         reject(new Error("Windows tray did not become ready"));
-      }, 15000);
+      }, 30000);
       fail = () =>
         reject(new Error("Windows notification-area tray is unavailable"));
       child.once("error", fail);
@@ -165,7 +165,7 @@ export async function startWindowsTray({
           record("ready");
           resolve();
         } else if (
-          /^phase:(powershell-start|forms-loaded|drawing-loaded|stdin-reader-started)(?::[0-9A-Za-z.+-]{1,32})?$/.test(
+          /^phase:(powershell-start|forms-loaded|drawing-loaded|stdin-delegate-created|visual-styles-enabled|menu-created|icon-loaded|stdin-reader-starting|stdin-reader-started)(?::[0-9A-Za-z.+-]{1,32})?$/.test(
             line,
           )
         ) {

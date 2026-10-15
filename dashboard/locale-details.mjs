@@ -415,6 +415,12 @@ export const detailsEntries = [
   ],
   ["question.cancel", "この質問を取消す", "Cancel this question", "取消此问题"],
   [
+    "question.idleHint",
+    "今はあなたの番ではありません。そのまま閉じて大丈夫です。",
+    "It is not your turn yet; you can close this safely.",
+    "现在还没轮到你，可以直接关闭。",
+  ],
+  [
     "question.noAuthority",
     "回答はこの版への返答です。実行権限は発行しません。",
     "The answer applies to this version. It grants no execution authority.",
