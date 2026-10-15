@@ -118,6 +118,25 @@ test("oversize input is rejected before spawn", async () => {
   delete process.env.RDSH_COMPUTE;
 });
 
+test("oversize batch is rejected before spawn", async () => {
+  process.env.RDSH_COMPUTE = "1";
+  let spawned = false;
+  const fakeSpawn = () => { spawned = true; throw new Error("must not spawn"); };
+  const b = createComputeBridge({ spawnImpl: fakeSpawn });
+  // 65 items: Rust would answer bad_batch; the guard must stop it before the write.
+  const tooMany = await b.estimateBatch(Array.from({ length: 65 }, () => "x"));
+  assert.equal(spawned, false);
+  assert.equal(tooMany.usedRust, false);
+  assert.equal(tooMany.result.total, 65);
+  // 5 x 300 KiB = 1.5 MiB: Rust would answer too_large.
+  const big = "x".repeat(300 * 1024);
+  const tooBig = await b.estimateBatch([big, big, big, big, big]);
+  assert.equal(spawned, false);
+  assert.equal(tooBig.usedRust, false);
+  await b.close();
+  delete process.env.RDSH_COMPUTE;
+});
+
 async function enableComputeForTest(t) {
   await featureHome(t, JSON.stringify({ features: { compute: true } }));
   const previous = process.env.RDSH_COMPUTE;
