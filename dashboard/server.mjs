@@ -60,6 +60,7 @@ const dashboardAssets = new Set([
   "/",
   "/app.mjs",
   "/devices-ui.mjs",
+  "/decision-log-ui.mjs",
   "/human-annotations-ui.mjs",
   "/annotation-identifiers.mjs",
   "/model-catalog-ui.mjs",
@@ -953,6 +954,7 @@ export async function startDashboard(options) {
           "/annotation-identifiers.mjs",
           "/observations.mjs",
           "/reports-view.mjs",
+          "/decision-log-ui.mjs",
           "/question-cards-ui.mjs",
           "/model-catalog-ui.mjs",
           "/project-overview.mjs",
@@ -1243,6 +1245,19 @@ export async function startDashboard(options) {
             return json(res, 200, await task);
           }
           return json(res, 405, { error: "Method not allowed" });
+        }
+        if (req.method === "POST" && route === "/api/decision-log") {
+          if (!humanAuthorized)
+            return json(res, 403, {
+              error: "Human browser credential required",
+            });
+          if (!store)
+            return json(res, 404, { error: "Project decision log unavailable" });
+          return json(
+            res,
+            200,
+            await mutate("decision_log", await readBody(req)),
+          );
         }
         if (req.method === "GET" && route === "/api/state")
           return json(res, 200, await visibleState());

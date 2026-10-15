@@ -16,6 +16,7 @@ import { renderReviewEvidence } from "./review-evidence-ui.mjs";
 import { createTaskOutcomesPanel } from "./task-outcomes-ui.mjs";
 import { createHumanAnnotationPanel } from "./human-annotations-ui.mjs";
 import { createHumanMetricsPanel } from "./human-metrics-ui.mjs";
+import { createDecisionLogPanel } from "./decision-log-ui.mjs";
 import { setupObservedCli } from "./observed-cli-ui.mjs";
 import { setupDeviceAccess } from "./devices-ui.mjs";
 
@@ -432,6 +433,11 @@ const renderHumanMetrics = createHumanMetricsPanel($("human-metrics"), {
   confirm: (message) => window.confirm(message),
 });
 let humanMetricsRevision = -1;
+const renderDecisions = createDecisionLogPanel($("decision-log"), {
+  node,
+  api,
+  refreshState,
+});
 function render(state) {
   if (state.revision < renderedRevision) return;
   renderedRevision = state.revision;
@@ -447,6 +453,7 @@ function render(state) {
   renderCatalog();
   renderAgentUi(state);
   renderBudget($("budget-admission"), state, node);
+  renderDecisions(state);
   updateOverview(state);
   renderHumanAnnotations(state);
   const summarySources = renderUpdateSummary(state);

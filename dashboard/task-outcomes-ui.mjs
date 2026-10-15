@@ -224,7 +224,26 @@ export function createTaskOutcomesPanel(tasks, milestones, { node, api }) {
           details: observationDetails,
           task,
         });
-        card.append(header, node("h3", task.title), observationDetails);
+        card.append(header, node("h3", task.title));
+        const reference = task.decision_reference;
+        if (reference) {
+          const successorStatus = {
+            current: "現行",
+            replaced: "置換済み",
+            withdrawn: "撤回",
+            hold: "保留",
+          }[reference.replacement_status];
+          const label = reference.confirmation_required
+            ? `要確認 · ${reference.reason} · 参照: ${reference.policy || reference.id}` +
+              (reference.replacement_policy
+                ? ` → 後継${successorStatus ? `（${successorStatus}）` : ""}: ${reference.replacement_policy}`
+                : "")
+            : `決定 ${reference.id} · ${reference.policy}`;
+          card.append(
+            node("div", label, reference.confirmation_required ? "warn" : "sub"),
+          );
+        }
+        card.append(observationDetails);
         const facts = node("dl", undefined, "decision-details");
         for (const [label, value] of [
           ["目的", report.purpose],

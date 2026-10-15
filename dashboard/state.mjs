@@ -53,6 +53,11 @@ import {
   validateRestoredHistory,
   validateHistoryConflicts,
 } from "./history-backup.mjs";
+import {
+  recordDecision,
+  validateDecisionLog,
+  publicDecisionReferences,
+} from "./decision-log.mjs";
 
 // Bucket D display notes preserve schema 1; explicit state migrations can move
 // legacy projects to schema 2 without changing nested extension schemas.
@@ -148,6 +153,7 @@ export class ProjectStore {
     validateCostLedger(value);
     validateBudgetAdmission(value);
     validateUiSurfaces(value);
+    validateDecisionLog(value);
     validateTaskOutcomes(value);
     return new ProjectStore(project, value, options);
   }
@@ -242,6 +248,7 @@ export class ProjectStore {
     } catch (error) {
       if (error.code !== "ENOENT") throw error;
     }
+    validateDecisionLog(next);
     const historyChanged = next.history_backups !== this.protectedHistory;
     const historyIds = historyChanged
       ? validateRestoredHistory(next)
@@ -257,13 +264,16 @@ export class ProjectStore {
       metrics: "dashboard.metrics.updated",
       ui_surface: "dashboard.ui.presented",
       ui_action: "dashboard.ui.action",
+      decision_log: "dashboard.decision.recorded",
     };
     const summary =
       operation === "answer"
         ? input.answer
         : operation === "question"
           ? input.question || input.cancel_reason
-          : input.title || "指標を更新";
+          : operation === "decision_log"
+            ? input.policy || input.action || input.subject || "決定ログを更新"
+            : input.title || "指標を更新";
     if (operation) {
       next.changes ||= [];
       next.changes.push({
@@ -273,7 +283,9 @@ export class ProjectStore {
         data: {
           project_id: this.project.id,
           revision: next.revision,
-          entity_id: input.id || "",
+          entity_id:
+            input.id ||
+            (operation === "decision_log" ? input.subject || "" : ""),
           summary: String(summary).slice(0, 1000),
         },
         cursor: null,
@@ -331,8 +343,22 @@ function freezeHistory(value) {
   return value;
 }
 export function publicState(value, observations, deliveries, budgetJobs) {
-  const visible = { ...value };
-  delete visible.changes;
+  const { changes, ...visible } = value;
+  visible.tasks = publicDecisionReferences(value);
+  if (value.decision_log) {
+    visible.decision_log = {
+      ...value.decision_log,
+      records: value.decision_log.records.map((record) => ({
+        ...record,
+        rationale_status: record.rationale ? "recorded" : "missing",
+        change_summary_status: record.supersedes_id
+          ? record.change_summary
+            ? "recorded"
+            : "missing"
+          : null,
+      })),
+    };
+  }
   if (value.cost_ledger) visible.cost_ledger = publicCostLedger(value);
   if (value.budget_admission)
     visible.budget_admission = publicBudgetAdmission(value, budgetJobs);
@@ -511,8 +537,22 @@ export function applyOperation(state, operation, input) {
       // must check the active revision before starting work. Schema frozen.
       // #14 outcome card: keep title/status/milestone/blocker/updated_at on
       // one card; "done" is not "verified" until a check result is recorded.
+      const id = text(input.id, "id", 160);
+      const index = state.tasks.findIndex((item) => item.id === id);
+      const previous = index < 0 ? null : state.tasks[index];
+      const decisionId =
+        input.policy_decision_id === undefined
+          ? previous?.policy_decision_id || null
+          : input.policy_decision_id === null
+            ? null
+            : text(input.policy_decision_id, "policy_decision_id", 160);
+      if (
+        decisionId &&
+        !state.decision_log?.records.some((record) => record.id === decisionId)
+      )
+        throw new Error("Decision not found");
       const task = {
-        id: text(input.id, "id", 160),
+        id,
         title: text(input.title, "title", 1000),
         status: oneOf(
           input.status,
@@ -527,8 +567,10 @@ export function applyOperation(state, operation, input) {
         observation: normalizeObservation(input.observation, {
           reference: input.id,
         }),
+        // #62: keep the legacy task shape when no decision is attached; the
+        // field is optional so existing state.json round-trips unchanged.
+        ...(decisionId ? { policy_decision_id: decisionId } : {}),
       };
-      const index = state.tasks.findIndex((item) => item.id === task.id);
       updateTaskAttention(task, index < 0 ? null : state.tasks[index], input, task.updated_at);
       applyTaskOutcomes(state, input);
       if (index < 0) state.tasks.push(task);
@@ -633,6 +675,10 @@ export function applyOperation(state, operation, input) {
       // design. The UI collapses large graphs and shows only runnable items;
       // concurrency/depth/stop limits are enforced by the caller's plan.
       state.events = state.events.slice(-1000);
+      break;
+    }
+    case "decision_log": {
+      recordDecision(state, input);
       break;
     }
     default:

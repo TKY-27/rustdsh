@@ -90,7 +90,7 @@ export const tools = [
   {
     name: "dashboard_upsert_task",
     description:
-      "Create or update a project task. Optional outcome reports purpose, owner, latest_outcome, next_step and an acceptance_task_id (omitted fields retain earlier reports; null clears one). Optional milestone_contract fixes criterion references and descriptions under a stable ID; changed criteria require a new ID. Task status is a report, never proof of verification. Actual checks remain in the explicit acceptance CLI. Create or update a project task. A blocked task appears with its blocker as an unclassified stop. Optional attention reports failure/dependency, deadline, impact and next_action; use cause_id only when a shared cause is known. Omit to preserve it; null or status done resolves it. It never authorizes or executes an action.",
+      "Create or update a project task. Optional outcome reports purpose, owner, latest_outcome, next_step and an acceptance_task_id (omitted fields retain earlier reports; null clears one). Optional milestone_contract fixes criterion references and descriptions under a stable ID; changed criteria require a new ID. Task status is a report, never proof of verification. Actual checks remain in the explicit acceptance CLI. Optionally set policy_decision_id to a human decision in the decision log; references to replaced, held or withdrawn decisions are flagged for confirmation and are never rewritten automatically. A blocked task appears with its blocker as an unclassified stop. Optional attention reports failure/dependency, deadline, impact and next_action; use cause_id only when a shared cause is known. Omit to preserve it; null or status done resolves it. It never authorizes or executes an action.",
     inputSchema: object(
       {
         id: string,
@@ -102,6 +102,7 @@ export const tools = [
         outcome: outcomeSchema,
         milestone_contract: milestoneSchema,
         observation: observationSchema,
+        policy_decision_id: { type: ["string", "null"] },
       },
       ["id", "title", "status"],
     ),
@@ -169,7 +170,7 @@ export const tools = [
   {
     name: "dashboard_get_state",
     description:
-      "Read this project’s metrics, tasks, questions, recent events and optional source-aware cost ledger. Ledger totals are per declared period/source/currency; missing workers remain unknown and invoice amounts are never used to correct estimates.",
+      "Read this project’s metrics, tasks, questions, recent events, optional human decision log and source-aware cost ledger. Tasks referencing replaced, held or withdrawn decisions include a confirmation_required decision_reference; the server does not rewrite their policy. Ledger totals are per declared period/source/currency; missing workers remain unknown and invoice amounts are never used to correct estimates.",
     inputSchema: object({}),
   },
   {
