@@ -17,6 +17,25 @@ Format follows Keep a Changelog, versioning follows Semantic Versioning.
   file cannot block a plan. The exploration subagent plugin also exposes its
   effective admission policy as `createOptimizer(...).limits`.
 
+- `plugins/install.sh` now separates **essential** plugins (installed on every
+  run and printed first) from **recommended** ones, and accepts
+  `--recommended=all|none|list|id,...` (or the `RECOMMENDED` environment
+  variable) so non-interactive runs select a set without a prompt. With a TTY it
+  lists the recommended plugins and asks before adding them; without one the
+  historical per-profile defaults are unchanged. `plugins/recommended.md`,
+  README.md, README.ja.md and docs/DESKTOP-INTEGRATION.md document the tiers
+  (#713).
+
+- `install.sh` reports a host readiness check before it downloads or builds
+  anything: the tools the chosen path needs (`curl`, `tar`, `gzip`, coreutils),
+  the Node.js 22+ / original `dsh` state and whether `PREFIX` is writable, each
+  with the host's own install command (`sudo dnf install -y ...` on rpm hosts,
+  and the Debian, Alpine, Arch and openSUSE equivalents). Fedora, RHEL, CentOS,
+  Rocky, AlmaLinux and Oracle Linux also get the optional `zstd`/`bubblewrap`
+  packages, a `PATH` hint and a note on which glibc or static musl archive was
+  chosen, so no musl package is implied. `tests/install-isolated.sh` covers the
+  rpm branch with a faked `ID=fedora` on a Debian base.
+
 ### Changed
 
 - The bounded-exploration subagent plugin admits 3 concurrent runs by default
