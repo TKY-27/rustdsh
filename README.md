@@ -522,7 +522,7 @@ rdsh desktop verify                 # exit nonzero when the profile has no rdsh 
 The same is available through the profile installer and the installers:
 
 ```sh
-PROFILE=desktop ./plugins/install.sh   # every recommended package, forwarded correctly
+PROFILE=desktop ./plugins/install.sh   # essential + default recommended, forwarded correctly
 ./install.sh --desktop                 # attach the rdsh plugins during installation
 ```
 
@@ -542,9 +542,10 @@ Two optional plugins extend the existing Desktop/Web runtime:
   fresh context, bounded concurrency and output, and active duplicate suppression
   through the native DSH `spawn` provider (0.2.0-rc.2).
 
-Use the app's Plugins page to add the corresponding directory, or enable
-`EASY_WORK=1` / `SUBAGENTS=1` in `plugins/install.sh`. These are opt-in features
-being prepared for 0.4.0. See the [acceptance evidence](docs/reviews/2026-10-14-easy-work.md).
+Use the app's Plugins page to add the corresponding directory, or select them
+with `./plugins/install.sh --recommended=easy-work,subagents` (`EASY_WORK=1` /
+`SUBAGENTS=1` still work). These are opt-in features being prepared for 0.4.0.
+See the [acceptance evidence](docs/reviews/2026-10-14-easy-work.md).
 
 [Desktop SDK and upstream preparation](desktop/README.md) provide a pinned
 official SDK, an isolated fork home, bundled Rust launcher, and a dedicated
