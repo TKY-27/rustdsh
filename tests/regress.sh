@@ -392,7 +392,9 @@ manifest() {
   } > "$FS/release-digests.tsv"
 }
 manifest
-fs_sync() { env -u RDSH_SYNC_FROM_SOURCE -u RDSH_MUSL HOME="$FS/home" NPM_BIN="$FS/npm" PREFIX_BIN="$1" RDSH_RELEASE_BASE="file://$FS/rel" RDSH_TEST_INSECURE_BASE=1 RDSH_SYNC_VERSION="${3:-latest}" PATH="$FS/shim:$PATH" sh $FS/repo/sync-dsh.sh > "$2" 2>&1; }
+# RDSH_SYNC_SELF_UPDATE=0: these cases pin the script copy under test, so it
+# must not fetch a newer copy of itself from the origin.
+fs_sync() { env -u RDSH_SYNC_FROM_SOURCE -u RDSH_MUSL RDSH_SYNC_SELF_UPDATE=0 HOME="$FS/home" NPM_BIN="$FS/npm" PREFIX_BIN="$1" RDSH_RELEASE_BASE="file://$FS/rel" RDSH_TEST_INSECURE_BASE=1 RDSH_SYNC_VERSION="${3:-latest}" PATH="$FS/shim:$PATH" sh $FS/repo/sync-dsh.sh > "$2" 2>&1; }
 fs_sync "$FS/bin" $FS/sync-ok.log
 if grep -q "checksum ok" $FS/sync-ok.log && grep -q "rdsh updated OK via release binary" $FS/sync-ok.log && "$FS/bin/rdsh" --version 2>/dev/null | grep -q "rdsh"; then ok "sync-dsh release update with pinned digest"; else echo "FAIL(output): sync-dsh release update with pinned digest"; tail -n 8 $FS/sync-ok.log; exit 1; fi
 # A no-op check must not masquerade as a new update and restart notification time.

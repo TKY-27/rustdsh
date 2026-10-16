@@ -381,6 +381,11 @@ exit 22
   env.PATH = `${shim}${path.delimiter}${process.env.PATH}`;
   const dest = path.join(dir, 'installed');
   env.TEST_DEST = dest;
+  // The fragment below ends before the fetch this test drives, so the
+  // self-update step that runs earlier in the real script must stay off: it
+  // would fetch the script's origin and make the first curl-log assertion
+  // meaningless.
+  env.RDSH_SYNC_SELF_UPDATE = '0';
   const source = readFileSync('sync-dsh.sh', 'utf8').replaceAll('\r\n', '\n').split('\nNPM=""')[0];
   const run = () => spawnSync('/bin/sh', ['-c', source + '\nfetch_rdsh_release "$TEST_DEST"'], { env, encoding: 'utf8' });
   // sync-dsh.sh logs through tee(1) on stdout, so both streams carry refusals.
