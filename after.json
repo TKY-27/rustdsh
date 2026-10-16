@@ -1,0 +1,83 @@
+{
+  "result": "PASS",
+  "label": "after",
+  "scope": "actual app/report buttons and authenticated HTTP; controlled Blob decoding; no provider or Tailscale",
+  "scenarios": [
+    {
+      "next": "b.txt",
+      "expected": {
+        "open": true,
+        "content": [
+          {
+            "tag": "PRE",
+            "text": "B text remains current",
+            "length": 22,
+            "src": null
+          }
+        ],
+        "status": "読み取り専用のテキスト表示です。"
+      },
+      "actual": {
+        "open": true,
+        "content": [
+          {
+            "tag": "PRE",
+            "text": "B text remains current",
+            "length": 22,
+            "src": null
+          }
+        ],
+        "status": "読み取り専用のテキスト表示です。"
+      },
+      "passed": true
+    },
+    {
+      "next": "b.png",
+      "expected": {
+        "open": true,
+        "content": [
+          {
+            "tag": "IMG",
+            "text": "",
+            "length": 0,
+            "src": "blob:http://127.0.0.1:45911/525b26b9-a1ee-4526-b193-ecfdd1ba7150"
+          }
+        ],
+        "status": "画像を読み取り専用で表示しています。"
+      },
+      "actual": {
+        "open": true,
+        "content": [
+          {
+            "tag": "IMG",
+            "text": "",
+            "length": 0,
+            "src": "blob:http://127.0.0.1:45911/525b26b9-a1ee-4526-b193-ecfdd1ba7150"
+          }
+        ],
+        "status": "画像を読み取り専用で表示しています。"
+      },
+      "passed": true
+    },
+    {
+      "next": null,
+      "expected": {
+        "open": false,
+        "content": [],
+        "status": "成果物を読み取っています…"
+      },
+      "actual": {
+        "open": false,
+        "content": [],
+        "status": "成果物を読み取っています…"
+      },
+      "passed": true
+    },
+    {
+      "freshness": true,
+      "passed": true,
+      "status": "認証情報らしき値を伏せて表示しています。 先頭128 KiBまで表示しています。（取得後に状態が更新されました）"
+    }
+  ],
+  "pageErrors": []
+}
