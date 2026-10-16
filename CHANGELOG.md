@@ -16,6 +16,16 @@ Format follows Keep a Changelog, versioning follows Semantic Versioning.
   README.md, README.ja.md and docs/DESKTOP-INTEGRATION.md document the tiers
   (#713).
 
+- `install.sh` reports a host readiness check before it downloads or builds
+  anything: the tools the chosen path needs (`curl`, `tar`, `gzip`, coreutils),
+  the Node.js 22+ / original `dsh` state and whether `PREFIX` is writable, each
+  with the host's own install command (`sudo dnf install -y ...` on rpm hosts,
+  and the Debian, Alpine, Arch and openSUSE equivalents). Fedora, RHEL, CentOS,
+  Rocky, AlmaLinux and Oracle Linux also get the optional `zstd`/`bubblewrap`
+  packages, a `PATH` hint and a note on which glibc or static musl archive was
+  chosen, so no musl package is implied. `tests/install-isolated.sh` covers the
+  rpm branch with a faked `ID=fedora` on a Debian base.
+
 ## [0.6.0] - 2026-10-17
 
 ### Security
