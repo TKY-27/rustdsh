@@ -7,9 +7,10 @@ import {pathToFileURL} from 'node:url';
 import {createHash} from 'node:crypto';
 const repo=path.resolve(import.meta.dirname,'../..');
 const {startDashboard}=await import(pathToFileURL(path.join(repo,'dashboard/server.mjs')));
-const {readLocalRuntime}=await import(pathToFileURL(path.join(repo,'dashboard/private-runtime.mjs')));
 const {createOutcomeProject}=await import(pathToFileURL(path.join(repo,'dashboard/test/fixtures/task-outcomes-project.mjs')));
 const {catalog}=await import(pathToFileURL(path.join(repo,'dashboard/locale.mjs')));
+// The public runtime.json carries no browser URL; the owner credentials do.
+const {readLocalRuntime}=await import(pathToFileURL(path.join(repo,'dashboard/private-runtime.mjs')));
 const {chromium}=await import(pathToFileURL(path.join(repo,'tests/e2e/node_modules/playwright/index.mjs')));
 const recordFlow=process.env.RDSH_OUTCOME_RECORD_FLOW==='1';
 const output=path.resolve(process.env.RDSH_OUTCOME_LANGUAGES_OUTPUT || path.join(repo,'target/e2e/outcome-languages'));await fs.mkdir(output,{recursive:true});

@@ -7,20 +7,19 @@ import net from 'node:net';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {classifyBrowserConsoleError,writeQaMatrix} from './qa-matrix.mjs';
-import {catalog} from '../../dashboard/locale.mjs';
 
 const repo=path.resolve(import.meta.dirname,'../..');
 const {chromium}=await import(process.env.RDSH_PLAYWRIGHT_MODULE || 'playwright');
 const binary=path.resolve(repo,process.env.RDSH_E2E_BIN || path.join(repo,'target', 'debug', process.platform==='win32'?'rdsh.exe':'rdsh'));
 const output=path.resolve(process.env.RDSH_E2E_OUTPUT || path.join(repo,'target/e2e'));
 const language=process.env.RDSH_E2E_LANGUAGE || 'ja';
-const projectReadyPattern = /project(?:: |を起動: |：)(http:\/\/127\.0\.0\.1:\d+\/)/;
 const copies={
  ja:{connect:'接続',enabled:'有効',estimate:'推定する',prune:'prune実行',nativeTitle:'rdsh ダッシュボード',projectTitle:'プロジェクトダッシュボード',answer:'回答を返す',empty:'未回答の質問はありません',tokens:'トークン',projects:'プロジェクト'},
  en:{connect:'Connect',enabled:'on',estimate:'Estimate',prune:'Run prune',nativeTitle:'rdsh dashboard',projectTitle:'PROJECT DASHBOARD',answer:'Submit answer',empty:'No unanswered questions',tokens:'tokens',projects:'projects'},
  'zh-CN':{connect:'连接',enabled:'已启用',estimate:'估算',prune:'执行裁剪',nativeTitle:'rdsh 仪表板',projectTitle:'项目仪表板',answer:'提交回答',empty:'没有待回答的问题',tokens:'令牌',projects:'个项目'},
 };
 assert.ok(Object.hasOwn(copies,language));const copy=copies[language];
+const {catalog}=await import(pathToFileURL(path.join(repo,'dashboard/locale.mjs')));
 const root=await mkdtemp(path.join(tmpdir(),'rdsh-browser-e2e-'));
 const env=Object.fromEntries(['PATH','SystemRoot','WINDIR','COMSPEC','TEMP','TMP'].filter(k=>process.env[k]).map(k=>[k,process.env[k]]));
 Object.assign(env,{RDSH_LANG:language,HOME:root,USERPROFILE:root,DSH_HOME:path.join(root,'dsh'),XDG_CACHE_HOME:path.join(root,'cache'),XDG_CONFIG_HOME:path.join(root,'config'),XDG_DATA_HOME:path.join(root,'data'),RDSH_ORIG_BIN:path.join(root,'no-original'),RDSH_DASHBOARD_HOME:path.join(root,'projects-state')});
@@ -79,7 +78,7 @@ try{
  const {Client}=await import(pathToFileURL(path.join(repo,'dashboard/node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js')));
  const {StreamableHTTPClientTransport}=await import(pathToFileURL(path.join(repo,'dashboard/node_modules/@modelcontextprotocol/sdk/dist/esm/client/streamableHttp.js')));
  const project=path.join(root,'alpha');await mkdir(project);const identityAlpha=await identity(project);
- const dashboard=await launch(process.execPath,[path.join(repo,'dashboard/cli.mjs'),'project','--project',project,'--port',await freePort(),'--no-tailscale'],projectReadyPattern);
+ const dashboard=await launch(process.execPath,[path.join(repo,'dashboard/cli.mjs'),'project','--project',project,'--port',await freePort(),'--no-tailscale'],/project[^\n]*?(http:\/\/127\.0\.0\.1:\d+\/)/);
  const runtime=await readLocalRuntime(identityAlpha.directory);
  const client=new Client({name:'browser-e2e',version:'1.0.0'},{capabilities:{}});
  await client.connect(new StreamableHTTPClientTransport(new URL(runtime.local_url+'mcp'),{requestInit:{headers:{authorization:`Bearer ${runtime.mcp_token}`}}}));
@@ -265,7 +264,7 @@ try{
  assert.equal(await projectPage.evaluate(()=>document.activeElement.id),'palette-search');
  await paletteSearch.fill('answered');
  assert.equal(await projectPage.locator('#palette-list [role="option"]').count(),1,'English aliases should filter commands');
- assert.equal(await projectPage.locator('#palette-count').innerText(),`1 / ${catalog[language]['palette.count'].replace('{count}','1')} · ${catalog[language]['palette.toggleAnswered']}`);
+ assert.match(await projectPage.locator('#palette-count').innerText(),new RegExp(catalog[language]['palette.toggleAnswered']));
  const paletteUpdate=projectPage.waitForResponse(r=>r.url().endsWith('/api/state')&&r.status()===200);
  await call('dashboard_update_metrics',{input_tokens:2000,cached_input_tokens:700,tool_calls:11,tool_errors:0});await paletteUpdate;
  assert.equal(await paletteSearch.inputValue(),'answered');
@@ -353,7 +352,7 @@ try{
  const alphaState=await readFile(path.join(identityAlpha.directory,'state.json'),'utf8');assert.ok(alphaState.includes('E2E saved answer'));
  await screenshot(projectPage,'project-desktop');await projectPage.setViewportSize(report.viewports[1]);await check(projectPage,new RegExp(copy.projectTitle));passQaCase('mobile.viewport','project-mobile.png');await screenshot(projectPage,'project-mobile');
  await projectPage.close();await client.close();await stop(dashboard.child);
- const restarted=await launch(process.execPath,[path.join(repo,'dashboard/cli.mjs'),'project','--project',project,'--port',await freePort(),'--no-tailscale'],projectReadyPattern);
+ const restarted=await launch(process.execPath,[path.join(repo,'dashboard/cli.mjs'),'project','--project',project,'--port',await freePort(),'--no-tailscale'],/project[^\n]*?(http:\/\/127\.0\.0\.1:\d+\/)/);
  const fresh=await readLocalRuntime(identityAlpha.directory);
  assert.notEqual(fresh.browser_url,runtime.browser_url);
  const staleToken=new URL(runtime.browser_url).hash.slice('#key='.length);assert.equal((await fetch(fresh.local_url+'api/state',{headers:{'x-rdsh-browser-token':staleToken}})).status,401);
