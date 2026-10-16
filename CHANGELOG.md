@@ -5,6 +5,14 @@ Format follows Keep a Changelog, versioning follows Semantic Versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- `rdsh serve` states its role in the header as the Audit & Performance Monitor
+  for DeepSeek Harness in English, Chinese and Japanese, renders the build
+  version and a role overview before the token is entered, and fills the doctor
+  diagnostics, sessions and skills cards in parallel once connected, so the first
+  paint no longer reads as an empty chat page.
+
 ## [0.5.2] - 2026-10-16
 
 ### Fixed
