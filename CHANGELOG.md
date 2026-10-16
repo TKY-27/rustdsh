@@ -7,6 +7,12 @@ Format follows Keep a Changelog, versioning follows Semantic Versioning.
 
 ### Added
 
+- `rdsh models` prints the provider model catalog and `rdsh models sync`
+  refreshes it from each provider's own published catalog, so a new model
+  becomes selectable without editing `rdsh.json` by hand. The command landed
+  after v0.4.0 (#641) and therefore ships in the next release; see
+  [docs/MODEL-ROUTING.md](docs/MODEL-ROUTING.md).
+
 - `plugins/rdsh-answer-guard` recovers a turn whose reply was emitted only into
   the reasoning channel: DSH closes such a turn as `completed` (its
   `EMPTY_RESPONSE` check only sees a fully empty message) and the Web UI folds
