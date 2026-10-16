@@ -7,6 +7,7 @@ import net from 'node:net';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {classifyBrowserConsoleError,writeQaMatrix} from './qa-matrix.mjs';
+import {catalog} from '../../dashboard/locale.mjs';
 
 const repo=path.resolve(import.meta.dirname,'../..');
 const {chromium}=await import(process.env.RDSH_PLAYWRIGHT_MODULE || 'playwright');
@@ -86,7 +87,7 @@ try{
  const call=async(name,args)=>{const result=await client.callTool({name,arguments:args});assert.notEqual(result.isError,true);return result;};
  await call('dashboard_upsert_task',{id:'T1',title:'E2E task',status:'doing'});
  await call('dashboard_ask_question',{id:'Q1',question:'E2E: choose an answer',urgency:'high'});
- const projectPage=await pageFor(browser,runtime.browser_url);await projectPage.locator('#question-Q1 textarea').waitFor();await check(projectPage,/dashboard/i);
+ const projectPage=await pageFor(browser,runtime.browser_url);await projectPage.locator('#question-Q1 textarea').waitFor();await check(projectPage,new RegExp(copy.projectTitle));
  const updateSummary=projectPage.locator('#update-summary');
  await projectPage.waitForFunction(()=>document.querySelector('#update-summary-status')?.textContent.includes('初回確認'));
  await projectPage.evaluate(async()=>{
@@ -140,7 +141,7 @@ try{
  assert.equal(new URL(pairedPage.url()).hash,'');assert.equal(new URL(pairedPage.url()).searchParams.has('rdsh_id'),false);
  assert.equal(await pairedPage.evaluate(()=>localStorage.getItem('rdsh_pending_project_deep_link_v1')),null);
  await pairedPage.setViewportSize(report.viewports[1]);await pairedPage.goto(questionLink);await pairedPage.locator('#question-Q1').waitFor();
- await pairedPage.waitForFunction(()=>document.activeElement?.id==='question-Q1');await check(pairedPage,/dashboard/i);
+ await pairedPage.waitForFunction(()=>document.activeElement?.id==='question-Q1');await check(pairedPage,new RegExp(copy.projectTitle));
  assert.equal(new URL(pairedPage.url()).hash,'');assert.equal(new URL(pairedPage.url()).searchParams.has('rdsh_id'),false);
  report.flows.push('project deep links: task/question URLs omit auth key; unauthenticated target resumes after pairing and opens exact task; mobile returns to exact question');
  const observedCli=projectPage.locator('#observed-cli-panel');
@@ -176,7 +177,7 @@ try{
  await viewerPage.locator('#question-Q1 textarea').waitFor();await viewerPage.locator('#device-access-notice').filter({hasText:'閲覧'}).waitFor();
  assert.equal(await viewerPage.locator('#question-Q1 textarea').isDisabled(),true);assert.equal(await viewerPage.locator('#question-Q1 button[type=submit]').isDisabled(),true);
  assert.equal(await viewerPage.locator('#share-toggle').isHidden(),true);assert.equal(await viewerPage.locator('#device-detail').isHidden(),true);
- await viewerPage.setViewportSize(report.viewports[1]);await check(viewerPage,/dashboard/i);
+ await viewerPage.setViewportSize(report.viewports[1]);await check(viewerPage,new RegExp(copy.projectTitle));
  const viewerToken=await viewerPage.evaluate(()=>sessionStorage.getItem('rdsh_project_browser_token'));
  const deniedAnswer=await fetch(new URL('api/update/answer',viewerPage.url()),{method:'POST',headers:{'x-rdsh-browser-token':viewerToken,'content-type':'application/json'},body:JSON.stringify({id:'Q1',answer:'forged'})});
  assert.equal(deniedAnswer.status,403);
@@ -264,7 +265,7 @@ try{
  assert.equal(await projectPage.evaluate(()=>document.activeElement.id),'palette-search');
  await paletteSearch.fill('answered');
  assert.equal(await projectPage.locator('#palette-list [role="option"]').count(),1,'English aliases should filter commands');
- assert.match(await projectPage.locator('#palette-count').innerText(),/回答済み.*Toggle answered questions/);
+ assert.equal(await projectPage.locator('#palette-count').innerText(),`1 / ${catalog[language]['palette.count'].replace('{count}','1')} · ${catalog[language]['palette.toggleAnswered']}`);
  const paletteUpdate=projectPage.waitForResponse(r=>r.url().endsWith('/api/state')&&r.status()===200);
  await call('dashboard_update_metrics',{input_tokens:2000,cached_input_tokens:700,tool_calls:11,tool_errors:0});await paletteUpdate;
  assert.equal(await paletteSearch.inputValue(),'answered');
@@ -350,15 +351,15 @@ try{
  passQaCase('desktop.lost-response','browser-results.json#qa_results.desktop.lost-response');
 
  const alphaState=await readFile(path.join(identityAlpha.directory,'state.json'),'utf8');assert.ok(alphaState.includes('E2E saved answer'));
- await screenshot(projectPage,'project-desktop');await projectPage.setViewportSize(report.viewports[1]);await check(projectPage,/dashboard/i);passQaCase('mobile.viewport','project-mobile.png');await screenshot(projectPage,'project-mobile');
+ await screenshot(projectPage,'project-desktop');await projectPage.setViewportSize(report.viewports[1]);await check(projectPage,new RegExp(copy.projectTitle));passQaCase('mobile.viewport','project-mobile.png');await screenshot(projectPage,'project-mobile');
  await projectPage.close();await client.close();await stop(dashboard.child);
  const restarted=await launch(process.execPath,[path.join(repo,'dashboard/cli.mjs'),'project','--project',project,'--port',await freePort(),'--no-tailscale'],projectReadyPattern);
  const fresh=await readLocalRuntime(identityAlpha.directory);
  assert.notEqual(fresh.browser_url,runtime.browser_url);
  const staleToken=new URL(runtime.browser_url).hash.slice('#key='.length);assert.equal((await fetch(fresh.local_url+'api/state',{headers:{'x-rdsh-browser-token':staleToken}})).status,401);
- const newPage=await pageFor(browser,fresh.browser_url);await newPage.locator('#tasks-detail').evaluate(e=>e.open=true);await newPage.locator('#task-T1').waitFor();await newPage.locator('#answered').evaluate(e=>e.open=true);await newPage.locator('#answers').filter({hasText:'E2E saved answer'}).waitFor();await check(newPage,/dashboard/i);
+ const newPage=await pageFor(browser,fresh.browser_url);await newPage.locator('#tasks-detail').evaluate(e=>e.open=true);await newPage.locator('#task-T1').waitFor();await newPage.locator('#answered').evaluate(e=>e.open=true);await newPage.locator('#answers').filter({hasText:'E2E saved answer'}).waitFor();await check(newPage,new RegExp(copy.projectTitle));
  const persisted=await fetch(fresh.local_url+'api/state',{headers:{authorization:`Bearer ${fresh.token}`}});assert.equal(persisted.status,200);const persistedState=await persisted.json();assert.equal(persistedState.questions.find(item=>item.id==='Q1').answer,'E2E saved answer');assert.equal(persistedState.feedback.filter(item=>item.question_id==='Q1'&&item.type==='question_answered').length,1);
- passQaCase('desktop.answer-reload','browser-results.json#qa_results.desktop.answer-reload');await stop(restarted.child);
+ passQaCase('desktop.answer-reload','browser-results.json#qa_results.desktop.answer-reload');await newPage.close();await stop(restarted.child);
  report.flows.push('project CLI: real MCP task/question -> preserved read-only CLI observation panel -> project-specific pane layout persistence, keyboard navigation and mobile one-column -> browser draft and focus preserved on SSE plus change summary -> command palette English/Japanese search, arrows, Enter, Escape, ARIA state and SSE resilience -> browser answer -> per-project summary checkpoint, MCP/file readback -> process restart retained answer and revoked old key');
  }finally{await client.close();}
  assert.deepEqual(report.page_errors,[]);assert.deepEqual(report.console_errors,[]);
