@@ -193,6 +193,19 @@ archive's GitHub-reported SHA-256 in a reviewed follow-up PR before announcing
 or directing users to install that release. Keep older rows for explicit
 `--version` installs. Do not derive pins from release `.sha256` sidecars.
 
+The same tag publishes the crate to crates.io. The `publish-crate` CD job runs
+after the release is published, requires `vX.Y.Z` to match the `Cargo.toml`
+version, refuses a crate outside the 10 MB crates.io limit, and skips a version
+the registry already has. It fails closed while `CARGO_REGISTRY_TOKEN` is unset;
+create the token on crates.io, store it once with
+`gh secret set CARGO_REGISTRY_TOKEN`, and re-run the failed job instead of
+recreating the tag. Verify the upload with:
+
+```sh
+python3 scripts/crate-release.py check --tag vX.Y.Z
+cargo info rdsh          # registry metadata for the published version
+```
+
 After publication, confirm the body, 12 assets and correct channel in GitHub.
 Download and verify the actual published assets:
 

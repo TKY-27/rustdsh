@@ -3,3 +3,11 @@
 exclude = [
     '^https://x[.]com/(studio_yebisu|remydre8|PENTACoXIAN)/?$',
 ]
+
+# crates.io answers a crate page only when the client asks for HTML: a plain GET
+# (Accept: */*) returns 404 for every crate, including serde. Ask for HTML so
+# the crates.io link stays checked instead of being excluded like the authors
+# above.
+headers = [
+    'Accept=text/html,application/xhtml+xml',
+]
