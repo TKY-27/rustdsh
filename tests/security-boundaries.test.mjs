@@ -164,6 +164,34 @@ test('anchored deny cannot be bypassed by hook metadata', t => {
   const result = spawnSync(bin, ['guard', '--deny', 'rm -rf /*'], { env, input: '{"cwd":"/tmp/repo","tool_input":{"command":"rm -rf / DUMMY"}}', encoding: 'utf8' });
   assert.equal(result.status, 2);
 });
+test('shell quoting, variable assembly and path traversal cannot bypass deny patterns', t => {
+  const { dir, env } = isolated(t);
+  for (const [command, pattern] of [
+    ['r"m" -rf / x', 'rm -rf /*'],
+    ["r'm' -rf / x", 'rm -rf /*'],
+    ['A=rm; $A -rf / x', 'rm -rf /*'],
+    ['A=rm; B=$A; $B -rf / x', 'rm -rf /*'],
+    ['/bin/rm -rf / x', 'rm -rf /*'],
+    ['sh -c "rm -rf /"', 'rm -rf /*'],
+    ['rm -rf /tmp/../important/x', 'rm -rf /important*'],
+  ]) {
+    const input = JSON.stringify({ cwd: '/tmp', tool_name: 'Bash', tool_input: { command } });
+    const result = spawnSync(bin, ['guard', '--deny', pattern], { env, input, encoding: 'utf8' });
+    assert.equal(result.status, 2, command);
+  }
+  writeFileSync(path.join(dir, 'secret.txt'), 'never read this');
+  symlinkSync(path.join(dir, 'secret.txt'), path.join(dir, 'safe.txt'));
+  const linked = spawnSync(bin, ['guard', '--deny', '*secret.txt*'], {
+    env, input: JSON.stringify({ cwd: dir, tool_name: 'Bash', tool_input: { command: 'cat safe.txt' } }), encoding: 'utf8',
+  });
+  assert.equal(linked.status, 2, linked.stderr);
+});
+test('harmless argument text is still not an anchored deny hit', t => {
+  const { env } = isolated(t);
+  const input = JSON.stringify({ cwd: '/tmp', tool_name: 'Bash', tool_input: { command: 'echo rm -rf / x' } });
+  const result = spawnSync(bin, ['guard', '--deny', 'rm -rf /*'], { env, input, encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+});
 test('malformed or oversized hook input fails closed', t => {
   const { env } = isolated(t);
   for (const input of ['{"tool_input":', 'x'.repeat(1024 * 1024 + 1)]) {
