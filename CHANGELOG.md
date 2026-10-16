@@ -13,7 +13,8 @@ Format follows Keep a Changelog, versioning follows Semantic Versioning.
   variable) so non-interactive runs select a set without a prompt. With a TTY it
   lists the recommended plugins and asks before adding them; without one the
   historical per-profile defaults are unchanged. `plugins/recommended.md`,
-  README.md, README.ja.md and docs/DESKTOP-INTEGRATION.md document the tiers.
+  README.md, README.ja.md and docs/DESKTOP-INTEGRATION.md document the tiers
+  (#713).
 
 ## [0.6.0] - 2026-10-17
 
