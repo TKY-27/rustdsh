@@ -71,6 +71,18 @@ jobs:
           version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')
           python3 scripts/prepare-release.py "v$version"
 
+  crate-package:
+    name: "crate-package${{ github.event_name == 'push' && github.ref_type == 'branch' && github.event.repository.default_branch && github.ref_name != github.event.repository.default_branch && ' [branch push]' || '' }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Keep the crate inside the registry limits
+        run: python3 scripts/crate-release.py check
+      - name: Build the crate from its packaged file list
+        run: cargo package --locked
+
   update-banner-windows:
     name: "update-banner-windows${{ github.event_name == 'push' && github.ref_type == 'branch' && github.event.repository.default_branch && github.ref_name != github.event.repository.default_branch && ' [branch push]' || '' }}"
     runs-on: windows-latest

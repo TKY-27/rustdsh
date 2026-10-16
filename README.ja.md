@@ -9,6 +9,7 @@
 [![docs](https://github.com/jimoto-no-llm/rustdsh/actions/workflows/docs.yml/badge.svg)](https://github.com/jimoto-no-llm/rustdsh/actions/workflows/docs.yml)
 [![codecov](https://codecov.io/gh/jimoto-no-llm/rustdsh/graph/badge.svg)](https://codecov.io/gh/jimoto-no-llm/rustdsh)
 [![release](https://img.shields.io/github/v/release/jimoto-no-llm/rustdsh.svg)](https://github.com/jimoto-no-llm/rustdsh/releases)
+[![crates.io](https://img.shields.io/crates/v/rdsh.svg)](https://crates.io/crates/rdsh)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org/)
 
@@ -72,6 +73,14 @@ $f = Join-Path $env:TEMP 'rdsh-install.ps1'
 Invoke-WebRequest -Uri https://github.com/jimoto-no-llm/rustdsh/releases/latest/download/install.ps1 -OutFile $f -UseBasicParsing
 & $f -FromRelease
 ```
+
+crates.io からもインストールできます（Rust 1.85 以上が必要です）：
+
+```sh
+cargo install rdsh
+```
+
+`cargo install` はソースからビルドし、リリースアーカイブと同じバイナリをインストールします。
 
 ### 2. 環境確認 & 初期セットアップ
 

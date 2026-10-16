@@ -11,6 +11,12 @@ Format follows Keep a Changelog, versioning follows Semantic Versioning.
   独立した翻訳リクエストを送り、コード・パスと原文・会話履歴を保持して訳文を表示します。
   Web／Desktop向けの導入と、失敗時の再試行に対応します。画面とコマンドの文言は
   DSHのlocaleカタログ（en/zh/ja）経由です（#448 Step 1）。
+- `rdsh` publishes to crates.io from the release tag. The `cd` workflow gained a
+  `publish-crate` job that runs after the GitHub release, and the `exclude` list
+  in `Cargo.toml` drops the media, docs, dashboard and test trees so the crate
+  fits the 10 MB registry limit (about 1.6 MB instead of 173 MiB). `ci.yml`
+  guards both with the `crate-package` check, so `cargo install rdsh` and the
+  prebuilt archives ship the same program.
 
 - `rdsh models` prints the provider model catalog and `rdsh models sync`
   refreshes it from each provider's own published catalog, so a new model
@@ -33,6 +39,13 @@ Format follows Keep a Changelog, versioning follows Semantic Versioning.
 - 更新通知を dismiss したら、その更新については再表示しない（新しい更新のときだけ通知する）。
 
 ### Changed
+
+- Dependabot patch and minor pull requests enable auto-merge once the required
+  approval and required checks pass (`dependabot-automerge.yml`); major updates
+  stay manual. `.github/project-settings.json` lists the `crate-package`
+  required check (ten names), enables secret-scanning validity checks, and
+  records `require_last_push_approval: false`, matching the live branch
+  protection and `docs/PROJECT-SETUP.md`.
 
 - `AGENTS.md` and `docs/PROJECT-SETUP.md` record the working agreements that came
   out of the v0.4.0 cycle: the nine required checks and the branch-protection
