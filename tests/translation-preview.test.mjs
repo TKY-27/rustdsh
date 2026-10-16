@@ -36,26 +36,41 @@ function llmFixture(transform = (text) => text.replace('The answer is ready.', '
 function chatData(text = 'The answer is ready.') {
   return { status: 'settled', finalNode: { messageId: 'answer-1', interrupted: false, blocks: [{ kind: 'text', text }] } };
 }
-function uiHost(execute, { data = chatData(), kanaThreshold = 0.08, responseOk = true } = {}) {
+function localeFixture(language = 'ja') {
+  const dictionaries = new Map();
+  const state = { active: language };
+  return { state, dictionaries,
+    getSnapshot: () => ({ active: state.active, locales: [{ id: 'zh' }, { id: 'en' }], revision: 0 }),
+    register(namespace, id, dictionary) {
+      const key = `${namespace}:${id}`;
+      assert.equal(dictionaries.has(key), false, 'Each dictionary has one owner');
+      dictionaries.set(key, dictionary);
+      return () => dictionaries.delete(key);
+    },
+    addLanguage() { assert.fail('the translation plugin must not own the Japanese language definition'); },
+    bind(namespace) { return (key) => dictionaries.get(`${namespace}:${state.active}`)?.[key] ?? dictionaries.get(`${namespace}:en`)?.[key] ?? key; },
+  };
+}
+function uiHost(execute, { data = chatData(), kanaThreshold = 0.08, responseOk = true, locale = localeFixture() } = {}) {
   const cells = [], effects = [];
   let cursor = 0, component, registration, current = data;
   const React = { createElement: (tag, props, ...children) => ({ tag, props: props || {}, children: children.flat() }),
     useState(initial) { const i = cursor++; if (!(i in cells)) cells[i] = initial; return [cells[i], (value) => { cells[i] = typeof value === 'function' ? value(cells[i]) : value; }]; },
     useRef(initial) { const i = cursor++; return cells[i] ||= { current: initial }; },
     useEffect(effect) { const i = cursor++; if (!(i in cells)) { cells[i] = true; effects.push(effect()); } } };
-  const ctx = { slots: { inject: (_slot, register) => register(), register(options, view) { registration = options; component = view; } }, remote: { commands: { execute } } };
+  const ctx = { locale, effect: (install) => { effects.push(install()); return () => {}; }, slots: { inject: (_slot, register) => register(), register(options, view) { registration = options; component = view; } }, remote: { commands: { execute } } };
   vm.runInNewContext(client, { fetch: async () => ({ ok: responseOk, json: async () => ({ ok: responseOk, kana_threshold: kanaThreshold }) }), window: { __ModuleLoader__: { load(module) {
     const plugin = module.factory((name) => { assert.equal(name, 'react'); return React; });
     // Cordis validates the root service independently of its dotted children.
     // Match the real Web host's admission so a missing `remote` cannot be hidden.
     const scoped = new Proxy(ctx, { get(target, key) {
-      if (['slots', 'remote'].includes(key) && !plugin.inject.includes(key)) throw new Error(`cannot get property "${key}" without inject`);
+      if (['slots', 'remote', 'locale'].includes(key) && !plugin.inject.includes(key)) throw new Error(`cannot get property "${key}" without inject`);
       return Reflect.get(target, key);
     } });
     plugin.apply(scoped);
   } } } });
   return { registration, async settle() { await new Promise((done) => setImmediate(done)); },
-    render(messageId = 'answer-1') { cursor = 0; return component({ messageId, useChat: (select) => select({ nodes: new Map([['answer', { kind: 'assistant-step', data: current }]]) }), ...registration.inject('session-1') }); },
+    render(messageId = 'answer-1') { cursor = 0; return component({ messageId, t: locale.bind('rdsh-translation'), useChat: (select) => select({ nodes: new Map([['answer', { kind: 'assistant-step', data: current }]]) }), ...registration.inject('session-1') }); },
     setData(data) { current = data; }, dispose() { for (const off of effects) off?.(); } };
 }
 function find(node, predicate) { if (!node || typeof node !== 'object') return undefined; if (predicate(node)) return node; return node.children.map((child) => find(child, predicate)).find(Boolean); }
@@ -83,6 +98,20 @@ test('translation preview: button invokes the registered command and displays tr
   assert.equal(llm.calls[0].provider, 'current'); assert.equal(llm.calls[0].model, 'selected');
   assert.equal(llm.calls[0].messages.length, 1);
   ui.dispose(); await dispose();
+});
+
+test('translation preview: copy comes from the locale catalog and follows the active language', async () => {
+  const locale = localeFixture('ja');
+  const ui = uiHost(() => assert.fail('copy checks must not translate'), { locale });
+  ui.render(); await ui.settle();
+  assert.deepEqual([...locale.dictionaries.keys()].sort(), ['rdsh-translation:en', 'rdsh-translation:ja', 'rdsh-translation:zh']);
+  assert.equal(ui.registration.locale, 'rdsh-translation');
+  assert.match(textOf(ui.render()), /日本語訳を表示/);
+  locale.state.active = 'en';
+  assert.match(textOf(ui.render()), /Show Japanese translation/);
+  locale.state.active = 'zh';
+  assert.match(textOf(ui.render()), /显示日文翻译/);
+  ui.dispose();
 });
 
 test('translation preview: Japanese, code-only, running and interrupted answers have no action', async () => {

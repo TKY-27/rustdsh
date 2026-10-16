@@ -9,7 +9,8 @@ Format follows Keep a Changelog, versioning follows Semantic Versioning.
 
 - 完了した英語・中国語回答に「日本語訳を表示」ボタンを追加。現在のモデルへ
   独立した翻訳リクエストを送り、コード・パスと原文・会話履歴を保持して訳文を表示します。
-  Web／Desktop向けの導入と、失敗時の再試行に対応します（#448 Step 1）。
+  Web／Desktop向けの導入と、失敗時の再試行に対応します。画面とコマンドの文言は
+  DSHのlocaleカタログ（en/zh/ja）経由です（#448 Step 1）。
 
 - `rdsh models` prints the provider model catalog and `rdsh models sync`
   refreshes it from each provider's own published catalog, so a new model

@@ -3,6 +3,57 @@ window.__ModuleLoader__.load({
   factory(require) {
     const React = require('react');
     const h = React.createElement;
+    // 表示文言はDSHのlocaleカタログへ登録する。このファイルへ訳文を直接書かない。
+    const NAMESPACE = 'rdsh-translation';
+    const dictionaries = {
+      en: {
+        'action.show': 'Show Japanese translation',
+        'action.busy': 'Translating…',
+        'action.again': 'Translate again',
+        'action.aria': 'Show a Japanese translation of this answer',
+        'status.translating': 'Translating…',
+        'dialog.aria': 'Japanese translation of the answer',
+        'dialog.section': 'Japanese translation (display only)',
+        'dialog.title': 'Japanese translation',
+        'dialog.note': 'The original answer and the conversation history are unchanged. This translation is shown only on this screen.',
+        'dialog.close': 'Close',
+        'error.command': 'The translation command did not run. Try again.',
+        'error.result': 'No translation result was received. Try again.',
+      },
+      zh: {
+        'action.show': '显示日文翻译',
+        'action.busy': '翻译中…',
+        'action.again': '重新翻译',
+        'action.aria': '显示此回答的日文翻译',
+        'status.translating': '正在翻译…',
+        'dialog.aria': '回答的日文翻译',
+        'dialog.section': '日文翻译（仅显示）',
+        'dialog.title': '日文翻译',
+        'dialog.note': '原文与会话历史均未更改。译文仅在此画面显示。',
+        'dialog.close': '关闭',
+        'error.command': '无法执行翻译命令。请重试。',
+        'error.result': '未能收到翻译结果。请重试。',
+      },
+      ja: {
+        'action.show': '日本語訳を表示',
+        'action.busy': '和訳中…',
+        'action.again': 'もう一度和訳する',
+        'action.aria': '回答の日本語訳を表示',
+        'status.translating': '翻訳しています…',
+        'dialog.aria': '回答の日本語訳',
+        'dialog.section': '日本語訳（表示のみ）',
+        'dialog.title': '日本語訳',
+        'dialog.note': '原文と会話履歴は変更していません。訳文はこの画面でのみ表示します。',
+        'dialog.close': '閉じる',
+        'error.command': '和訳コマンドを実行できませんでした。再試行してください',
+        'error.result': '和訳結果を受け取れませんでした。再試行してください',
+      },
+    };
+    // 日本語の言語定義はrdsh-settingsが所有する。ここは辞書だけを登録し、
+    // 別の日本語パックと言語idを奪い合わない。
+    function hasLocale(ctx) {
+      return Boolean(ctx.locale) && typeof ctx.locale.register === 'function' && typeof ctx.effect === 'function';
+    }
     let thresholdPromise;
     function threshold() {
       return thresholdPromise ||= fetch('/api/rdsh-translation/config', { cache: 'no-store' })
@@ -24,6 +75,7 @@ window.__ModuleLoader__.load({
       return lexical > 0 && kana / lexical < limit;
     }
     function TranslateAction(props) {
+      const t = typeof props.t === 'function' ? props.t : (key) => key;
       const data = props.useChat((snapshot) => [...snapshot.nodes.values()].find((node) => node.kind === 'assistant-step' && node.data?.finalNode?.messageId === props.messageId)?.data);
       const [limit, setLimit] = React.useState(null);
       const [state, setState] = React.useState(null);
@@ -44,25 +96,30 @@ window.__ModuleLoader__.load({
         const settle = (value) => { if (active.current.pending === request && active.current.messageId === request.messageId) setState({ messageId: request.messageId, ...value }); };
         try {
           const response = await props.execute(request.messageId);
-          if (!response?.ok) throw new Error('和訳コマンドを実行できませんでした。再試行してください');
+          if (!response?.ok) throw new Error(t('error.command'));
           const result = response.value?.result;
           if (result?.kind !== 'success' || typeof result.text !== 'string' || !result.text.trim()) {
-            settle({ error: result?.kind === 'error' && typeof result.text === 'string' ? result.text : '和訳結果を受け取れませんでした。再試行してください' });
+            settle({ error: result?.kind === 'error' && typeof result.text === 'string' ? result.text : t('error.result') });
           } else settle({ text: result.text });
-        } catch { settle({ error: '和訳コマンドを実行できませんでした。再試行してください' }); }
+        } catch { settle({ error: t('error.command') }); }
         finally { if (active.current.pending === request) active.current.pending = null; }
       };
       return h('div', { className: 'rdsh-translation-preview', style: { maxWidth: '100%', minWidth: 0 } },
-        h('button', { type: 'button', disabled: Boolean(view?.busy), onClick: run, 'aria-label': '回答の日本語訳を表示', 'data-testid': 'rdsh-translate-action', style: { cursor: view?.busy ? 'wait' : 'pointer', font: 'inherit' } }, view?.busy ? '和訳中…' : view?.text ? 'もう一度和訳する' : '日本語訳を表示'),
-        view?.busy ? h('span', { role: 'status', 'aria-live': 'polite' }, ' 翻訳しています…') : null,
-        view?.text || view?.error ? h('dialog', { ref: preview, 'aria-label': '回答の日本語訳', style: { width: 'min(42rem, calc(100vw - 3rem))', maxHeight: '80vh', overflow: 'auto', boxSizing: 'border-box', padding: 16, border: '1px solid currentColor', borderRadius: 8, font: 'inherit' } },
-          h('button', { type: 'button', onClick: () => preview.current?.close(), style: { float: 'right', font: 'inherit' } }, '閉じる'),
-          view.error ? h('p', { role: 'alert' }, view.error) : h('section', { 'aria-label': '日本語訳（表示のみ）' },
-            h('strong', null, '日本語訳'), h('p', { style: { fontSize: '0.85em' } }, '原文と会話履歴は変更していません。訳文はこの画面でのみ表示します。'),
+        h('button', { type: 'button', disabled: Boolean(view?.busy), onClick: run, 'aria-label': t('action.aria'), 'data-testid': 'rdsh-translate-action', style: { cursor: view?.busy ? 'wait' : 'pointer', font: 'inherit' } }, view?.busy ? t('action.busy') : view?.text ? t('action.again') : t('action.show')),
+        view?.busy ? h('span', { role: 'status', 'aria-live': 'polite' }, ' ' + t('status.translating')) : null,
+        view?.text || view?.error ? h('dialog', { ref: preview, 'aria-label': t('dialog.aria'), style: { width: 'min(42rem, calc(100vw - 3rem))', maxHeight: '80vh', overflow: 'auto', boxSizing: 'border-box', padding: 16, border: '1px solid currentColor', borderRadius: 8, font: 'inherit' } },
+          h('button', { type: 'button', onClick: () => preview.current?.close(), style: { float: 'right', font: 'inherit' } }, t('dialog.close')),
+          view.error ? h('p', { role: 'alert' }, view.error) : h('section', { 'aria-label': t('dialog.section') },
+            h('strong', null, t('dialog.title')), h('p', { style: { fontSize: '0.85em' } }, t('dialog.note')),
             h('pre', { style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', font: 'inherit', marginBottom: 0 } }, view.text))) : null);
     }
-    return { inject: ['slots', 'remote', 'remote.commands'], apply(ctx) {
+    return { inject: ['slots', 'remote', 'remote.commands', 'locale'], apply(ctx) {
+      const localized = hasLocale(ctx);
+      if (localized) for (const [id, dictionary] of Object.entries(dictionaries)) {
+        ctx.effect(() => ctx.locale.register(NAMESPACE, id, dictionary), `rdsh-translation: ${id} dictionary`);
+      }
       ctx.slots.inject('conversation.chat.assistant-actions', () => ctx.slots.register({ name: 'conversation.chat.assistant-actions', id: 'rdsh-translation-preview', order: 35,
+        ...localized ? { locale: NAMESPACE } : {},
         inject: (sessionId) => ({ execute: (messageId) => ctx.remote.commands.execute(sessionId, `/ja-preview ${messageId}`, []) }) }, TranslateAction));
     } };
   },
