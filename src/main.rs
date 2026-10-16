@@ -1825,6 +1825,10 @@ fn settings_independent_invocation() -> bool {
             command: Some(
                 Commands::Settings {
                     action: SettingsAction::Init { force: true }
+                } | Commands::Context {
+                    // The hook path runs before any settings read and must stay
+                    // fail-open, so the locale bootstrap skips the document too.
+                    action: ContextAction::Inject { .. }
                 } | Commands::TaskOutcomes { .. }
                     | Commands::Subagents { .. }
                     | Commands::BudgetAdmission { .. }
