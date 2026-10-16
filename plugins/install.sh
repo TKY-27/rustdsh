@@ -23,6 +23,7 @@ GITVIEW="${GITVIEW:-$BROWSER_PLUGINS_DEFAULT}"
 COMPUTE="${COMPUTE:-0}"
 EASY_WORK="${EASY_WORK:-0}"
 SUBAGENTS="${SUBAGENTS:-0}"
+TRANSLATION="${TRANSLATION:-$BROWSER_PLUGINS_DEFAULT}"
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # Bundled rdsh plugins. The update banner is a Web client plugin whose bundle
 # patch inserts itself into the profile; when the package is missing, the whole
@@ -30,6 +31,7 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # (issue #5). pnpm also prunes links it does not manage, so the banner has to be
 # installed through the same path as the settings UI.
 BUNDLED="rdsh-settings rdsh-mobile-ui rdsh-answer-guard"
+[ "$TRANSLATION" = "1" ] && BUNDLED="$BUNDLED rdsh-translation"
 [ "$COMPUTE" = "1" ] && BUNDLED="$BUNDLED rdsh-compute"
 [ "$EASY_WORK" = "1" ] && BUNDLED="$BUNDLED rdsh-easy-work"
 [ "$SUBAGENTS" = "1" ] && BUNDLED="$BUNDLED rdsh-subagent-optimizer"

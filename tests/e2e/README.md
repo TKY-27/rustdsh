@@ -124,6 +124,22 @@ after one call, so a passing run shows the guard, not the loop, recovered the
 turn. Like `discord-native.mjs` it needs an installed DSH tree and is not part
 of CI; its exit code is the verdict.
 
+## Translation preview (isolated installed DSH, no provider)
+
+```sh
+RDSH_NATIVE_MODULES=/path/to/isolated/dsh/node_modules npm run test:translation --prefix tests/e2e
+```
+
+This optional acceptance test uses the real DSH AgentLoop, LlmRuntime,
+CommandRuntime and session, with a local stub adapter. It requires the preview
+command to make one independent call using the current request-header route,
+return the translation, and retain the original messages, turns, surface and
+next-request input. Only the normal command run/done records may be added.
+It isolates HOME, DSH_HOME, XDG and cwd, and never uses a provider credential or
+model API. It verifies the native contracts; actual Web profile/slot loading and
+translation quality require separate acceptance. It is not part of the default
+browser suite and does not install DSH itself.
+
 ## Discord integration
 
 `harness-settings.mjs` also saves/reloads the Discord controls in the original DSH
