@@ -5,6 +5,16 @@ Format follows Keep a Changelog, versioning follows Semantic Versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- `sync-dsh.sh` replaces its own installed copy with the current script from
+  `main` before it does any work, so a fix to the daily run (the model-catalog
+  step, for instance) reaches every machine instead of waiting for a manual
+  update. `RDSH_SYNC_SELF_UPDATE=0` turns the step off, a copy inside a git
+  checkout is never touched, and an origin that is unreachable or returns
+  something other than a shell script keeps the current copy; see
+  [docs/AUTO-UPDATE.md](docs/AUTO-UPDATE.md).
+
 ## [0.5.1] - 2026-10-16
 
 ### Added
