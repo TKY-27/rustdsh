@@ -31,4 +31,4 @@ node --test plugins/workflow-board/tests/source-patch.test.mjs
 
 適用ツールは一時Git fixtureでcheck、実適用、nested新規ファイル・stage済みの繰返し、空白path、link/junction起動、適用済みsourceへの別編集、blob/CRLF、root/revision違い、checksum/header/対象違い、所有者/fsmonitor、whitespace設定、複数ファイル競合、書込・適用後検証失敗を確認します。同梱patchの実header・numstatもmanifestと照合します。network・model・profileは不要で、CIはNode 22のLinux/macOS/Windowsで実行します。
 
-同梱board sourceはDSHのfocused 49テストと、実Chromeの1440px/390px・明暗テーマ・reload・Session切替・live状態移動・focus・Escape・正規リンク・text escapeのfixture QAを通過しています。productionコンポーネント＋scriptedイベントの検証で、導入済み実サーバーの確認ではありません。実導入/差替え、実workflowと完全なDSH build/GUI/web gateは未検証です。以前の導入済みDSH `0.2.0-rc.2`は関連イベントの公開接点が一致しますが、このsource baseではなく、自動patchしません。関連：[rustdsh #83](https://github.com/sahenjp/rustdsh/issues/83)。
+同梱board sourceはDSHのfocused 49テストと、実Chromeの1440px/390px・明暗テーマ・reload・Session切替・live状態移動・focus・Escape・正規リンク・text escapeのfixture QAを通過しています。productionコンポーネント＋scriptedイベントの検証で、導入済み実サーバーの確認ではありません。実導入/差替え、実workflowと完全なDSH build/GUI/web gateは未検証です。以前の導入済みDSH `0.2.0-rc.2`は関連イベントの公開接点が一致しますが、このsource baseではなく、自動patchしません。関連：[rustdsh #83](https://github.com/jimoto-no-llm/rustdsh/issues/83)。
