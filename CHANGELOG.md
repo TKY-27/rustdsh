@@ -16,6 +16,25 @@ Format follows Keep a Changelog, versioning follows Semantic Versioning.
   session拒否・置換済みは追記せずエラーを表示します。DSHが置換をモデル可視surfaceだけに
   適用するため画面上の回答表示は差し替わりません（訳文はダイアログで確認できます）。
 
+- `plugins/install.sh` now separates **essential** plugins (installed on every
+  run and printed first) from **recommended** ones, and accepts
+  `--recommended=all|none|list|id,...` (or the `RECOMMENDED` environment
+  variable) so non-interactive runs select a set without a prompt. With a TTY it
+  lists the recommended plugins and asks before adding them; without one the
+  historical per-profile defaults are unchanged. `plugins/recommended.md`,
+  README.md, README.ja.md and docs/DESKTOP-INTEGRATION.md document the tiers
+  (#713).
+
+- `install.sh` reports a host readiness check before it downloads or builds
+  anything: the tools the chosen path needs (`curl`, `tar`, `gzip`, coreutils),
+  the Node.js 22+ / original `dsh` state and whether `PREFIX` is writable, each
+  with the host's own install command (`sudo dnf install -y ...` on rpm hosts,
+  and the Debian, Alpine, Arch and openSUSE equivalents). Fedora, RHEL, CentOS,
+  Rocky, AlmaLinux and Oracle Linux also get the optional `zstd`/`bubblewrap`
+  packages, a `PATH` hint and a note on which glibc or static musl archive was
+  chosen, so no musl package is implied. `tests/install-isolated.sh` covers the
+  rpm branch with a faked `ID=fedora` on a Debian base.
+
 ## [0.6.0] - 2026-10-17
 
 ### Security
