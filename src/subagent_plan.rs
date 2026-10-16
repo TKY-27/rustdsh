@@ -762,7 +762,11 @@ fn read_request(input_file: &str, locale: crate::locale::Locale) -> Result<Value
         )
     })?;
     if !metadata.is_file() || metadata.len() > 256 * 1024 {
-        bail!("Input JSON must be a regular file of at most 256 KiB");
+        bail!(crate::locale::diagnostic(
+            locale,
+            "Input JSON must be a regular file of at most 256 KiB"
+        )
+        .to_string());
     }
     let mut bytes = Vec::with_capacity(metadata.len() as usize);
     file.take(256 * 1024 + 1)
@@ -776,14 +780,16 @@ fn read_request(input_file: &str, locale: crate::locale::Locale) -> Result<Value
             )
         })?;
     if bytes.len() > 256 * 1024 {
-        bail!("Input JSON exceeds 256 KiB");
+        bail!(crate::locale::diagnostic(locale, "Input JSON exceeds 256 KiB").to_string());
     }
     let Ok(text) = std::str::from_utf8(&bytes) else {
-        bail!("Input JSON is invalid");
+        bail!(crate::locale::diagnostic(locale, "Input JSON is invalid").to_string());
     };
     // TextDecoder("utf-8") in the former dashboard CLI removed a leading BOM.
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
-    serde_json::from_str(text).map_err(|_| anyhow!("Input JSON is invalid"))
+    serde_json::from_str(text).map_err(|_| {
+        anyhow!(crate::locale::diagnostic(locale, "Input JSON is invalid").to_string())
+    })
 }
 
 /// `rdsh subagents plan --input-file <request-json>`: read one request and
