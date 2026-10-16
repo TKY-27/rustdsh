@@ -13,6 +13,14 @@ Format follows Keep a Changelog, versioning follows Semantic Versioning.
   diagnostics, sessions and skills cards in parallel once connected, so the first
   paint no longer reads as an empty chat page.
 
+### Security
+
+- `rdsh guard` normalizes a command string before deny matching: quoting
+  (`r"m" -rf`), same-line variable assembly (`A=rm; $A -rf`) and path
+  traversal or symlink targets are folded into bounded candidate texts, so the
+  structural patterns can no longer be displaced by obfuscation (#29/#32/#33
+  semantics are unchanged, and block still exits 2 with the same stderr).
+
 ## [0.5.2] - 2026-10-16
 
 ### Fixed
