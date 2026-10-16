@@ -362,7 +362,12 @@ fn normalize_path_word(word: &str, cwd: Option<&Path>, probes: &mut usize) -> Op
             normalized = Some(lexical);
         }
     }
-    let base = cwd?;
+    // Only canonicalize needs a filesystem base. A hook may carry no cwd (plain
+    // text) or a cwd this platform rejects as absolute (bash-style "/tmp" on
+    // Windows); the lexical fold above must survive either way.
+    let Some(base) = cwd else {
+        return normalized;
+    };
     if *probes >= MAX_PATH_PROBES || word.len() > 4096 {
         return normalized;
     }
@@ -1265,6 +1270,14 @@ mod tests {
         assert!(denied_pattern(&traversal, &["rm -rf /important*".into()])
             .unwrap()
             .is_some());
+        // A plain-text payload carries no cwd at all, and Windows rejects a
+        // bash-style "/tmp" as absolute. Dot-dot folding must not depend on
+        // either: it is lexical, so it applies on every platform.
+        assert!(
+            denied_pattern("rm -rf /tmp/../important/x", &["rm -rf /important*".into()])
+                .unwrap()
+                .is_some()
+        );
     }
 
     #[cfg(unix)]
