@@ -901,11 +901,10 @@ mod tests {
     }
 
     /// One shim path for a directory, using the platform's first file name.
-    fn shim(dir: &str, tool: &str) -> String {
-        Path::new(dir)
-            .join(tool_file_names(tool)[0].clone())
-            .to_string_lossy()
-            .into_owned()
+    /// Returned as a path, not a display string: Windows joins with '\' while
+    /// the literal above is written with '/', and both spell the same path.
+    fn shim(dir: &str, tool: &str) -> PathBuf {
+        Path::new(dir).join(tool_file_names(tool)[0].clone())
     }
 
     fn paths_for(
@@ -914,11 +913,8 @@ mod tests {
         versions: &[String],
         env: &ShimEnv,
         npm_root: Option<&Path>,
-    ) -> Vec<String> {
+    ) -> Vec<PathBuf> {
         fallback_tool_paths(home, tool, versions, env, npm_root)
-            .iter()
-            .map(|path| path.to_string_lossy().into_owned())
-            .collect()
     }
 
     fn report(
@@ -974,7 +970,12 @@ mod tests {
             paths[0],
             shim("/home/u/.nvm/versions/node/v22.10.0/bin", "dsh")
         );
-        let index = |path: &str| paths.iter().position(|entry| entry == path).unwrap();
+        let index = |path: &Path| {
+            paths
+                .iter()
+                .position(|entry| entry.as_path() == path)
+                .unwrap()
+        };
         let newest = index(&shim("/home/u/.nvm/versions/node/v22.10.0/bin", "dsh"));
         let older = index(&shim("/home/u/.nvm/versions/node/v20.11.0/bin", "dsh"));
         let volta = index(&shim("/home/u/.volta/bin", "dsh"));
@@ -1009,18 +1010,16 @@ mod tests {
             &ShimEnv::default(),
             Some(root),
         );
-        assert!(paths.contains(&root.join(".bin").join("dsh").to_string_lossy().into_owned()));
+        assert!(paths.contains(&root.join(".bin").join("dsh")));
         assert!(paths.contains(
             &root
                 .join("@deepseek-ai")
                 .join("dsh")
                 .join("lib")
                 .join("bin.js")
-                .to_string_lossy()
-                .into_owned()
         ));
         #[cfg(unix)]
-        assert!(paths.contains(&"/usr/local/bin/dsh".to_string()));
+        assert!(paths.contains(&PathBuf::from("/usr/local/bin/dsh")));
         // pnpm has no npm package entrypoint candidate.
         let pnpm_paths = paths_for(
             Path::new("/home/u"),
@@ -1377,6 +1376,6 @@ mod tests {
         assert!(paths.contains(&shim("/home/u/.npm-global/bin", "dsh")));
         assert!(paths.contains(&shim("/home/u/.local/bin", "dsh")));
         let entry = Path::new("/home/u/.npm-global/lib/node_modules/@deepseek-ai/dsh/lib/bin.js");
-        assert!(paths.contains(&entry.to_string_lossy().into_owned()));
+        assert!(paths.contains(&entry.to_path_buf()));
     }
 }
