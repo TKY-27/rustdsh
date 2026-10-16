@@ -285,8 +285,8 @@ try{
  await projectPage.waitForFunction(()=>document.activeElement.id==='pending-heading');
  assert.equal(await projectPage.evaluate(()=>document.activeElement.id),'pending-heading','navigation command should focus its destination');
  passQaCase('desktop.command-palette','browser-results.json#qa_results.desktop.command-palette');
- await projectPage.locator('#question-Q1 textarea').fill('E2E saved answer');await projectPage.locator('#question-Q1').getByRole('button',{name:'回答を返す'}).click();
- await projectPage.locator('#questions').filter({hasText:'未回答の質問はありません'}).waitFor();await projectPage.locator('#answered').evaluate(e=>e.open=true);await projectPage.locator('#answers').filter({hasText:'E2E saved answer'}).waitFor();
+ await projectPage.locator('#question-Q1 textarea').fill('E2E saved answer');await projectPage.locator('#question-Q1').getByRole('button',{name:copy.answer}).click();
+ await projectPage.locator('#questions').filter({hasText:copy.empty}).waitFor();await projectPage.locator('#answered').evaluate(e=>e.open=true);await projectPage.locator('#answers').filter({hasText:'E2E saved answer'}).waitFor();
  await projectPage.waitForFunction(()=>document.querySelector('#update-summary-items')?.textContent.includes('質問への回答が保存'));
  await updateSummary.locator('#update-summary-mark-read').click();
  await projectPage.waitForFunction(()=>document.querySelector('#update-summary-status')?.textContent.includes('変更はありません'));
@@ -305,7 +305,7 @@ try{
  await projectPage.route('**/api/update/answer',async route=>{if(route.request().postDataJSON()?.id==='Q2')doubleSubmitRequests++;await route.continue();});
  beginQaCase('desktop.double-submit');
  const doubleSubmitResponse=projectPage.waitForResponse(response=>response.url().endsWith('/api/update/answer')&&response.request().postDataJSON()?.id==='Q2');
- await projectPage.locator('#question-Q2').getByRole('button',{name:'回答を返す'}).dblclick({delay:40});
+ await projectPage.locator('#question-Q2').getByRole('button',{name:copy.answer}).dblclick({delay:40});
  assert.equal((await doubleSubmitResponse).status(),200);
  await projectPage.unroute('**/api/update/answer');
  let stateAfter=await readState();
@@ -318,13 +318,13 @@ try{
  await projectPage.locator('#question-Q3 textarea').fill('Retry this draft after reconnecting');
  beginQaCase('desktop.offline-retry');
  await projectPage.context().setOffline(true);
- await projectPage.locator('#question-Q3').getByRole('button',{name:'回答を返す'}).click();
+ await projectPage.locator('#question-Q3').getByRole('button',{name:copy.answer}).click();
  await projectPage.waitForFunction(()=>Boolean(document.querySelector('#question-Q3 [role="alert"]')?.textContent));
  assert.equal(await projectPage.locator('#question-Q3 textarea').inputValue(),'Retry this draft after reconnecting');
  assert.equal((await readState()).questions.find(item=>item.id==='Q3').answer,null);
  await projectPage.context().setOffline(false);
  const retryResponse=projectPage.waitForResponse(response=>response.url().endsWith('/api/update/answer')&&response.request().postDataJSON()?.id==='Q3');
- await projectPage.locator('#question-Q3').getByRole('button',{name:'回答を返す'}).click();
+ await projectPage.locator('#question-Q3').getByRole('button',{name:copy.answer}).click();
  assert.equal((await retryResponse).status(),200);
  stateAfter=await readState();
  assert.equal(stateAfter.questions.find(item=>item.id==='Q3').answer,'Retry this draft after reconnecting');
@@ -340,7 +340,7 @@ try{
    const response=await route.fetch();serverCommitted=response.status()===200;await response.text();await route.abort('failed');
  });
  beginQaCase('desktop.lost-response');
- await projectPage.locator('#question-Q4').getByRole('button',{name:'回答を返す'}).click();
+ await projectPage.locator('#question-Q4').getByRole('button',{name:copy.answer}).click();
  await projectPage.locator('#answered').evaluate(e=>e.open=true);
  await projectPage.locator('#answers').filter({hasText:'Server committed before the response was lost'}).waitFor();
  await projectPage.unroute('**/api/update/answer');
