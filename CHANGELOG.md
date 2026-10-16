@@ -5,21 +5,57 @@ Format follows Keep a Changelog, versioning follows Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-17
+
+### Security
+
+- `rdsh guard` normalizes a command string before deny matching: quoting
+  (`r"m" -rf`), same-line variable assembly (`A=rm; $A -rf`), command
+  basenames (`/bin/rm -rf /`), nested quoted commands (`sh -c "rm -rf /"`) and
+  path traversal or symlink targets are folded into bounded candidate texts, so
+  the structural patterns can no longer be displaced by obfuscation (the
+  #29/#32/#33 semantics are unchanged, and block still exits 2 with the same
+  stderr) (#708).
+
+### Added
+
+- `scripts/benchmark-node-vs-rust.py` and its
+  `scripts/benchmark-node-reference.mjs` reference measure the PreToolUse hook
+  (`rdsh guard`), `rdsh tokens` and `rdsh search` against equivalent Node.js
+  work on one generated dataset, with output-equality oracles, a JSON report and
+  every raw sample. README.md, README.ja.md and docs/BENCHMARKS.md name the exact
+  command each number measures, so the ~0.90 ms headline is stated as
+  `--version` process launch only and the hook is reported at ~2.0 ms per call
+  including process launch (#706).
+
+- `rdsh doctor` finds the original `dsh` through the nvm, volta, fnm, pnpm and
+  `npm -g` directories when a non-interactive shell or a service unit never ran
+  their initialization, while PATH and the local backups keep their resolution
+  order, and Node discovery accepts the nvm layout
+  (`~/.nvm/versions/node/vX.Y.Z`). It prints a Node/npm/pnpm environment block
+  (en/ja/zh, and under `doctor --json` as `environment`) and reports the pnpm
+  build-script policy with the approval command that matches the installed pnpm
+  release. Warnings never change the exit status, which still depends on the
+  original `dsh` alone (#707).
+
 ### Changed
 
 - `rdsh serve` states its role in the header as the Audit & Performance Monitor
   for DeepSeek Harness in English, Chinese and Japanese, renders the build
   version and a role overview before the token is entered, and fills the doctor
   diagnostics, sessions and skills cards in parallel once connected, so the first
-  paint no longer reads as an empty chat page.
+  paint no longer reads as an empty chat page (#705).
 
-### Security
+- Former-owner `sahenjp/rustdsh` issue and pull-request links in
+  `dashboard/README.md`, `docs/evidence/*.md` and the workflow-board READMEs
+  point at the canonical `jimoto-no-llm/rustdsh` repository, because the old
+  `issues/N` paths answer 404 instead of redirecting. The docs link-check remap
+  stays so a pull request opened before the unification still resolves (#704).
 
-- `rdsh guard` normalizes a command string before deny matching: quoting
-  (`r"m" -rf`), same-line variable assembly (`A=rm; $A -rf`) and path
-  traversal or symlink targets are folded into bounded candidate texts, so the
-  structural patterns can no longer be displaced by obfuscation (#29/#32/#33
-  semantics are unchanged, and block still exits 2 with the same stderr).
+- `release-digests.tsv` and `release-digests-windows.tsv` pin the published
+  v0.5.2 archives and move the `latest` row to v0.5.2, so `install.sh
+  --from-release` and the automatic updater install the release GitHub marks
+  Latest (#702).
 
 ## [0.5.2] - 2026-10-16
 
