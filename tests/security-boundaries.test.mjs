@@ -8,7 +8,7 @@ import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 
 const bin = path.resolve(process.env.BIN || 'target/debug/rdsh');
-const securityPreload = path.resolve('security/preload.mjs');
+const securityPreload = pathToFileURL(path.resolve('security/preload.mjs')).href;
 function isolated(t) {
   const dir = mkdtempSync(path.join(tmpdir(), 'rdsh-security-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
@@ -42,6 +42,23 @@ function runPreload(runtime, adapter, extra = {}) {
   ], { env, encoding: 'utf8' });
 }
 
+test('audited preload accepts registered versions and the legacy unset rc2 adapter', t => {
+  const runtimes = auditedRuntimeEnvironment();
+  if (Object.values(runtimes).some(value => !value)) {
+    t.skip('official audited runtime paths are supplied by the Linux security matrix');
+    return;
+  }
+  for (const [runtime, adapter] of [
+    [runtimes.rc2, undefined],
+    [runtimes.rc2, 'dsh-tools-0.2.0-rc.2'],
+    [runtimes.alpha1, 'dsh-tools-0.2.1-alpha.1'],
+    [runtimes.alpha3, 'dsh-tools-0.2.1-alpha.3'],
+  ]) {
+    const result = runPreload(runtime, adapter, { RDSH_LANG: 'en' });
+    assert.equal(result.status, 0, result.stderr);
+  }
+});
+
 test('audited preload rejects unknown, modified and cross-version runtimes with localized codes', t => {
   const runtimes = auditedRuntimeEnvironment();
   if (Object.values(runtimes).some(value => !value)) {
@@ -62,9 +79,11 @@ test('audited preload rejects unknown, modified and cross-version runtimes with 
     assert.match(result.stderr, new RegExp(`RDSH_SECURITY\\[${code}\\]`));
     assert.match(result.stderr, new RegExp(text));
   }
-  const unknown = runPreload(runtimes.rc2, 'dsh-tools-future', { RDSH_LANG: 'en' });
-  assert.notEqual(unknown.status, 0);
-  assert.match(unknown.stderr, /RDSH_SECURITY\[UNKNOWN_ADAPTER\]/);
+  for (const adapter of ['', 'dsh-tools-future']) {
+    const unknown = runPreload(runtimes.rc2, adapter, { RDSH_LANG: 'en' });
+    assert.notEqual(unknown.status, 0);
+    assert.match(unknown.stderr, /RDSH_SECURITY\[UNKNOWN_ADAPTER\]/);
+  }
   const crossVersion = runPreload(runtimes.alpha1, 'dsh-tools-0.2.0-rc.2', { RDSH_LANG: 'en' });
   assert.notEqual(crossVersion.status, 0);
   assert.match(crossVersion.stderr, /RDSH_SECURITY\[UNSUPPORTED_RUNTIME\]/);
