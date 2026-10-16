@@ -570,6 +570,13 @@ enum SubagentsAction {
         #[arg(long = "json")]
         json: bool,
     },
+    /// Print the limits a plan request inherits when it omits limits
+    /// (the subagents section of rdsh.json; docs/SUBAGENT-PLANNING.md)
+    Defaults {
+        /// JSON output (the default; accepted for script compatibility)
+        #[arg(long = "json")]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -1317,6 +1324,7 @@ fn main() {
             SubagentsAction::Plan { input_file, .. } => {
                 subagent_plan::cmd_plan(&input_file, locale)
             }
+            SubagentsAction::Defaults { .. } => subagent_plan::cmd_defaults(locale),
         },
         Some(Commands::CostLedger { action, input_file }) => {
             cost_ledger::cmd_cost_ledger(&action, &input_file, locale)
@@ -2069,6 +2077,10 @@ fn localized_command_about(name: &str, locale: locale::Locale) -> Option<&'stati
         "plan" => (
             "读取请求并生成分派计划，不启动代理",
             "要求を読み取り割り当て計画を作成（エージェントは起動しません）",
+        ),
+        "defaults" => (
+            "输出分派计划继承的默认上限",
+            "割り当て計画が継承する既定の上限を出力",
         ),
         "budget-admission" => (
             "应用、验证预算准入记录或输出公开视图",
