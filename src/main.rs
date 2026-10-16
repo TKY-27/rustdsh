@@ -1816,8 +1816,8 @@ fn worker_scope_help_requested() -> bool {
     }
 }
 
-/// Recovery and pure JSON commands resolve language from flags or the process
-/// environment without opening an unrelated settings file.
+/// Recovery, hook injection and pure JSON commands resolve language from flags
+/// or the process environment without opening an unrelated settings file.
 fn settings_independent_invocation() -> bool {
     matches!(
         Cli::try_parse_from(std::env::args_os()),
@@ -1825,6 +1825,8 @@ fn settings_independent_invocation() -> bool {
             command: Some(
                 Commands::Settings {
                     action: SettingsAction::Init { force: true }
+                } | Commands::Context {
+                    action: ContextAction::Inject { .. }
                 } | Commands::TaskOutcomes { .. }
                     | Commands::Subagents { .. }
                     | Commands::BudgetAdmission { .. }
