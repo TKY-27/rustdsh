@@ -61,6 +61,7 @@ mod deps;
 mod desktop;
 mod distro;
 mod dsh_args;
+mod dsh_env;
 mod executable;
 mod file_lock;
 mod file_security;
@@ -2693,6 +2694,7 @@ fn doctor_json() -> anyhow::Result<()> {
         },
         "path_shadowed": shadowed,
         "warnings": warnings,
+        "environment": dsh_env::json(&dsh_env::diagnose()),
     });
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
@@ -2730,6 +2732,12 @@ fn doctor(locale: locale::Locale) -> anyhow::Result<()> {
     ));
     let home = crate::inspect::dsh_home();
     say(format!("[rdsh] DSH_HOME: {home}"));
+    // Node.js / npm / pnpm as this host resolves them, plus the pnpm
+    // build-script policy (ERR_PNPM_IGNORED_BUILDS). Advisory only: doctor's
+    // exit status is decided by the original dsh check at the end.
+    for line in dsh_env::doctor_lines(&dsh_env::diagnose(), locale) {
+        say(line);
+    }
     match profile_count(&home) {
         Ok(count) => say(format!(
             "[rdsh] {}: {} {}",
@@ -2868,9 +2876,8 @@ fn doctor(locale: locale::Locale) -> anyhow::Result<()> {
 
 /// Best-effort, bounded `dsh --version` readout. Only the owned child is killed.
 fn original_version(orig: &str) -> Option<String> {
-    use std::io::Read;
-    use std::process::{Command, Stdio};
-    use std::time::{Duration, Instant};
+    use std::process::Command;
+    use std::time::Duration;
     if orig.is_empty() {
         return None;
     }
@@ -2881,45 +2888,10 @@ fn original_version(orig: &str) -> Option<String> {
     } else {
         Command::new(orig)
     };
-    let mut child = command
-        .arg("--version")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
-    let stdout = child.stdout.take()?;
-    let (sender, receiver) = std::sync::mpsc::channel();
-    // Bound memory even if a launcher prints endlessly. A descendant retaining
-    // the pipe must not extend the command deadline, so do not join this reader.
-    std::thread::spawn(move || {
-        let mut bytes = Vec::new();
-        let result = stdout.take(4096).read_to_end(&mut bytes).map(|_| bytes);
-        let _ = sender.send(result);
-    });
-    let deadline = Instant::now() + Duration::from_secs(2);
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                if !status.success() {
-                    return None;
-                }
-                break;
-            }
-            Ok(None) if Instant::now() < deadline => {
-                std::thread::sleep(Duration::from_millis(10));
-            }
-            _ => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return None;
-            }
-        }
-    }
-    let bytes = receiver
-        .recv_timeout(deadline.saturating_duration_since(Instant::now()))
-        .ok()?
-        .ok()?;
+    command.arg("--version");
+    // The deadline, the bounded read and the never-joined reader live in
+    // dsh_env, shared with the Node/npm/pnpm probes.
+    let bytes = dsh_env::run_bounded_capture(command, 4096, Duration::from_secs(2))?;
     String::from_utf8_lossy(&bytes)
         .lines()
         .next()
