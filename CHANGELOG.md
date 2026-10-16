@@ -5,6 +5,16 @@ Format follows Keep a Changelog, versioning follows Semantic Versioning.
 
 ## [Unreleased]
 
+### Added
+
+- `plugins/install.sh` now separates **essential** plugins (installed on every
+  run and printed first) from **recommended** ones, and accepts
+  `--recommended=all|none|list|id,...` (or the `RECOMMENDED` environment
+  variable) so non-interactive runs select a set without a prompt. With a TTY it
+  lists the recommended plugins and asks before adding them; without one the
+  historical per-profile defaults are unchanged. `plugins/recommended.md`,
+  README.md, README.ja.md and docs/DESKTOP-INTEGRATION.md document the tiers.
+
 ## [0.6.0] - 2026-10-17
 
 ### Security
