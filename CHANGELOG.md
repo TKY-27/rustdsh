@@ -13,7 +13,7 @@ Format follows Keep a Changelog, versioning follows Semantic Versioning.
   update. `RDSH_SYNC_SELF_UPDATE=0` turns the step off, a copy inside a git
   checkout is never touched, and an origin that is unreachable or returns
   something other than a shell script keeps the current copy; see
-  [docs/AUTO-UPDATE.md](docs/AUTO-UPDATE.md).
+  [docs/AUTO-UPDATE.md](docs/AUTO-UPDATE.md) (#697).
 
 ## [0.5.1] - 2026-10-16
 
