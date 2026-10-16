@@ -658,25 +658,34 @@ pub(crate) fn diagnose() -> EnvReport {
         BuildScripts::Preapproved
     } else {
         let files = build_policy_files();
-        let mut state = BuildScripts::Blocked;
+        // Report the file that decided, so "allowed by the global config" always
+        // names the file a reader can open. Without a decision, report the first
+        // policy file that exists.
+        let mut first_readable = None;
+        let mut approved = None;
         for path in &files {
             let Some(text) = read_small_text(path) else {
                 continue;
             };
-            // Report the first policy file that exists: that is the one the
-            // reader would open when the install stops.
-            build_config.get_or_insert_with(|| path.to_string_lossy().into_owned());
+            if first_readable.is_none() {
+                first_readable = Some(path.to_string_lossy().into_owned());
+            }
             if build_approval_in(&text) {
-                state = BuildScripts::Preapproved;
+                approved = Some(path.to_string_lossy().into_owned());
                 break;
             }
         }
-        if build_config.is_none() {
-            build_config = files
+        let was_approved = approved.is_some();
+        build_config = approved.or(first_readable).or_else(|| {
+            files
                 .first()
-                .map(|path| path.to_string_lossy().into_owned());
+                .map(|path| path.to_string_lossy().into_owned())
+        });
+        if was_approved {
+            BuildScripts::Preapproved
+        } else {
+            BuildScripts::Blocked
         }
-        state
     };
 
     let mut fixes: Vec<String> = Vec::new();
