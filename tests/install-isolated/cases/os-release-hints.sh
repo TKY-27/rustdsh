@@ -13,9 +13,12 @@ OS_RELEASE_EOF
 
 install_rdsh --from-release >"$HOME/install.log" 2>&1
 cat "$HOME/install.log"
-grep -q 'optional tools missing on this rpm-based host' "$HOME/install.log"
-grep -q 'sudo dnf install -y zstd bubblewrap' "$HOME/install.log"
-grep -q 'fedora ships glibc' "$HOME/install.log"
+# The ^ anchor keeps these on install.sh's own lines; rdsh doctor prints the
+# same hint with an [rdsh] prefix, which must not satisfy the assertions.
+grep -q '^note: optional tools missing on this rpm-based host' "$HOME/install.log"
+grep -A1 '^note: optional tools missing on this rpm-based host' "$HOME/install.log" \
+  | grep -q 'sudo dnf install -y zstd bubblewrap'
+grep -q '^note: fedora ships glibc' "$HOME/install.log"
 grep -q 'no musl package needed' "$HOME/install.log"
 expect_version
 echo "CASE OK: os-release-hints"
