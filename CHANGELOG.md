@@ -5,6 +5,21 @@ Format follows Keep a Changelog, versioning follows Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-16
+
+### Security
+
+- The unresolved Dependabot and Code scanning alerts are cleared in one change:
+  the headless runtime and the MCP plugins pin `@modelcontextprotocol/client`
+  to 2.3.1 and `fflate` to 0.8.3, and every npm manifest is registered with
+  Dependabot (#564, #647, #663).
+
+- The audited-runtime guard reports `RDSH_SECURITY[UNSUPPORTED_RUNTIME]`,
+  `[RUNTIME_CHANGED]` and `[RUNTIME_RESOLUTION_MISMATCH]` again: the preload
+  compares each adapter digest, honours `RDSH_TOOL_ADAPTER`, detects a
+  resolution mismatch in its `resolve` hook and refuses to run the nested body
+  when the runtime is not the audited one (#676).
+
 ### Added
 
 - 完了した英語・中国語回答に「日本語訳を表示」ボタンを追加。現在のモデルへ
@@ -28,9 +43,42 @@ Format follows Keep a Changelog, versioning follows Semantic Versioning.
   installed by `./plugins/install.sh` and `rdsh features off answer_guard`
   disables it. See [README](plugins/rdsh-answer-guard/README.md).
 
+- rdsh-owned output speaks English, Simplified Chinese and Japanese across the
+  CLI, the Web UI, the bundled settings plugin and the standalone dashboard:
+  help, diagnostics, interactive setup prompts and policy validation follow
+  `--language`, `RDSH_LANG`, `general.language`, then the OS locale,
+  defaulting to English. Delegated `dsh` arguments, model output, JSON fields,
+  files and protocol identifiers are never translated (#617, #675, #678).
+
+- The parallel dashboard feature work landed in one integration (#652):
+  history survives a project move, per-device permissions, a versioned human
+  decision log, versioned project profiles, provider quota and retry status,
+  conservative run-stall diagnostics, a cross-project overview, a causal
+  timeline, prioritized notifications, project-scoped deep links, reusable
+  workflow recipes, artifact preview, secret-safe replay manifests, safe
+  project state migrations and CPU, RAM and port reservations are all in
+  `dashboard/`.
+
 ### Fixed
 
 - 更新通知を dismiss したら、その更新については再表示しない（新しい更新のときだけ通知する）。
+
+- Windows debug builds no longer overflow the main-thread stack while clap
+  builds its parser: `build.rs` reserves the same 8 MiB as Unix
+  (`/STACK:8388608` for MSVC, `-Wl,--stack,8388608` for GNU) (#655, #656).
+
+- The settings plugin truncates strings by Unicode scalar value instead of
+  UTF-16 code unit, so a GUI save can no longer write an isolated surrogate
+  into `rdsh.json` and break every CLI command; its limits now match the Rust
+  side (`default_profile` 200, `searxng_url` 2000) (#636, #637).
+
+- `rdsh logs` shows its own "no logs" text again instead of the generic
+  directory message the multilingual change introduced (#670), and
+  `rdsh desktop install --plugins-dir` absolutizes a relative directory before
+  building the plugin specs (#669).
+
+- A failed update keeps its reason on stderr (#651), and the rpm family check
+  matches quoted IDs and the real Oracle ID (#662).
 
 ### Changed
 
