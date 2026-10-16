@@ -20,7 +20,7 @@ It ports frequently used CLI operations (token calculation, code search, session
 
 ## Why rdsh?
 
-- ⚡ **Sub-millisecond startup & low memory**: `--version` launches in ~0.90 ms with ~2.9 MB peak memory, compared to ~88 ms and ~66 MB for Node.js-based `dsh`.
+- ⚡ **Sub-millisecond process launch**: `rdsh --version` starts in ~0.90 ms with ~2.9 MB peak RSS, versus ~88 ms and ~66 MB for Node.js-based `dsh --version`. This is process launch only: a booted agent profile still runs upstream Node.js, so conversation startup and session memory match upstream. See [Benchmarks](#benchmarks).
 - 🔄 **100% Drop-in Compatible**: Subcommands that are not rdsh-native are passed straight to upstream `dsh`. Existing scripts and workflows keep running unchanged.
 - 🛠 **Fast Native Utilities**: Estimate tokens, search code, list sessions, and run health diagnostics (`rdsh doctor`) instantly without starting Node.js.
 - 🛡 **Safe by Default**: Read-only commands never modify source files, credentials are never automatically synced or exported, and `rdsh_inspect` can be confined to explicitly shared files on Linux.
@@ -618,19 +618,42 @@ when you want those.
 
 ## Benchmarks
 
-Measurements conducted on Linux x86_64:
+Process-level measurements on Linux x86_64. Every row names the exact command it
+measures, and none of them describe an agent session: when rdsh boots a profile it
+`exec`s the same upstream Node.js `dsh`, so conversation startup, interactive
+latency and session memory are those of upstream.
 
-| Benchmark | rdsh | Upstream dsh / Baseline | Improvement |
+Only the `--version` rows compare rdsh with upstream `dsh`. The hook, `tokens`
+and `search` rows compare against an equivalent Node.js implementation of the
+same work; upstream `dsh` exposes no `tokens`/`search` subcommand, so no
+upstream ratio is claimed for them. They were measured on one Linux x86_64 host
+by `scripts/benchmark-node-vs-rust.py`.
+
+| What is measured | rdsh | Baseline | Factor |
 | --- | --- | --- | --- |
-| `--version` startup | **~0.90 ms** | ~88 ms | **~98x faster** |
-| `--version` peak RSS | **~2.9 MB** | ~66 MB | **~1/23 memory** |
-| Hook-equivalent memory | **~2.7 MB** | ~45 MB (Node equivalent) | **~1/16 memory** |
-| Code search (`search`) | **~17 ms** | ~41 ms | **~2.4x faster** |
-| Token estimate (`tokens`) | **~12 ms** | ~35 ms | **~2.9x faster** |
-| Session list (`sessions --tokens`) | **~0.41 s** | ~1.65 s | **~4.0x faster** |
-| Binary size | **~1.97 MB** (single binary) | ~508 MB (Node tree) | **Ultra compact** |
+| `rdsh --version` process launch | **~0.90 ms** | ~88 ms, upstream `dsh --version` | **~98x faster** |
+| `rdsh --version` peak RSS | **~2.9 MB** | ~66 MB, upstream `dsh --version` | **~1/23 memory** |
+| PreToolUse hook `rdsh guard`, per tool call (launch included) | **~2.0 ms** | ~80–100 ms, equivalent Node.js judge | **~40–50x faster** |
+| PreToolUse hook over 200 tool calls (cumulative, 10% denied) | **~0.4–0.6 s** | ~16–24 s, equivalent Node.js judge | **~42x faster** |
+| PreToolUse hook peak RSS | **~6.0 MB** | ~49 MB, equivalent Node.js judge | **~1/8 memory** |
+| `rdsh tokens` (9.6 MB ASCII text) | **~8 ms** | ~175–195 ms, Node.js reference | **~22x faster** |
+| `rdsh search` (300 files, 600k lines) | **~10–25 ms** | ~125–230 ms, Node.js reference | **~9–12x faster** |
+| `sessions --tokens` (20 sessions) | **~0.41 s** | ~1.65 s, previous rdsh build (historical) | **~4.0x faster** |
+| Distribution size | **one ~1.8–2.3 MB binary** (per platform) | ~508 MB Node tree | **ultra compact** |
 
-*Reproduce with `rdsh bench --n 5`. See [docs/BENCHMARKS.md](docs/BENCHMARKS.md) for detailed test setups and measurements.*
+The `--version`, `sessions` and size rows are the historical headline numbers
+recorded in [docs/BENCHMARKS.md](docs/BENCHMARKS.md); their absolute values are
+host-dependent. The hook, `tokens` and `search` numbers are one Linux x86_64
+host at `n=15` with process launch included; regenerate them with:
+
+```sh
+cargo build --release
+python3 scripts/benchmark-node-vs-rust.py --bin ./target/release/rdsh \
+  --mode all --n 15 --calls 200 --output /tmp/rdsh-node-vs-rust.json
+```
+
+For startup, run `rdsh bench --n 5`. See
+[docs/BENCHMARKS.md](docs/BENCHMARKS.md) for every test setup and raw sample.
 
 ## Safety Design
 
