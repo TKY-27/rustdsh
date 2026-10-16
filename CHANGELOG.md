@@ -5,6 +5,15 @@ Format follows Keep a Changelog, versioning follows Semantic Versioning.
 
 ## [Unreleased]
 
+### Added
+
+- The daily auto-update run refreshes the provider model catalogs: `sync-dsh.sh`
+  ends with `rdsh models sync --auto`, which appends the models a provider
+  advertises that the profiles lack and reports a catalog it could not reach
+  without failing the run. `rdsh features off models_sync` (the default is on)
+  or `RDSH_MODELS_SYNC=0` for one run turns the step off; see
+  [docs/AUTO-UPDATE.md](docs/AUTO-UPDATE.md).
+
 ## [0.5.0] - 2026-10-16
 
 ### Security
