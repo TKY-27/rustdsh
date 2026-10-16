@@ -13,7 +13,7 @@ window.__ModuleLoader__.load({
       const final = data?.finalNode;
       if (data?.status !== 'settled' || !final || final.messageId !== messageId || final.interrupted || !Array.isArray(final.blocks) || final.blocks.some((b) => !b || !['text', 'reasoning'].includes(b.kind))) return false;
       let kana = 0, lexical = 0, fence;
-      for (const line of final.blocks.filter((b) => b.kind === 'text').map((b) => b.text).join('\n').split('\n')) {
+      for (const line of final.blocks.filter((b) => b.kind === 'text').map((b) => b.text).join('\n').split(/\r?\n/u)) {
         const content = line.replace(/^(?: {0,3}>[ \t]?)+/u, '');
         const open = content.match(/^ {0,3}(`{3,}|~{3,})/u)?.[1];
         if (!fence && open) { fence = open; continue; }

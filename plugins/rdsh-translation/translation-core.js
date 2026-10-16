@@ -36,7 +36,7 @@ export function stripFencedCode(value) {
       else if (line && !/^(?: {4}|\t)/u.test(content)) visible.push(content);
       continue;
     }
-    const closing = content.match(/^ {0,3}(`{3,}|~{3,})[ \t]*(?:\n|$)/u)?.[1];
+    const closing = content.match(/^ {0,3}(`{3,}|~{3,})[ \t]*(?:\r?\n|$)/u)?.[1];
     if (closing && closing[0] === openFence.char && closing.length >= openFence.length) openFence = undefined;
   }
   return visible.join('');
@@ -169,7 +169,7 @@ export function protectLiterals(input, nonce = randomBytes(8).toString('hex')) {
   const source = String(input ?? '');
   const spans = fencedAndInlineCodeSpans(source);
   const patterns = [
-    /https?:\/\/[^\s<>]+|(?<![\w./\\])--?[A-Za-z][\w-]*(?![\w./\\])|\b[A-Za-z_][A-Za-z0-9_]*(?:_[A-Za-z0-9_]+|[A-Z][A-Za-z0-9_]*)+\b/gu,
+    /https?:\/\/[^\s<>]+|(?<![\w./\\])--?[A-Za-z][\w-]*(?![\w./\\])|\b[A-Za-z_](?=[A-Za-z0-9_]*[A-Z]|[A-Za-z0-9_]*_[A-Za-z0-9_])[A-Za-z0-9_]*\b/gu,
     /\b[A-Za-z]:[\\/][^\s<>"']+/gu,
     /\\\\[\p{L}\p{N}\p{M}\p{S}_.$-]+\\[\p{L}\p{N}\p{M}\p{S}_.$-]+(?:\\[\p{L}\p{N}\p{M}\p{S}_.$-]+)*/gu,
     /(?<![\p{L}\p{N}\p{M}_.])\/(?:[\p{L}\p{N}\p{M}\p{S}_.$-]+\/)*[\p{L}\p{N}\p{M}\p{S}_.$-]+/gu,
