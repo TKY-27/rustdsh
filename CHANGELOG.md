@@ -5,6 +5,16 @@ Format follows Keep a Changelog, versioning follows Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-10-16
+
+### Fixed
+
+- The dashboard artifact preview truncates text on a UTF-8 character boundary
+  instead of splitting a multi-byte sequence, refuses a non-regular file with
+  415 instead of opening it, redacts credentials in a URL without the previous
+  regular expression, and discards a preview that a newer request replaced. A
+  dashboard test and the browser E2E check cover the bounds (#698).
+
 ### Changed
 
 - `sync-dsh.sh` replaces its own installed copy with the current script from
@@ -14,6 +24,11 @@ Format follows Keep a Changelog, versioning follows Semantic Versioning.
   checkout is never touched, and an origin that is unreachable or returns
   something other than a shell script keeps the current copy; see
   [docs/AUTO-UPDATE.md](docs/AUTO-UPDATE.md) (#697).
+
+- `release-digests.tsv` and `release-digests-windows.tsv` pin the published
+  v0.5.1 archives and move the `latest` row to v0.5.1, so `install.sh
+  --from-release` and the automatic updater install the release GitHub marks
+  Latest (#695).
 
 ## [0.5.1] - 2026-10-16
 
