@@ -5,6 +5,17 @@ Format follows Keep a Changelog, versioning follows Semantic Versioning.
 
 ## [Unreleased]
 
+### Added
+
+- `plugins/rdsh-translation` は、完了した英語・中国語回答のアクション行に
+  「日本語訳で置き換える」を追加しました（#448 Step 2）。表示専用の「日本語訳を表示」は
+  そのままに、明示操作のときだけ`/ja-replace`が独立した翻訳を1回送り、
+  `surfaceOp: { op: 'replace', startSeq, endSeq }`と`source.kind: 'rdsh-translation'`で
+  対象回答のsurfaceノードを訳文に置き換えます。新しいターンも追指示のuserメッセージも追加せず、
+  元の回答は追記専用ログと人間向けtranscriptに残ります。busy・対象なし・保護トークン欠落・
+  session拒否・置換済みは追記せずエラーを表示します。DSHが置換をモデル可視surfaceだけに
+  適用するため画面上の回答表示は差し替わりません（訳文はダイアログで確認できます）。
+
 ## [0.6.0] - 2026-10-17
 
 ### Security
