@@ -13,6 +13,7 @@ const {chromium}=await import(process.env.RDSH_PLAYWRIGHT_MODULE || 'playwright'
 const binary=path.resolve(repo,process.env.RDSH_E2E_BIN || path.join(repo,'target', 'debug', process.platform==='win32'?'rdsh.exe':'rdsh'));
 const output=path.resolve(process.env.RDSH_E2E_OUTPUT || path.join(repo,'target/e2e'));
 const language=process.env.RDSH_E2E_LANGUAGE || 'ja';
+const projectReadyPattern = /project(?:: |を起動: |：)(http:\/\/127\.0\.0\.1:\d+\/)/;
 const copies={
  ja:{connect:'接続',enabled:'有効',estimate:'推定する',prune:'prune実行',nativeTitle:'rdsh ダッシュボード',projectTitle:'プロジェクトダッシュボード',answer:'回答を返す',empty:'未回答の質問はありません',tokens:'トークン',projects:'プロジェクト'},
  en:{connect:'Connect',enabled:'on',estimate:'Estimate',prune:'Run prune',nativeTitle:'rdsh dashboard',projectTitle:'PROJECT DASHBOARD',answer:'Submit answer',empty:'No unanswered questions',tokens:'tokens',projects:'projects'},
@@ -77,7 +78,7 @@ try{
  const {Client}=await import(pathToFileURL(path.join(repo,'dashboard/node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js')));
  const {StreamableHTTPClientTransport}=await import(pathToFileURL(path.join(repo,'dashboard/node_modules/@modelcontextprotocol/sdk/dist/esm/client/streamableHttp.js')));
  const project=path.join(root,'alpha');await mkdir(project);const identityAlpha=await identity(project);
- const dashboard=await launch(process.execPath,[path.join(repo,'dashboard/cli.mjs'),'project','--project',project,'--port',await freePort(),'--no-tailscale'],/project: (http:\/\/127\.0\.0\.1:\d+\/)/);
+ const dashboard=await launch(process.execPath,[path.join(repo,'dashboard/cli.mjs'),'project','--project',project,'--port',await freePort(),'--no-tailscale'],projectReadyPattern);
  const runtime=await readLocalRuntime(identityAlpha.directory);
  const client=new Client({name:'browser-e2e',version:'1.0.0'},{capabilities:{}});
  await client.connect(new StreamableHTTPClientTransport(new URL(runtime.local_url+'mcp'),{requestInit:{headers:{authorization:`Bearer ${runtime.mcp_token}`}}}));
@@ -351,7 +352,7 @@ try{
  const alphaState=await readFile(path.join(identityAlpha.directory,'state.json'),'utf8');assert.ok(alphaState.includes('E2E saved answer'));
  await screenshot(projectPage,'project-desktop');await projectPage.setViewportSize(report.viewports[1]);await check(projectPage,/dashboard/i);passQaCase('mobile.viewport','project-mobile.png');await screenshot(projectPage,'project-mobile');
  await projectPage.close();await client.close();await stop(dashboard.child);
- const restarted=await launch(process.execPath,[path.join(repo,'dashboard/cli.mjs'),'project','--project',project,'--port',await freePort(),'--no-tailscale'],/project: (http:\/\/127\.0\.0\.1:\d+\/)/);
+ const restarted=await launch(process.execPath,[path.join(repo,'dashboard/cli.mjs'),'project','--project',project,'--port',await freePort(),'--no-tailscale'],projectReadyPattern);
  const fresh=await readLocalRuntime(identityAlpha.directory);
  assert.notEqual(fresh.browser_url,runtime.browser_url);
  const staleToken=new URL(runtime.browser_url).hash.slice('#key='.length);assert.equal((await fetch(fresh.local_url+'api/state',{headers:{'x-rdsh-browser-token':staleToken}})).status,401);
