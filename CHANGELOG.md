@@ -16,6 +16,16 @@ Format follows Keep a Changelog, versioning follows Semantic Versioning.
   session拒否・置換済みは追記せずエラーを表示します。DSHが置換をモデル可視surfaceだけに
   適用するため画面上の回答表示は差し替わりません（訳文はダイアログで確認できます）。
 
+- `rdsh subagents defaults [--json]` prints the limits `rdsh subagents plan`
+  applies to a request that omits `limits`, together with the `source`
+  (`settings` or `builtin`). The planner's built-in numbers are now overridable
+  once through the new `subagents` section of `rdsh.json`
+  (`max_parallel`, `max_items_per_agent`, `max_weight_per_agent`,
+  `budget_units`); a request key still wins, and a missing or unreadable
+  settings document falls back to the built-in defaults so an unrelated corrupt
+  file cannot block a plan. The exploration subagent plugin also exposes its
+  effective admission policy as `createOptimizer(...).limits`.
+
 - `plugins/install.sh` now separates **essential** plugins (installed on every
   run and printed first) from **recommended** ones, and accepts
   `--recommended=all|none|list|id,...` (or the `RECOMMENDED` environment
@@ -34,6 +44,18 @@ Format follows Keep a Changelog, versioning follows Semantic Versioning.
   packages, a `PATH` hint and a note on which glibc or static musl archive was
   chosen, so no musl package is implied. `tests/install-isolated.sh` covers the
   rpm branch with a faked `ID=fedora` on a Debian base.
+
+### Changed
+
+- The bounded-exploration subagent plugin admits 3 concurrent runs by default
+  instead of 2, matching the planner's own default wave width (`max_parallel: 3`
+  in `src/subagent_plan.rs`), so one default `rdsh subagents plan` wave runs
+  without queueing. Its queue wait default rises from 10 s to 120 s and the
+  accepted ceiling from 60 s to 600 s: a 10 s deadline expired before a single
+  scout run could finish, which made the documented 8-deep queue unreachable and
+  turned queued work into `RDSH_SUBAGENT_WAIT_TIMEOUT`. The bundled
+  `cordis.patch.yml` pins the same values and a test now fails if the two
+  drift.
 
 ## [0.6.0] - 2026-10-17
 

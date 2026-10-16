@@ -70,7 +70,7 @@ rdsh context status   # 有効化後に記憶の状態を見る
 
 `general.language` は `auto`、`en`、`zh-CN`、`ja` のいずれかです。CLI と独立ダッシュボードの `auto` は最初の空でないロケール環境変数を使い、未設定・未対応なら英語になります。DSH 内の rdsh 設定プラグインでは `auto` がブラウザーの言語に従います。優先順は CLI の `--language`、`RDSH_LANG`、この設定、`LC_ALL`、`LC_MESSAGES`、`LANG` です。`general.language` を明示して不正な値にした設定ファイルは、通常の設定破損と同じく停止して保持します。
 
-`settings init --force` は破損した設定の復旧用です。設定を使わない `task-outcomes` と `subagents plan` も設定ファイルを読み込まず、明示した `--language`、`RDSH_LANG`、OS のロケール環境変数の順に言語を解決します。これらの JSON コマンドは設定ファイルを変更しません。他のコマンドは設定が破損していると停止し、元のファイルを保持します。
+`settings init --force` は破損した設定の復旧用です。`task-outcomes` と `subagents plan` は、明示した `--language`、`RDSH_LANG`、OS のロケール環境変数の順に言語を解決します。`subagents plan` はこれに加えて `subagents` 節だけを読み、設定ファイルが欠落・破損しているときは組み込みの既定値で計画を続けるため、無関係な設定破損で計画が止まることはありません（どちらを使ったかは `rdsh subagents defaults` の `source` で確認できます）。これらの JSON コマンドは設定ファイルを変更しません。他のコマンドは設定が破損していると停止し、元のファイルを保持します。
 
 ローカル状態画面とWeb検索のオン／オフは `setup --web` のExtras、または
 `rdsh settings set extras.enable serve,search-web` で変更します。
@@ -174,3 +174,24 @@ rdsh deps impact src/core.rs --depth 3 --json
 ```
 
 索引は `$DSH_HOME/rdsh-index/<root-key>.json`。size+mtime が同じファイルは再解析しません。
+
+## サブエージェント計画の既定値（subagents）
+
+`rdsh subagents plan` の要求が `limits` を省略したときの既定値です。要求に
+書かれた値が常に優先し、`null` は既定値のままになります。
+
+| キー | 組み込み既定 | 範囲 |
+| --- | --- | --- |
+| `subagents.max_parallel` | 3 | 1-16 |
+| `subagents.max_items_per_agent` | 3 | 1-20 |
+| `subagents.max_weight_per_agent` | 9 | 1-128 |
+| `subagents.budget_units` | 0（警告なし） | 0-100000 |
+
+```sh
+rdsh settings set subagents.max_parallel 2
+rdsh subagents defaults --json
+```
+
+`rdsh subagents defaults` は有効な既定値と `source`（`settings` または
+`builtin`）を JSON で出力します。範囲外の値はファイル読み込み時に
+クランプされ、計画そのものは失敗しません。
