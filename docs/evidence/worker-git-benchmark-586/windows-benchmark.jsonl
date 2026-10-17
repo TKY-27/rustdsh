@@ -1,0 +1,6 @@
+# Windows GitHub runner (win32-x64, Node 22.23.3), dashboard.yml test job
+{"benchmark":"worker-git","platform":"win32-x64","node":"v22.23.3","fixture":{"tracked":128,"dirty":8},"backends":{"JS":null,"Rust":"D:\\a\\rustdsh\\rustdsh\\target\\release\\rdsh.exe"},"maxNativeOverheadMs":20,"warmupsPerMode":1,"alternatingPairs":7}
+{"operation":"repository","javascriptMedianMs":119.2,"rustMedianMs":73.13,"rustOverJavascript":0.61,"rustMinusJavascriptMs":-46.07,"maxNativeOverheadMs":20,"verdict":"pass","outputsMatch":true}
+{"operation":"sourceSnapshot","javascriptMedianMs":150.76,"rustMedianMs":76.46,"rustOverJavascript":0.51,"rustMinusJavascriptMs":-74.3,"maxNativeOverheadMs":20,"verdict":"pass","outputsMatch":true}
+{"operation":"dirtyPaths","javascriptMedianMs":30.45,"rustMedianMs":43.26,"rustOverJavascript":1.42,"rustMinusJavascriptMs":12.81,"maxNativeOverheadMs":20,"verdict":"pass","outputsMatch":true}
+{"operation":"observeWorktree","javascriptMedianMs":330.61,"rustMedianMs":165.83,"rustOverJavascript":0.5,"rustMinusJavascriptMs":-164.79,"maxNativeOverheadMs":20,"verdict":"pass","outputsMatch":true}

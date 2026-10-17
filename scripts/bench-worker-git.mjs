@@ -9,12 +9,20 @@ import {
   observeWorktree,
   repository,
   sourceSnapshot,
+  workerGitExecutable,
 } from "../dashboard/worker-git.mjs";
 
 const nativeBinary = process.env.RDSH_BENCH_BIN;
 if (!nativeBinary || !path.isAbsolute(nativeBinary)) {
   throw new Error("RDSH_BENCH_BIN must be an absolute path");
 }
+
+// Native stays the default on every platform. `dirtyPaths` is one `git status`
+// (~4 ms of Git work) and the bridge adds a fixed process hop, so a ratio target
+// would demand sub-millisecond behavior; the budget is absolute instead. The
+// multi-Git operations are expected to beat the JavaScript baseline.
+// See docs/WORKER-WORKSPACES.md.
+const MAX_NATIVE_OVERHEAD_MS = 20;
 
 const fixture = await fs.mkdtemp(path.join(os.tmpdir(), "rdsh-worker-git-bench-"));
 const root = path.join(fixture, "repo");
@@ -77,17 +85,34 @@ try {
     ["JS", fallbackBinary],
     ["Rust", nativeBinary],
   ];
+  const backends = {};
+  for (const [mode, binary] of modes) {
+    backends[mode] = await invoke(binary, workerGitExecutable);
+  }
+  if (backends.JS !== null) {
+    throw new Error(
+      `JS mode resolved a native bridge (${backends.JS}); the fallback baseline is invalid`,
+    );
+  }
+  if (backends.Rust !== nativeBinary) {
+    throw new Error(
+      `Rust mode did not select ${nativeBinary}; refusing to report a JavaScript fallback as native`,
+    );
+  }
   console.log(
     JSON.stringify({
       benchmark: "worker-git",
       platform: `${process.platform}-${process.arch}`,
       node: process.version,
       fixture: { tracked: 128, dirty: 8 },
+      backends,
+      maxNativeOverheadMs: MAX_NATIVE_OVERHEAD_MS,
       warmupsPerMode: 1,
       alternatingPairs: 7,
     }),
   );
 
+  let failed = false;
   for (const [name, operation] of operations) {
     const timings = { JS: [], Rust: [] };
     const expected = {};
@@ -109,16 +134,23 @@ try {
 
     const javascriptMs = median(timings.JS);
     const rustMs = median(timings.Rust);
+    const overheadMs = rustMs - javascriptMs;
+    const verdict = overheadMs <= MAX_NATIVE_OVERHEAD_MS ? "pass" : "fail";
+    if (verdict === "fail") failed = true;
     console.log(
       JSON.stringify({
         operation: name,
         javascriptMedianMs: Number(javascriptMs.toFixed(2)),
         rustMedianMs: Number(rustMs.toFixed(2)),
         rustOverJavascript: Number((rustMs / javascriptMs).toFixed(2)),
+        rustMinusJavascriptMs: Number(overheadMs.toFixed(2)),
+        maxNativeOverheadMs: MAX_NATIVE_OVERHEAD_MS,
+        verdict,
         outputsMatch: true,
       }),
     );
   }
+  if (failed) process.exitCode = 1;
 } finally {
   if (originalBinary === undefined) delete process.env.RDSH_BIN;
   else process.env.RDSH_BIN = originalBinary;

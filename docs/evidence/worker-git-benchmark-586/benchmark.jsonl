@@ -1,0 +1,17 @@
+# baseline native bridge (main before the fix)
+{"benchmark":"worker-git","platform":"linux-x64","node":"v22.23.1","fixture":{"tracked":128,"dirty":8},"backends":{"JS":null,"Rust":"/var/tmp/rdsh-baseline-586"},"maxNativeOverheadMs":20,"warmupsPerMode":1,"alternatingPairs":7}
+{"operation":"repository","javascriptMedianMs":8.36,"rustMedianMs":15.22,"rustOverJavascript":1.82,"rustMinusJavascriptMs":6.86,"maxNativeOverheadMs":20,"verdict":"pass","outputsMatch":true}
+{"operation":"sourceSnapshot","javascriptMedianMs":13.33,"rustMedianMs":15.19,"rustOverJavascript":1.14,"rustMinusJavascriptMs":1.85,"maxNativeOverheadMs":20,"verdict":"pass","outputsMatch":true}
+{"operation":"dirtyPaths","javascriptMedianMs":4.74,"rustMedianMs":9.64,"rustOverJavascript":2.03,"rustMinusJavascriptMs":4.9,"maxNativeOverheadMs":20,"verdict":"pass","outputsMatch":true}
+{"operation":"observeWorktree","javascriptMedianMs":25.93,"rustMedianMs":31.77,"rustOverJavascript":1.23,"rustMinusJavascriptMs":5.84,"maxNativeOverheadMs":20,"verdict":"pass","outputsMatch":true}
+# optimized native bridge (with the bounded wait)
+{"benchmark":"worker-git","platform":"linux-x64","node":"v22.23.1","fixture":{"tracked":128,"dirty":8},"backends":{"JS":null,"Rust":"/var/tmp/tgt-586/release/rdsh"},"maxNativeOverheadMs":20,"warmupsPerMode":1,"alternatingPairs":7}
+{"operation":"repository","javascriptMedianMs":8.21,"rustMedianMs":10.05,"rustOverJavascript":1.22,"rustMinusJavascriptMs":1.84,"maxNativeOverheadMs":20,"verdict":"pass","outputsMatch":true}
+{"operation":"sourceSnapshot","javascriptMedianMs":13.54,"rustMedianMs":9.66,"rustOverJavascript":0.71,"rustMinusJavascriptMs":-3.88,"maxNativeOverheadMs":20,"verdict":"pass","outputsMatch":true}
+{"operation":"dirtyPaths","javascriptMedianMs":5.04,"rustMedianMs":8.32,"rustOverJavascript":1.65,"rustMinusJavascriptMs":3.28,"maxNativeOverheadMs":20,"verdict":"pass","outputsMatch":true}
+{"operation":"observeWorktree","javascriptMedianMs":25.22,"rustMedianMs":14.35,"rustOverJavascript":0.57,"rustMinusJavascriptMs":-10.87,"maxNativeOverheadMs":20,"verdict":"pass","outputsMatch":true}
+# fallback rejection: a binary without the bridge must fail the run
+Error: Rust mode did not select /bin/true; refusing to report a JavaScript fallback as native
+    at file:///var/tmp/wt-586/scripts/bench-worker-git.mjs:98:11
+
+Node.js v22.23.1
