@@ -75,7 +75,7 @@ impl Host {
 
         let mut command = Command::new(&binary);
         command
-            .args(["web", "--no-open", "--port", "0"])
+            .args(HOST_ARGS)
             .stdin(Stdio::null())
             .stdout(Stdio::from(log.try_clone()?))
             .stderr(Stdio::from(log));
@@ -101,7 +101,7 @@ impl Host {
             }
             read_new_lines(&log_path, &mut position, &mut seen);
             if let Some((url, origin, token)) = parse_ready(&seen) {
-                write_cache(&url, &origin, &token, child.id())?;
+                write_cache(&url, &origin, child.id(), &binary.to_string_lossy())?;
                 return Ok(Self {
                     url,
                     origin,
@@ -127,7 +127,9 @@ pub fn stop_cached() -> Result<String> {
         return Ok("no cached host".to_string());
     };
     let mut stopped = false;
-    if cached.pid > 0 {
+    // The PID may have been reused since the host was cached; only signal a
+    // process that is still the detached `dsh web` host.
+    if cached.pid > 0 && is_cached_host(cached.pid, &cached.binary) {
         stopped = Command::new("kill")
             .args(["-TERM", &cached.pid.to_string()])
             .status()
@@ -142,10 +144,38 @@ pub fn stop_cached() -> Result<String> {
     })
 }
 
+/// The exact host invocation `spawn` starts; `--stop-host` signals a PID only
+/// while its command line still is this invocation of the recorded binary.
+const HOST_ARGS: [&str; 4] = ["web", "--no-open", "--port", "0"];
+
+fn is_cached_host(pid: u32, binary: &str) -> bool {
+    Command::new("ps")
+        .args(["-o", "command=", "-p", &pid.to_string()])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .is_some_and(|output| {
+            is_host_command(String::from_utf8_lossy(&output.stdout).trim(), binary)
+        })
+}
+
+/// A launcher script runs under its interpreter (`node /path/dsh web …`), so
+/// the recorded binary followed by the fixed arguments may appear after argv[0].
+fn is_host_command(command: &str, binary: &str) -> bool {
+    if binary.is_empty() {
+        return false;
+    }
+    let invocation = format!("{binary} {}", HOST_ARGS.join(" "));
+    command == invocation || command.ends_with(&format!(" {invocation}"))
+}
+
 struct Cached {
     url: String,
     origin: String,
     pid: u32,
+    /// The binary `spawn` started; a cache written before this field existed
+    /// has none, so its PID is never signalled.
+    binary: String,
 }
 
 fn cache_dir() -> Result<PathBuf> {
@@ -164,30 +194,55 @@ fn read_cache() -> Option<Cached> {
         url: value.get("url")?.as_str()?.to_string(),
         origin: value.get("origin")?.as_str()?.to_string(),
         pid: value.get("pid").and_then(serde_json::Value::as_u64).unwrap_or(0) as u32,
+        binary: value
+            .get("binary")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
     })
 }
 
-fn write_cache(url: &str, origin: &str, token: &str, pid: u32) -> Result<()> {
+fn write_cache(url: &str, origin: &str, pid: u32, binary: &str) -> Result<()> {
     let dir = cache_dir()?;
     fs::create_dir_all(&dir)?;
     let path = dir.join("host.json");
+    // The ready URL still carries the process token; nothing reads a separate
+    // token field, so it is not stored twice.
     let body = serde_json::json!({
         "url": url,
         "origin": origin,
-        "token": token,
         "pid": pid,
+        "binary": binary,
         "startedAt": std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|value| value.as_secs())
             .unwrap_or(0),
     });
-    fs::write(&path, serde_json::to_vec(&body)?)?;
+    // Write an owner-only temporary file and rename it over the cache, so the
+    // token-bearing URL is never readable by others and concurrent launches
+    // replace the cache atomically instead of racing on create.
+    let temporary = dir.join(format!("host.json.{}.tmp", std::process::id()));
+    let mut options = OpenOptions::new();
+    options.write(true).create(true).truncate(true);
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
     }
-    Ok(())
+    let written = options
+        .open(&temporary)
+        .with_context(|| format!("create {}", temporary.display()))
+        .and_then(|mut file| {
+            std::io::Write::write_all(&mut file, &serde_json::to_vec(&body)?)?;
+            Ok(())
+        })
+        .and_then(|()| {
+            fs::rename(&temporary, &path).with_context(|| format!("replace {}", path.display()))
+        });
+    if written.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    written
 }
 
 /// Origins to try, cheapest first: explicit override, cached host, user service.
@@ -207,16 +262,36 @@ fn candidate_origins() -> Vec<String> {
 }
 
 /// A live host accepts TCP connections on its loopback port.
+///
+/// The signed session cookie is sent to whatever answers here, so a candidate
+/// (including `RDSH_DESKTOP_ORIGIN`) is accepted only when every address it
+/// resolves to is loopback.
 fn alive(origin: &str) -> bool {
-    let Some(authority) = origin.strip_prefix("http://") else {
-        return false;
-    };
-    let Ok(addresses) = authority.to_socket_addrs() else {
+    let Some(addresses) = loopback_addresses(origin) else {
         return false;
     };
     addresses
         .into_iter()
         .any(|address| TcpStream::connect_timeout(&address, Duration::from_millis(250)).is_ok())
+}
+
+fn loopback_addresses(origin: &str) -> Option<Vec<std::net::SocketAddr>> {
+    let authority = origin.strip_prefix("http://")?;
+    if authority.is_empty() || authority.contains(['/', '?', '#', '@']) {
+        return None;
+    }
+    // The HTTP and WebSocket clients resolve the authority again for every
+    // connection, so a DNS name could answer loopback here and a remote
+    // address later. Accept only literal IPs and `localhost`, which resolvers
+    // answer locally (RFC 6761).
+    let (host, _) = authority.rsplit_once(':')?;
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    if host != "localhost" && host.parse::<std::net::IpAddr>().is_err() {
+        return None;
+    }
+    let addresses: Vec<_> = authority.to_socket_addrs().ok()?.collect();
+    (!addresses.is_empty() && addresses.iter().all(|address| address.ip().is_loopback()))
+        .then_some(addresses)
 }
 
 fn read_new_lines(path: &Path, position: &mut u64, out: &mut String) {
@@ -298,7 +373,7 @@ fn resolve_dsh() -> Result<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_ready;
+    use super::{is_host_command, loopback_addresses, parse_ready};
 
     #[test]
     fn reads_the_ready_url_from_noisy_output() {
@@ -307,6 +382,51 @@ mod tests {
         assert_eq!(url, "http://127.0.0.1:46051/?token=abc123");
         assert_eq!(origin, "http://127.0.0.1:46051");
         assert_eq!(token, "abc123");
+    }
+
+    #[test]
+    fn attaches_only_to_loopback_origins() {
+        assert!(loopback_addresses("http://127.0.0.1:3080").is_some());
+        assert!(loopback_addresses("http://[::1]:3080").is_some());
+        assert!(loopback_addresses("http://localhost:3080").is_some());
+        for origin in [
+            "http://192.0.2.10:3080",
+            "https://127.0.0.1:3080",
+            "http://127.0.0.1:3080/path",
+            "http://user@127.0.0.1:3080",
+            "http://127.0.0.1",
+            "http://",
+            // DNS names are resolved again per connection, so only literal
+            // IPs and localhost are accepted.
+            "http://loopback.example:3080",
+        ] {
+            assert!(loopback_addresses(origin).is_none(), "{origin}");
+        }
+    }
+
+    #[test]
+    fn stops_only_the_recorded_host_invocation() {
+        let dsh = "/opt/harness/bin/launcher";
+        assert!(is_host_command(
+            "/opt/harness/bin/launcher web --no-open --port 0",
+            dsh
+        ));
+        // A launcher script runs under its interpreter.
+        assert!(is_host_command(
+            "node /opt/harness/bin/launcher web --no-open --port 0",
+            dsh
+        ));
+        for command in [
+            "python3 /tmp/rdsh-maintenance.py web",
+            "/usr/local/bin/dsh web --no-open --port 0",
+            "/opt/harness/bin/launcher web",
+            "/opt/harness/bin/launcher-evil web --no-open --port 0",
+            "/opt/harness/bin/launcher web --no-open --port 0 --extra",
+        ] {
+            assert!(!is_host_command(command, dsh), "{command}");
+        }
+        // A cache written before the binary was recorded never signals.
+        assert!(!is_host_command("dsh web --no-open --port 0", ""));
     }
 
     #[test]
