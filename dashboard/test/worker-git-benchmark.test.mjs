@@ -11,14 +11,15 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
 const benchmark = path.join(root, "scripts", "bench-worker-git.mjs");
 
 function run(binary, env = {}) {
+  const environment = { ...process.env, RDSH_BENCH_BIN: binary, ...env };
+  if (env.RDSH_BENCH_MAX_OVERHEAD_MS === undefined) {
+    // Omitting the override exercises the script's own per-operation budgets.
+    delete environment.RDSH_BENCH_MAX_OVERHEAD_MS;
+  }
   return spawnSync(process.execPath, [benchmark], {
     cwd: root,
     encoding: "utf8",
-    env: {
-      ...process.env,
-      RDSH_BENCH_BIN: binary,
-      ...env,
-    },
+    env: environment,
   });
 }
 
@@ -180,6 +181,31 @@ test("benchmark CLI compares a capable native worker-git binary with the JS orac
   const requests = (await fs.readFile(marker, "utf8")).trim().split("\n");
   assert.equal(requests.length, 36);
   assert.ok(requests.every((request) => request === rows[0].nativeBinary.executionPath));
+  assert.deepEqual(rows[0].operationBudgetsMs, { dirtyPaths: 30 });
+  assert.ok(rows.slice(1).every((row) => row.maxNativeOverheadMs === 100000));
+});
+
+test("benchmark applies the default per-operation overhead budgets", {
+  skip: process.platform === "win32",
+}, async (t) => {
+  const executable = await fakeRdsh(t, capableWorkerGit
+    .replaceAll("__MARKER__", "false")
+    .replaceAll("__REPLACE_SOURCE__", "false"));
+  const result = run(executable);
+
+  const rows = result.stdout.trim().split("\n").map(JSON.parse);
+  assert.equal(rows.length, 5);
+  assert.equal(rows[0].maxNativeOverheadMs, 20);
+  assert.deepEqual(rows[0].operationBudgetsMs, { dirtyPaths: 30 });
+  assert.deepEqual(
+    Object.fromEntries(rows.slice(1).map((row) => [row.operation, row.maxNativeOverheadMs])),
+    {
+      repository: 20,
+      sourceSnapshot: 20,
+      dirtyPaths: 30,
+      observeWorktree: 20,
+    },
+  );
 });
 
 test("benchmark records an immutable execution copy when its source binary changes", {

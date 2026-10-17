@@ -118,14 +118,19 @@ selected binary to a private execution copy, records both paths and the copy's
 SHA-256, and dispatches the JavaScript baseline and the native bridge directly so
 binary discovery and the capability preflight stay out of the timed region. Each
 operation row carries the seven raw samples and the measurement boundary. It also
-compares each operation against a budget: the native median may exceed the JavaScript
-median by at most 20 ms. The budget is absolute rather than a ratio because
-`dirtyPaths` is one `git status` and the measured Windows cost of starting the
-extra bridge process is about 13 ms; a 1.2x target on a ~30 ms operation would
-leave no room for that process hop. The multi-Git operations are expected to be
-at or below the baseline. The benchmark's own regression tests raise the budget
-through `RDSH_BENCH_MAX_OVERHEAD_MS` because their Node-based fake native pays
-interpreter startup; the dashboard job keeps the 20 ms default.
+compares each operation against a budget: the native median may exceed the
+JavaScript median by at most 20 ms, except `dirtyPaths`, which has a 30 ms
+allowance. The budgets are absolute rather than ratios because `dirtyPaths` is
+one `git status`; a 1.2x target on a ~30 ms operation would leave no room for the
+bridge process hop. The multi-Git operations are expected to be at or below the
+baseline, so only the one-shot operation gets the wider allowance.
+`RDSH_BENCH_MAX_OVERHEAD_MS` overrides every operation budget for benchmark
+regression tests; the dashboard job keeps the defaults.
+
+| operation | native - JS median budget | basis |
+| --- | ---: | --- |
+| `dirtyPaths` | 30 ms | one `git status`; the bridge process hop is not amortised |
+| `repository`, `sourceSnapshot`, `observeWorktree` | 20 ms | multi-Git; native runs at or below the JS baseline |
 
 Measured on Linux x64 (Node 22.23.1, 128 tracked / 8 dirty files, median of 7
 alternating pairs). The fix replaced the `Child::try_wait` sleep-poll in
@@ -155,12 +160,17 @@ budget:
 is not amortised, and the sleep-poll fix does not remove that process hop. The
 bridge is kept as the default on Windows: it is about twice as fast on the
 multi-Git operations, and selecting JavaScript for `dirtyPaths` alone would
-drop process-tree containment and the single code path for a 13 ms difference
-on one operation. The 20 ms budget bounds that residual. Raw runs and the
-fallback rejection are in
+drop process-tree containment and the single code path for a small difference
+on one operation. That residual is runner-dependent: 12.81 ms in the #767
+evidence above (#774 re-ran the main benchmark and failed at +22.81 ms), and
+20.58 ms (Rust 63.87 / JS 43.29) with the pinned measurement from #778, where
+the other three operations were 60-230 ms faster than JavaScript.
+The 30 ms `dirtyPaths` budget keeps margin over the observed spread while the
+multi-Git operations keep the 20 ms limit. Raw runs and the fallback rejection
+are in
 [`docs/evidence/worker-git-benchmark-586/`](evidence/worker-git-benchmark-586/README.md);
 the Windows bridge benchmark in `dashboard.yml` fails the job when the native
-binary is not selected or the 20 ms budget is exceeded.
+binary is not selected or an operation exceeds its budget.
 
 ## Integration and verification
 
