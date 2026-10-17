@@ -1,4 +1,4 @@
-import { requiresOwnedScope } from "./ownership-support.mjs";
+import { requiresOwnershipBackend } from "./ownership-support.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
@@ -111,7 +111,7 @@ test("provider readiness accepts only the selected loopback port", async () => {
   matching.stderr.destroy();
 });
 
-test("verified stop permits a clean managed-Harness restart with a distinct run", requiresOwnedScope, async (t) => {
+test("verified stop permits a clean managed-Harness restart with a distinct run", requiresOwnershipBackend, async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "rdsh-provider-restart-"));
   const project = { id: "provider-restart", directory: path.join(root, "state") };
   const handles = [];

@@ -1,4 +1,4 @@
-import { requiresGpuLock } from "./ownership-support.mjs";
+import { requiresCanonicalTempRoot, requiresGpuLock } from "./ownership-support.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -919,7 +919,7 @@ test("a different kernel descriptor or host observation cannot reclaim an expire
   assert.equal((await leases.read()).leases.length, 1);
 });
 
-test("an ordinal/disabled visibility mask cannot be widened by a GPU request", requiresGpuLock, async (t) => {
+test("an ordinal/disabled visibility mask cannot be widened by a GPU request", requiresCanonicalTempRoot, async (t) => {
   const { ledger, leases, command, env } = await setup(t);
   for (const mask of ["0", "-1", ""])
     await assert.rejects(

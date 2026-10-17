@@ -1,4 +1,4 @@
-import { requiresGpuLock, requiresOwnedScope, requiresOwnershipBackend } from "./ownership-support.mjs";
+import { requiresCanonicalTempRoot, requiresOwnershipBackend } from "./ownership-support.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -118,7 +118,7 @@ test("managed snapshots include UI modules needed to load the pinned state store
   await assert.rejects(verifyRelease(releases.home, release.release_id), code("artifact_changed_wait_restore_pinned_bytes"));
 });
 
-test("a captured pre-GPU adapter cannot silently ignore an explicit or restored run GPU request", requiresGpuLock, async (t) => {
+test("a captured pre-GPU adapter cannot silently ignore an explicit or restored run GPU request", requiresCanonicalTempRoot, async (t) => {
   const {
     root,
     releases,
@@ -198,7 +198,7 @@ test("a captured pre-GPU adapter cannot silently ignore an explicit or restored 
   );
 });
 
-test("failed one-project canary retains observations and cannot alter or roll out to the other project", requiresOwnedScope, async (t) => {
+test("failed one-project canary retains observations and cannot alter or roll out to the other project", requiresOwnershipBackend, async (t) => {
   const {
     releases,
     projects: [alpha, beta],

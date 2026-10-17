@@ -1,4 +1,4 @@
-import { requiresColima, requiresOwnedScope, requiresOwnershipBackend } from "./ownership-support.mjs";
+import { requiresColima, requiresOwnershipBackend } from "./ownership-support.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -114,7 +114,7 @@ test("systemd-owned Linux scopes advertise their verified graceful termination c
   });
 });
 
-test("start/send/usage use versioned ACP requests and measurements instead of shell input", requiresOwnedScope, async (t) => {
+test("start/send/usage use versioned ACP requests and measurements instead of shell input", requiresOwnershipBackend, async (t) => {
   const { adapter, root, events, trace } = await setup(t);
   assert.equal(adapter.capabilities().health, "unverified");
   const start = await adapter.start();
@@ -304,7 +304,7 @@ const readline=require('readline');let a=process.argv.slice(2);if(a[0]==='--cont
   assert.equal(adapter.capabilities().operations.start.supported, false);
 });
 
-test("a changed executable version revokes capabilities on an already connected adapter", requiresOwnedScope, async (t) => {
+test("a changed executable version revokes capabilities on an already connected adapter", requiresOwnershipBackend, async (t) => {
   const { adapter } = await setup(t);
   const { session_id: id } = await adapter.start();
   adapter.env.RDSH_ADAPTER_FIXTURE_MODE = "new_version";
@@ -366,7 +366,7 @@ test(
   },
 );
 
-test("timeouts and early exit are failures, never successful starts", requiresOwnedScope, async (t) => {
+test("timeouts and early exit are failures, never successful starts", requiresOwnershipBackend, async (t) => {
   const a = await setup(t, "timeout");
   await assert.rejects(a.adapter.start(), (e) =>
     ["timeout_result_unknown", "protocol_mismatch"].includes(e.code),

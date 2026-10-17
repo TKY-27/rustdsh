@@ -1,4 +1,4 @@
-import { requiresColima, requiresOwnedScope, requiresOwnershipBackend } from "./ownership-support.mjs";
+import { requiresColima, requiresOwnershipBackend } from "./ownership-support.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -413,7 +413,7 @@ async function setup(t) {
   };
   return { root, rows, tree, own: (p) => owned.push(p) };
 }
-test("deferred owned launch does not run the target before the caller releases its admission gate", requiresOwnedScope, async (t) => {
+test("deferred owned launch does not run the target before the caller releases its admission gate", requiresOwnershipBackend, async (t) => {
   const { root, rows, own } = await setup(t);
   const trace = path.join(root, "trace-deferred.jsonl");
   const owned = await spawnOwnedProcess({
@@ -614,7 +614,7 @@ test("owned children and detached grandchildren stop in order after a bounded gr
   await pause(180);
   assert.equal((await rows(trace)).length, stopped);
 });
-test("intentional monitor disposal drains its response before close without reporting ownership loss", requiresOwnedScope, async (t) => {
+test("intentional monitor disposal drains its response before close without reporting ownership loss", requiresOwnershipBackend, async (t) => {
   const { tree } = await setup(t),
     { p } = await tree("cooperative"),
     errors = [];
@@ -625,7 +625,7 @@ test("intentional monitor disposal drains its response before close without repo
   await pause(20);
   assert.deepEqual(errors, []);
 });
-test("cooperative EOF/TERM exits require no forced kill on Linux and retain truthful Windows graceful capability", requiresOwnedScope, async (t) => {
+test("cooperative EOF/TERM exits require no forced kill on Linux and retain truthful Windows graceful capability", requiresOwnershipBackend, async (t) => {
   const { tree } = await setup(t),
     { p, stages } = await tree("cooperative");
   const result = await p.stop({ gracefulTimeout: 400, killTimeout: 1000 });
@@ -835,7 +835,7 @@ test("authenticated Harness API separates stopping from verified empty descendan
   );
 });
 
-test("Harness device keys are scoped to read or managed-run stop and cannot open the Harness UI", requiresOwnedScope, async (t) => {
+test("Harness device keys are scoped to read or managed-run stop and cannot open the Harness UI", requiresOwnershipBackend, async (t) => {
   const { root, own } = await setup(t),
     previous = process.env.RDSH_DASHBOARD_HOME;
   process.env.RDSH_DASHBOARD_HOME = path.join(root, "device-dashboard-home");
@@ -956,7 +956,7 @@ test("Harness device keys are scoped to read or managed-run stop and cannot open
   );
 });
 
-test("a dashboard poll gap remains separate from the verified live process scope", requiresOwnedScope, async (t) => {
+test("a dashboard poll gap remains separate from the verified live process scope", requiresOwnershipBackend, async (t) => {
   const { root, own } = await setup(t),
     previous = process.env.RDSH_DASHBOARD_HOME;
   process.env.RDSH_DASHBOARD_HOME = path.join(root, "gap-home");
@@ -1009,7 +1009,7 @@ test("a dashboard poll gap remains separate from the verified live process scope
   assert(browserObservation.value >= 5_000);
 });
 
-test("lost Harness monitor remains unverifiable in HTTP responses and administrator shutdown refuses to hide the uncertain result", requiresOwnedScope, async (t) => {
+test("lost Harness monitor remains unverifiable in HTTP responses and administrator shutdown refuses to hide the uncertain result", requiresOwnershipBackend, async (t) => {
   const { root } = await setup(t),
     previous = process.env.RDSH_DASHBOARD_HOME;
   process.env.RDSH_DASHBOARD_HOME = path.join(root, "lost-home");
