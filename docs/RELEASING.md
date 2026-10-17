@@ -154,7 +154,9 @@ The `cd` workflow first refuses malformed or lightweight tags, tags outside
 `main`, tags whose exact-SHA tag-push CI is missing or unsuccessful, mismatched
 versions, missing CHANGELOG entries and incomplete release notes. It also
 requires every required check on the tagged commit to be successful, then builds
-five targets with `cargo build --locked --release` only after those gates pass.
+its five matrix targets with `cargo build --locked --release` only after those
+gates pass; the `packages` job rebuilds the x86_64 glibc target once more for
+nfpm.
 After the exact-tag CI wait, the gate queries the pinned `ci.yml` and `codeql.yml`
 workflows, using only push runs for the exact SHA on `main` or the release tag. It selects
 by GitHub's per-workflow `run_number`, then verifies `run_attempt` and the latest
@@ -172,7 +174,8 @@ reads, the gate re-lists the workflow runs and re-reads the selected run to dete
 a newer run or attempt. This is a
 checked snapshot, not an atomic lock against a later rerun after validation.
 Validation uses `actions: read` and `contents: read`; only the final publication
-job receives `contents: write`. The build/upload/publish dependency chain is unchanged.
+job receives `contents: write`. The dependency chain keeps its shape: `publish`
+still runs last, now after both `release` and `packages`.
 
 GitHub documents the stable run number and increasing attempt number in its
 [variables reference](https://docs.github.com/en/actions/reference/workflows-and-actions/variables).
@@ -181,21 +184,28 @@ provides all job executions, including previous attempts. The required workflow
 files and job names live in `scripts/release_ci.py`; workflow/job-name changes
 must update that mapping and its tests:
 
-| Platform | Archive |
+| Platform | Asset |
 | --- | --- |
 | Linux x86_64 (glibc) | `rdsh-linux-x64.tar.gz` |
 | Linux x86_64 (musl) | `rdsh-linux-x64-musl.tar.gz` |
 | macOS arm64 | `rdsh-macos-arm64.tar.gz` |
 | macOS x86_64 | `rdsh-macos-x64.tar.gz` |
 | Windows x86_64 | `rdsh-windows-x64.zip` |
+| Linux x86_64 (`.deb`) | `rdsh_<version>_amd64.deb` |
+| Linux x86_64 (`.rpm`) | `rdsh-<version>-1.x86_64.rpm` |
 
 Each archive has its own `.sha256` sidecar, but neither installer trusts it:
 both verify the archive against the reviewed digest ledgers described below.
-`install.sh` and `install.ps1`
-are added once, for **12 release assets** total. Builds stage Actions artifacts;
-only the final job has permission to write a release. It validates the complete
-local set, creates or reuses a draft, uploads once, downloads the actual uploaded
-assets and validates them again. Incomplete or corrupt assets stop publication.
+`install.sh` and `install.ps1` are added once, and the `packages` job adds
+one `.deb` and one `.rpm` with the same kind of sidecar, for **16 release
+assets** total. The packages are built from `packaging/nfpm.yaml` by a pinned
+nfpm (`go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.48.0`) on the same
+x86_64 glibc build as the Linux archive, and they stay out of both digest
+ledgers: `install.sh` and `install.ps1` read the archives only. Builds stage
+Actions artifacts; only the final job has permission to write a release. It
+validates the complete local set, creates or reuses a draft, uploads once,
+downloads the actual uploaded assets and validates them again. Incomplete or
+corrupt assets stop publication.
 
 Stable versions publish as `latest`. Candidates publish with `prerelease=true`
 and `latest=false`, preserving the current stable installer channel. The workflow
@@ -245,7 +255,7 @@ python3 scripts/crate-release.py check --tag vX.Y.Z
 cargo info rdsh          # registry metadata for the published version
 ```
 
-After publication, confirm the body, 12 assets and correct channel in GitHub.
+After publication, confirm the body, 16 assets and correct channel in GitHub.
 Download and verify the actual published assets:
 
 ```sh

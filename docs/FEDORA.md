@@ -22,6 +22,19 @@ sudo dnf install -y cargo gcc gcc-c++ make git
 ./install.sh            # add --as-dsh to shadow the dsh command
 ```
 
+Native package:
+
+```sh
+sudo dnf install ./rdsh-<version>-1.x86_64.rpm
+```
+
+Download the `.rpm` from the
+[latest release](https://github.com/jimoto-no-llm/rustdsh/releases/latest);
+`<version>` is the tag without its leading `v`. The package installs
+`/usr/bin/rdsh` plus the licence and README, and carries the same glibc build
+as `rdsh-linux-x64.tar.gz`. On a host whose glibc is older than that build's,
+use the musl archive or `install.sh` instead.
+
 ## Optional packages
 
 | Package | Unlocks | Without it |

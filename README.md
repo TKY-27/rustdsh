@@ -80,7 +80,8 @@ cargo install rdsh
 ```
 
 `cargo install` builds from source and installs the same binary as the release
-archives.
+archives. Debian/Ubuntu and Fedora/RHEL users can also install the release
+[`.deb`/`.rpm`](#native-packages-deb--rpm) with `apt`/`dnf`.
 
 ### 2. Verify & Setup
 
@@ -109,6 +110,26 @@ rdsh --profile web              # start with Web profile
 | Optional | Node.js 22+ for the [Node.js dashboard](dashboard/README.md); SearXNG for `search-web` |
 
 ## Installation
+
+### Native Packages (`.deb` / `.rpm`)
+
+Linux x86_64 users on Debian/Ubuntu (and WSL) or Fedora/RHEL can install the
+same release binary with the OS package manager. Download the `.deb` or `.rpm`
+from the
+[latest release](https://github.com/jimoto-no-llm/rustdsh/releases/latest) and
+install that file directly; no extra repository is configured.
+
+```sh
+sudo apt install ./rdsh_<version>_amd64.deb      # Debian, Ubuntu, WSL
+sudo dnf install ./rdsh-<version>-1.x86_64.rpm   # Fedora, RHEL, Rocky, AlmaLinux
+```
+
+`<version>` is the release tag without its leading `v` (`0.6.0` for `v0.6.0`).
+The package installs `/usr/bin/rdsh` together with the licence and README, so
+`rdsh --version` works right after installation: no Rust toolchain, no
+`install.sh`. Like `rdsh-linux-x64.tar.gz`, both packages carry the glibc
+build, so the musl archive and `install.sh` stay the fallback for older
+distributions.
 
 ### Building from Source & Advanced Options
 

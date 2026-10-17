@@ -7,6 +7,14 @@ Format follows Keep a Changelog, versioning follows Semantic Versioning.
 
 ### Added
 
+- Release native Linux packages, `rdsh_<version>_amd64.deb` and
+  `rdsh-<version>-1.x86_64.rpm`, built from `packaging/nfpm.yaml` with a
+  pinned nfpm (v2.48.0) in a new `packages` CD job. `sudo apt install
+  ./rdsh_*.deb` and `sudo dnf install ./rdsh-*.rpm` install `/usr/bin/rdsh`
+  without a Rust toolchain or `install.sh`; README.md, README.ja.md and
+  docs/FEDORA.md document both commands, and release verification refuses a
+  missing, duplicated, mislabelled or tampered package.
+
 - `packaging/` carries install manifests for the published macOS and Windows
   archives: `packaging/homebrew/rdsh.rb` (Homebrew, Apple Silicon and Intel),
   `packaging/scoop/rdsh.json` (Scoop) and the three `packaging/winget/`
