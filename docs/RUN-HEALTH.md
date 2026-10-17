@@ -20,6 +20,12 @@ at the time of inspection. `null` means not collected, not zero activity. An
 operator can follow the guidance to inspect the original Harness page, but the
 dashboard does not infer an API wait, resource wait, or hang from silence.
 
+The HTTP proxy closes an unfinished upstream connection when its browser
+client disconnects. If an upstream response is interrupted, the browser
+connection also closes instead of waiting indefinitely or receiving appended
+error text. Completed responses preserve connection reuse. These connection
+changes do not stop the managed Harness process.
+
 `tests/e2e/run-health.mjs` uses a local long-running child fixture and a real
 browser rendering this dashboard. It has no provider, model, credential, or
 external network connection. That fixture verifies the projection and browser

@@ -192,12 +192,18 @@ export function proxyHarness(req, res, port, cookieName, adminToken) {
   const upstream = http.request(
     { hostname: "127.0.0.1", port, path: req.url, method: req.method, headers },
     (response) => {
+      response.on("error", () => res.destroy());
       res.writeHead(response.statusCode, response.headers);
       response.pipe(res);
     },
   );
+  res.on("close", () => {
+    if (!res.writableFinished) upstream.destroy();
+  });
   upstream.on("error", () => {
-    if (!res.headersSent) res.writeHead(502);
+    if (res.destroyed) return;
+    if (res.headersSent) return res.destroy();
+    res.writeHead(502);
     res.end("Harness is not available; confirm it is running and retry");
   });
   req.pipe(upstream);
