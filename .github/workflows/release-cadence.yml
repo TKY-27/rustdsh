@@ -125,7 +125,13 @@ jobs:
           次の一手: 手元で gh pr create --base main --head ${BRANCH} --title "${title}" を実行するか、Settings → Actions → General の "Allow GitHub Actions to create and approve pull requests" を有効にしてこのワークフローを再実行してください。
           注意点: タグは必須チェックが緑の exact SHA に Lead が打ちます（このワークフローは打ちません）。
           EOF
-            gh issue create --title "[release] ${NEXT} の準備ブランチを PR にしてください" --body-file "${issue}"
+            issue_title="[release] ${NEXT} の準備ブランチを PR にしてください"
+            if gh issue list --state open --limit 200 --json number,title \
+                 --jq ".[] | select(.title == \"${issue_title}\") | .number" | grep -q .; then
+              echo "::notice::${issue_title} は既に開いています。"
+              exit 0
+            fi
+            gh issue create --title "${issue_title}" --body-file "${issue}"
             exit 0
           fi
 
