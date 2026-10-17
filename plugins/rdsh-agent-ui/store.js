@@ -67,6 +67,21 @@ export async function readSurface(home) {
   }
 }
 
+// Windows rejects a replacement while another writer is momentarily replacing
+// the same destination (ERROR_ACCESS_DENIED, which libuv surfaces as EPERM).
+// Retry the same completed temporary file without unlinking the destination or
+// rewriting the surface.
+async function renameSurface(from, to) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fs.rename(from, to);
+    } catch (error) {
+      if (error.code !== 'EPERM' || attempt >= 5) throw error;
+      await new Promise(resolve => setTimeout(resolve, 2 ** attempt));
+    }
+  }
+}
+
 export async function writeSurface(home, value, now) {
   const checked = validateSurface(value);
   if (!checked.ok) return { ok: false, error: checked.error };
@@ -80,7 +95,7 @@ export async function writeSurface(home, value, now) {
   try {
     await file.writeFile(body);
     await file.close();
-    await fs.rename(temporary, target);
+    await renameSurface(temporary, target);
   } catch (error) {
     await file.close().catch(() => {});
     await fs.unlink(temporary).catch(() => {});
