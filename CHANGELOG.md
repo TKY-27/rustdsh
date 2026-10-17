@@ -25,6 +25,16 @@ Format follows Keep a Changelog, versioning follows Semantic Versioning.
   "くわしく表示 / Detailed view" brings back every other panel. Typography
   uses a Japanese system font stack with calmer sizes and light motion that
   respects reduced-motion settings.
+- `rdsh provider add commandcode` registers Command Code's Provider API
+  (`https://api.commandcode.ai/provider/v1`, OpenAI-compatible,
+  `COMMANDCODE_API_KEY`) as a profile route; `--discover` reads its
+  `GET /models`. The setup key store also accepts any API-key name a profile
+  declares through `apiKeyEnv` and that matches `^[A-Z][A-Z0-9_]+$`, so
+  `rdsh setup` and the setup UI can save route keys (Command Code, OpenCode Go,
+  a hand-declared route) without a fixed three-name list, and still refuse
+  anything undeclared or malformed before writing. `docs/PROVIDERS.md`
+  documents the endpoints, the Go-plan `403 upgrade_required`, the
+  `/messages`-only Claude models and the ZDR header left to #484 (#450).
 
 ### Fixed
 

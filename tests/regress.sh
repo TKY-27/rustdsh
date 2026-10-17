@@ -473,6 +473,14 @@ records:
       access: 'saved-token'
 YAML
 if printf "%s" "{\"name\":\"DEEPSEEK_API_KEY\",\"value\":\"true\"}" | curl -fsS --max-time 5 -X POST -H "Content-Type: application/json" -H "X-RDSH-Token: $SETUP_TOKEN" --data-binary "@-" http://127.0.0.1:38082/api/key 2>/dev/null | grep -q "\"stored\":true" && grep -q "^  DEEPSEEK_API_KEY: 'true'$" "$SW/dsh/.credentials.yaml" && grep -q "EXISTING_KEY: 'existing-value'" "$SW/dsh/.credentials.yaml" && grep -q "access: 'saved-token'" "$SW/dsh/.credentials.yaml"; then ok "setup --web stores YAML string and preserves existing credentials"; else echo "FAIL(output): setup --web key store"; kill $SRV 2>/dev/null; exit 1; fi
+# A key a profile declares through apiKeyEnv is storable; an undeclared name is not.
+mkdir -p "$SW/dsh/profiles/tui"
+printf '%s\n' '- id: llm-pi-ai' '  config:' '    providers:' '      commandcode:' '        apiKeyEnv: COMMANDCODE_API_KEY' '        models:' '          - id: deepseek/deepseek-v4-flash' > "$SW/dsh/profiles/tui/cordis.patch.yml"
+if printf "%s" "{\"name\":\"COMMANDCODE_API_KEY\",\"value\":\"declared-secret\"}" | curl -fsS --max-time 5 -X POST -H "Content-Type: application/json" -H "X-RDSH-Token: $SETUP_TOKEN" --data-binary "@-" http://127.0.0.1:38082/api/key 2>/dev/null | grep -q "\"stored\":true" && grep -q "^  COMMANDCODE_API_KEY: 'declared-secret'$" "$SW/dsh/.credentials.yaml"; then ok "setup --web stores a profile-declared apiKeyEnv key"; else echo "FAIL(output): setup --web declared route key store"; kill $SRV 2>/dev/null; exit 1; fi
+# The refusal is HTTP 400 with the reason in a JSON body. curl -f hides that
+# body and only reports the status, so read the status and the body separately.
+REFUSAL_CODE=$(printf "%s" "{\"name\":\"UNDECLARED_ROUTE_KEY\",\"value\":\"x\"}" | curl -sS --max-time 5 -o "$SW/refused-key.json" -w '%{http_code}' -X POST -H "Content-Type: application/json" -H "X-RDSH-Token: $SETUP_TOKEN" --data-binary "@-" http://127.0.0.1:38082/api/key 2>/dev/null)
+if [ "$REFUSAL_CODE" = "400" ] && grep -q "refusing to store unknown credential" "$SW/refused-key.json" && ! grep -q "UNDECLARED_ROUTE_KEY" "$SW/dsh/.credentials.yaml"; then ok "setup --web refuses an undeclared key name"; else echo "FAIL(output): setup --web undeclared key refusal (status=$REFUSAL_CODE)"; kill $SRV 2>/dev/null; exit 1; fi
 curl -fsS --max-time 5 -X POST -H "X-RDSH-Token: $SETUP_TOKEN" --data-binary '{}' http://127.0.0.1:38082/api/done >/dev/null 2>&1
 wait $SRV 2>/dev/null || true
 if [ -e "$SETUP_TOKEN_FILE" ]; then echo "FAIL(cleanup): setup token handoff file remains after server exit"; exit 1; fi

@@ -1,15 +1,17 @@
-# Provider routes: HAI, Sarashina and home LLM servers
+# Provider routes: HAI, Command Code, Sarashina and home LLM servers
 
 `rdsh provider` registers an OpenAI-compatible endpoint as a DeepSeek Harness
 (dsh) route, so the model appears in dsh's model picker without editing YAML by
-hand. dsh bundles a catalog of known providers; anything outside it (HAI, a
-llama.cpp or vLLM server on your LAN) has to be declared under `llm-pi-ai` in
-`$DSH_HOME/profiles/<profile>/cordis.patch.yml` with an `api`, a `baseURL`, an
-`apiKeyEnv` and a non-empty `models:` list. This command writes that block.
+hand. dsh bundles a catalog of known providers; anything outside it (HAI,
+Command Code, a llama.cpp or vLLM server on your LAN) has to be declared under
+`llm-pi-ai` in `$DSH_HOME/profiles/<profile>/cordis.patch.yml` with an `api`, a
+`baseURL`, an `apiKeyEnv` and a non-empty `models:` list. This command writes
+that block.
 
 ```sh
 rdsh provider list [--json]
 rdsh provider add hai [options]
+rdsh provider add commandcode [options]
 rdsh provider add sarashina [options]
 rdsh provider add local-openai --base-url <url> [options]
 ```
@@ -103,15 +105,18 @@ discovery over https passes it to `curl` through a config on stdin, not argv.
 - If no key is given and none is stored, the route is still written and the
   command says the key is missing.
 - `rdsh auth` reports a profile's default model route as `credential ok` or
-  `credential missing` together with the key name. `rdsh setup --yes` does
-  not save these three keys from the environment (it still saves the
-  well-known `DEEPSEEK_API_KEY`, `OPENAI_API_KEY` and `ANTHROPIC_API_KEY`);
-  store a route key with `rdsh provider add` as above, or with the setup UI's
-  key endpoint, which accepts these names.
+  `credential missing` together with the key name. `rdsh setup` offers to
+  persist each well-known key present in the environment plus every name a
+  profile declares through `apiKeyEnv` (one y/N prompt per key; `--yes` saves
+  nothing and no value is ever printed). Store the key with `rdsh provider add`
+  as above, or with the setup UI's key endpoint: it accepts the well-known
+  names and any profile-declared `apiKeyEnv` that matches
+  `^[A-Z][A-Z0-9_]+$`, and refuses everything else before writing.
 - An exported route key (`HAI_API_KEY`, `LOCAL_OPENAI_API_KEY`,
-  `SARASHINA_API_KEY`) alone does not count as a connection in `rdsh setup`
-  or the first-run banner: it counts only when a profile's default model uses
-  a registered route that declares exactly that key.
+  `SARASHINA_API_KEY`, `COMMANDCODE_API_KEY`) alone does not count as a
+  connection in `rdsh setup` or the first-run banner: it counts only when a
+  profile's default model uses a registered route that declares exactly that
+  key.
 - A plugin entry inside `insert` that identifies `llm-pi-ai` is refused with
   the YAML to add by hand: appending another entry could replace the inserted
   definition's config. A model id or prompt mentioning that text does not
@@ -208,6 +213,57 @@ Limits and terms (checked 2026-10-14):
 Sources: <https://docs.sarashina.ai/api-reference/chat-completions> and
 <https://docs.sarashina.ai/rate-limits>
 
+## Command Code
+
+```sh
+COMMANDCODE_API_KEY=... rdsh provider add commandcode --model deepseek/deepseek-v4-flash
+COMMANDCODE_API_KEY=... rdsh provider add commandcode --discover
+```
+
+Preset: route `commandcode`, display name `Command Code`,
+`api: openai-completions`, base URL `https://api.commandcode.ai/provider/v1`,
+key `COMMANDCODE_API_KEY`. Create a key in Command Code Studio
+(<https://commandcode.ai/studio/>); the same key authenticates the CLI and the
+API. Chat model ids use the documented `vendor/model` form
+(`deepseek/deepseek-v4-flash`), so `--model` takes that id verbatim;
+`--discover` reads the live list from `GET {baseURL}/models`. There is no
+built-in default model: pass `--model`, use `--discover`, or let
+`--from-opencode` supply one.
+
+Provider API shape (checked 2026-10-17 against
+<https://commandcode.ai/docs/provider>):
+
+- `POST /chat/completions` (OpenAI shape), `POST /messages` (Anthropic shape)
+  and `GET /models` under base URL `https://api.commandcode.ai/provider/v1`,
+  with `Authorization: Bearer <key>` on every route (`/messages` also accepts
+  `x-api-key`).
+- Every plan except **Go** has API access (GOAT, Pro, Max, Team and the
+  pay-as-you-go Provider plan). A Go-plan key answers `403` with code
+  `upgrade_required`; upgrade the plan rather than retrying.
+- Claude models are served only on `/messages` and use bare names
+  (`claude-sonnet-4-6`); sending one to `/chat/completions` answers `400`.
+  This preset only writes `/chat/completions` routes.
+
+The Anthropic route is a hand-written entry, because `provider add` writes
+`openai-completions` routes only:
+
+```yaml
+      commandcode-anthropic:
+        displayName: Command Code (Claude)
+        apiKeyEnv: COMMANDCODE_API_KEY
+        api: anthropic-messages
+        baseURL: https://api.commandcode.ai/provider/v1
+        models:
+          - id: claude-sonnet-4-6
+```
+
+This route is not verified against a live account: the model list differs by
+plan, and a Claude model sent to the wrong endpoint fails with `400`. Zero data
+retention (`x-cmd-zdr: 1` on `/chat/completions`, answered with `422`
+`cmd_zdr_no_providers` when the model has no ZDR-capable upstream) is not
+written by this preset; `headers` injection is tracked separately in #484.
+On `/messages` the header is accepted but does not change routing.
+
 ## Home servers (`local-openai`)
 
 ```sh
@@ -261,4 +317,5 @@ afterwards (the `sarashina` preset writes its own).
 ## Not covered
 
 Starting or managing the servers, network discovery (mDNS), choosing
-`agent-default-model`, and HAI quota or pricing.
+`agent-default-model`, HAI quota or pricing, and Command Code plan entitlements
+(`/models` and the provider docs are authoritative).

@@ -43,7 +43,7 @@ claim about another install.
 | `rdsh skills` | Directory names only; no frontmatter or load check |
 | `rdsh features --json` | `config` plus `features[]` with `id`, `enabled`, `default`, `explicit`, `summary` |
 | `rdsh models` | `openai-codex` up to date (9 listed) on `headless`, `migration`, `sdk`; `openai-codex` and `kimi-coding` skipped on `tui` and `web` as "unsupported inline or aliased mapping" |
-| `rdsh provider list --json` | `schema: 1`; presets `hai`, `local-openai`, `sarashina`; `headless` also reports a configured `opencode-free` route with `key: present`; `migration`, `sdk`, `tui`, `web` report only the presets |
+| `rdsh provider list --json` | `schema: 1`; presets `hai`, `local-openai`, `sarashina`, `commandcode`; `headless` also reports a configured `opencode-free` route with `key: present`; `migration`, `sdk`, `tui`, `web` report only the presets |
 | `rdsh doctor` | `dsh` 0.2.0-rc.2, Node 22.x, 5 local profiles, desktop app not found, Fedora optional tools present, authentication summary only |
 
 The last two rows are the kind of mismatch this procedure exists to catch:

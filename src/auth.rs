@@ -1600,7 +1600,12 @@ const KNOWN_ENV_KEYS: &[&str] = &["DEEPSEEK_API_KEY", "OPENAI_API_KEY", "ANTHROP
 /// routes, so the key alone is not a connection: it counts only once a
 /// profile's default model resolves to a route that uses it
 /// ([`provider_needs_in`] state `ok`).
-const PROVIDER_ROUTE_KEYS: &[&str] = &["HAI_API_KEY", "LOCAL_OPENAI_API_KEY", "SARASHINA_API_KEY"];
+const PROVIDER_ROUTE_KEYS: &[&str] = &[
+    "HAI_API_KEY",
+    "LOCAL_OPENAI_API_KEY",
+    "SARASHINA_API_KEY",
+    "COMMANDCODE_API_KEY",
+];
 
 fn localized(
     locale: crate::locale::Locale,
@@ -2093,8 +2098,17 @@ pub struct ProviderNeed {
 /// provider block's `apiKeyEnv` ref/env. This is the "detect what dsh
 /// will use and bring it over" half of first-run setup.
 fn provider_needs_in(grants: &[OauthGrant], doc: &CredsDoc) -> Vec<ProviderNeed> {
-    let root = format!("{}/profiles", crate::inspect::dsh_home());
-    let mut profiles: Vec<String> = std::fs::read_dir(&root)
+    provider_needs_at(
+        &format!("{}/profiles", crate::inspect::dsh_home()),
+        grants,
+        doc,
+    )
+}
+
+/// `provider_needs_in` against an explicit profiles root, so tests can
+/// pin the scanned directory instead of the developer's `$DSH_HOME`.
+fn provider_needs_at(root: &str, grants: &[OauthGrant], doc: &CredsDoc) -> Vec<ProviderNeed> {
+    let mut profiles: Vec<String> = std::fs::read_dir(root)
         .map(|e| {
             e.filter_map(|x| x.ok())
                 .filter(|x| x.metadata().map(|m| m.is_dir()).unwrap_or(false))
@@ -2270,6 +2284,33 @@ fn print_guide(locale: crate::locale::Locale) {
         println!("[rdsh setup] credentials file: {creds}");
         println!("[rdsh setup] opencode settings: {cfg}");
     }
+    // Name the key a profile's default route still needs, so a Command Code or
+    // HAI user sees which variable belongs in the input above. The setup UI's
+    // key field accepts a profile-declared apiKeyEnv name, and
+    // "rdsh provider add <preset>" stores the same name.
+    for need in provider_needs_in(&[], &load_doc(&creds_path())) {
+        if need.state != "missing" {
+            continue;
+        }
+        let Some(key_env_name) = need.api_key_env.as_deref() else {
+            continue;
+        };
+        // The environment variable *name* is printed, never its value; the name
+        // is what the user has to set, so it is not sensitive.
+        println!(
+            "{}",
+            localized_format!(
+                locale,
+                "[rdsh setup] profile {}: {}/{} needs the environment variable {}",
+                "[rdsh setup] 配置文件 {}：{}/{} 需要设置环境变量 {}",
+                "[rdsh setup] プロファイル {}: {}/{} には環境変数 {} の設定が必要です",
+                need.profile,
+                need.provider,
+                need.model,
+                key_env_name
+            )
+        );
+    }
 }
 
 /// First-run wizard: sync selected credentials, offer individual key saves, optionally run
@@ -2290,12 +2331,17 @@ pub fn cmd_setup(
     let mut persisted: Vec<String> = Vec::new();
     let mut known_refs: std::collections::HashSet<String> =
         load_doc(&creds_path()).refs.keys().cloned().collect();
-    for k in KNOWN_ENV_KEYS {
-        let v = match std::env::var(k) {
+    // The well-known keys plus every key a profile declares through apiKeyEnv,
+    // so a route key from a declaration (commandcode, HAI, a home server) can
+    // be persisted here after "rdsh provider add" (still one y/N prompt per
+    // key; --yes saves nothing).
+    let setup_env_keys = setup_env_key_names();
+    for k in &setup_env_keys {
+        let v = match std::env::var(k.as_str()) {
             Ok(v) if !v.trim().is_empty() => v,
             _ => continue,
         };
-        if known_refs.contains(*k) {
+        if known_refs.contains(k.as_str()) {
             continue;
         }
         // --yes no longer implies consent to persist every environment key.
@@ -2304,8 +2350,8 @@ pub fn cmd_setup(
                 creds_path()
             ));
         if take && store_ref(k, v.trim(), locale)? {
-            known_refs.insert(k.to_string());
-            persisted.push(k.to_string());
+            known_refs.insert(k.clone());
+            persisted.push(k.clone());
         }
     }
     {
@@ -2386,6 +2432,12 @@ pub fn setup_status_json() -> String {
         .filter(|i| i["kind"] == "oauth")
         .cloned()
         .collect();
+    let defaults: Vec<serde_json::Value> = provider_needs_in(&grants, &doc)
+        .iter()
+        .map(|n| {
+            serde_json::json!({"profile": n.profile, "provider": n.provider, "model": n.model, "via": n.via, "state": n.state, "api_key_env": n.api_key_env})
+        })
+        .collect();
     serde_json::json!({
         "credentials": path,
         "sources": sources,
@@ -2397,17 +2449,15 @@ pub fn setup_status_json() -> String {
         "authentication": "not_verified",
         "sharing": sharing,
         "opencode_config": opencode_config_path(),
-        "defaults": provider_needs_in(&grants, &doc)
-            .iter()
-            .map(|n| {
-                serde_json::json!({"profile": n.profile, "provider": n.provider, "model": n.model, "via": n.via, "state": n.state})
-            })
-            .collect::<Vec<_>>(),
+        "defaults": defaults,
+        "declared_key_envs": declared_api_key_envs(),
     })
     .to_string()
 }
 
-/// Ref names the setup UI is allowed to store (allowlist: never arbitrary keys).
+/// Ref names the setup UI is always allowed to store (allowlist: never
+/// arbitrary keys). Besides these, a profile may declare its own route key with
+/// `apiKeyEnv:`; see [`declared_api_key_envs`].
 const SETUP_KEY_ALLOWLIST: &[&str] = &[
     "DEEPSEEK_API_KEY",
     "OPENAI_API_KEY",
@@ -2415,12 +2465,84 @@ const SETUP_KEY_ALLOWLIST: &[&str] = &[
     "HAI_API_KEY",
     "LOCAL_OPENAI_API_KEY",
     "SARASHINA_API_KEY",
+    "COMMANDCODE_API_KEY",
 ];
+
+/// `^[A-Z][A-Z0-9_]+$`: the shape of an environment variable name this tool is
+/// willing to write into `.credentials.yaml` (the same shape the harness reads
+/// from a route's `apiKeyEnv`).
+fn is_api_key_env_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    if !matches!(chars.next(), Some(c) if c.is_ascii_uppercase()) {
+        return false;
+    }
+    name.len() >= 2 && chars.all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+}
+
+/// `apiKeyEnv:` names declared by the profiles under `profiles_root`, sorted
+/// and de-duplicated. Only names that match [`is_api_key_env_name`] are
+/// collected, so a malformed declaration cannot widen what the setup UI may
+/// store.
+fn declared_api_key_envs_in(profiles_root: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let Ok(entries) = std::fs::read_dir(profiles_root) else {
+        return out;
+    };
+    let mut profiles: Vec<String> = entries
+        .filter_map(|x| x.ok())
+        .filter(|x| x.metadata().map(|m| m.is_dir()).unwrap_or(false))
+        .map(|x| x.file_name().to_string_lossy().into_owned())
+        .collect();
+    profiles.sort();
+    for p in profiles {
+        let Ok(text) = std::fs::read_to_string(format!("{profiles_root}/{p}/cordis.patch.yml"))
+        else {
+            continue;
+        };
+        for line in text.lines() {
+            if let Some(v) = line.trim().strip_prefix("apiKeyEnv:") {
+                let v = v.trim();
+                if is_api_key_env_name(v) && !out.iter().any(|n| n == v) {
+                    out.push(v.to_string());
+                }
+            }
+        }
+    }
+    out
+}
+
+/// `apiKeyEnv:` names declared by every profile under `$DSH_HOME`.
+fn declared_api_key_envs() -> Vec<String> {
+    declared_api_key_envs_in(&format!("{}/profiles", crate::inspect::dsh_home()))
+}
+
+/// Env var names `rdsh setup` may offer to persist: the well-known keys plus
+/// every name a profile declares through `apiKeyEnv`.
+fn setup_env_key_names() -> Vec<String> {
+    let mut names: Vec<String> = KNOWN_ENV_KEYS.iter().map(|k| k.to_string()).collect();
+    for name in declared_api_key_envs() {
+        if !names.contains(&name) {
+            names.push(name);
+        }
+    }
+    names
+}
+
+/// True when the setup UI may store `name`: a built-in name, or one a profile
+/// under `profiles_root` declares, always in the env-var grammar above.
+fn setup_key_allowed_in(profiles_root: &str, name: &str) -> bool {
+    is_api_key_env_name(name)
+        && (SETUP_KEY_ALLOWLIST.contains(&name)
+            || declared_api_key_envs_in(profiles_root)
+                .iter()
+                .any(|n| n == name))
+}
 
 /// Store a pasted API key submitted from the floating setup UI.
 /// Same 0600 line-surgery path as the terminal wizard.
 pub(crate) fn setup_store_key(name: &str, value: &str) -> anyhow::Result<bool> {
-    if !SETUP_KEY_ALLOWLIST.contains(&name) {
+    let profiles_root = format!("{}/profiles", crate::inspect::dsh_home());
+    if !setup_key_allowed_in(&profiles_root, name) {
         anyhow::bail!("refusing to store unknown credential; use a supported API-key name");
     }
     safe_scalar(value, crate::locale::Locale::English)?;
@@ -2923,6 +3045,7 @@ mod tests {
             ("hai", "HAI_API_KEY"),
             ("local-openai", "LOCAL_OPENAI_API_KEY"),
             ("sarashina", "SARASHINA_API_KEY"),
+            ("commandcode", "COMMANDCODE_API_KEY"),
             ("home-gpu", "HOME_GPU_API_KEY"),
         ] {
             let text = crate::providers::sample_patch_for_tests(route, "m1");
@@ -2940,10 +3063,99 @@ mod tests {
 
     #[test]
     fn provider_keys_can_be_saved_from_setup() {
-        assert!(SETUP_KEY_ALLOWLIST.contains(&"HAI_API_KEY"));
-        assert!(SETUP_KEY_ALLOWLIST.contains(&"LOCAL_OPENAI_API_KEY"));
-        assert!(SETUP_KEY_ALLOWLIST.contains(&"SARASHINA_API_KEY"));
-        assert!(setup_store_key("NOT_ALLOWED_API_KEY", "x").is_err());
+        for name in [
+            "HAI_API_KEY",
+            "LOCAL_OPENAI_API_KEY",
+            "SARASHINA_API_KEY",
+            "COMMANDCODE_API_KEY",
+        ] {
+            assert!(SETUP_KEY_ALLOWLIST.contains(&name), "{name}");
+        }
+        // A built-in name needs no profile; anything else does.
+        assert!(setup_key_allowed_in(
+            "/nonexistent-profiles-root",
+            "DEEPSEEK_API_KEY"
+        ));
+        assert!(!setup_key_allowed_in(
+            "/nonexistent-profiles-root",
+            "NOT_ALLOWED_API_KEY"
+        ));
+        // A malformed name is refused even when a profile declares it.
+        assert!(!is_api_key_env_name("lower_case"));
+        assert!(!is_api_key_env_name("1LEADING_DIGIT"));
+        assert!(!is_api_key_env_name("HAS-DASH"));
+        assert!(!is_api_key_env_name("HAS SPACE"));
+        assert!(!is_api_key_env_name("TRAILING$"));
+        assert!(!is_api_key_env_name("A"));
+        assert!(is_api_key_env_name("A1"));
+        assert!(is_api_key_env_name("COMMANDCODE_API_KEY"));
+    }
+
+    #[test]
+    fn declared_api_key_envs_widen_the_setup_allowlist() {
+        let root = std::env::temp_dir().join(format!(
+            "rdsh-auth-declared-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let profile = root.join("profiles/command");
+        std::fs::create_dir_all(&profile).unwrap();
+        std::fs::write(
+            profile.join("cordis.patch.yml"),
+            "- id: llm-pi-ai\n  config:\n    providers:\n      commandcode:\n        apiKeyEnv: COMMANDCODE_API_KEY\n      custom:\n        apiKeyEnv: CUSTOM_ROUTE_KEY\n      broken:\n        apiKeyEnv: not-a-name\n",
+        )
+        .unwrap();
+        let profiles_root = root.join("profiles");
+        let text = profiles_root.to_string_lossy().into_owned();
+        assert_eq!(
+            declared_api_key_envs_in(&text),
+            vec![
+                "COMMANDCODE_API_KEY".to_string(),
+                "CUSTOM_ROUTE_KEY".to_string()
+            ]
+        );
+        assert!(setup_key_allowed_in(&text, "CUSTOM_ROUTE_KEY"));
+        assert!(!setup_key_allowed_in(&text, "not-a-name"));
+        assert!(!setup_key_allowed_in(&text, "UNDECLARED_KEY"));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn commandcode_route_reports_ok_or_missing_by_its_declared_key() {
+        let root = std::env::temp_dir().join(format!(
+            "rdsh-auth-commandcode-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let profile = root.join("profiles/tui");
+        std::fs::create_dir_all(&profile).unwrap();
+        std::fs::write(
+            profile.join("cordis.patch.yml"),
+            crate::providers::sample_patch_for_tests("commandcode", "deepseek/deepseek-v4-flash"),
+        )
+        .unwrap();
+        let text = root.join("profiles").to_string_lossy().into_owned();
+        let missing = provider_needs_at(&text, &[], &CredsDoc::default());
+        assert_eq!(missing.len(), 1);
+        assert_eq!(missing[0].provider, "commandcode");
+        assert_eq!(missing[0].state, "missing");
+        assert_eq!(
+            missing[0].api_key_env.as_deref(),
+            Some("COMMANDCODE_API_KEY")
+        );
+        let mut doc = CredsDoc::default();
+        doc.refs
+            .insert("COMMANDCODE_API_KEY".to_string(), "sk-not-real".to_string());
+        let ok = provider_needs_at(&text, &[], &doc);
+        assert_eq!(ok[0].state, "ok");
+        assert_eq!(ok[0].via, "key COMMANDCODE_API_KEY");
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
@@ -2971,6 +3183,7 @@ mod tests {
         assert!(v.get("records").unwrap().is_array());
         assert!(v.get("needed").unwrap().is_boolean());
         assert!(v.get("refs_stored").unwrap().is_array());
+        assert!(v.get("declared_key_envs").unwrap().is_array());
     }
 
     #[test]

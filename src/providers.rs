@@ -115,6 +115,21 @@ const PRESETS: &[Preset] = &[
         max_tokens_cap: Some(8000),
         supports_discovery: false,
     },
+    // Command Code's Provider API is OpenAI-compatible at a fixed base URL, and
+    // dsh ships no catalog for it: every model is named here or fetched with
+    // --discover. Chat ids use the documented vendor/model form (for example
+    // deepseek/deepseek-v4-flash). Claude models are served only on the
+    // Anthropic /messages path, which this preset does not write; see
+    // docs/PROVIDERS.md for the hand-written route.
+    Preset {
+        id: "commandcode",
+        display_name: "Command Code",
+        base_url: Some("https://api.commandcode.ai/provider/v1"),
+        default_models: &[],
+        compat: &[],
+        max_tokens_cap: None,
+        supports_discovery: true,
+    },
 ];
 
 fn preset(id: &str) -> Option<&'static Preset> {
@@ -4154,6 +4169,18 @@ mod tests {
         assert!(!p.supports_discovery);
         assert_eq!(p.default_models.len(), 2);
         assert!(preset("hai").unwrap().supports_discovery);
+    }
+
+    #[test]
+    fn commandcode_preset_facts() {
+        let p = preset("commandcode").unwrap();
+        assert_eq!(p.display_name, "Command Code");
+        assert_eq!(p.base_url, Some("https://api.commandcode.ai/provider/v1"));
+        assert_eq!(route_key_env(p.id), "COMMANDCODE_API_KEY");
+        assert!(p.supports_discovery);
+        assert!(p.default_models.is_empty());
+        assert!(p.compat.is_empty());
+        assert_eq!(p.max_tokens_cap, None);
     }
 
     #[test]
