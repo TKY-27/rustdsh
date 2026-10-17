@@ -5,6 +5,7 @@
 // validation; the plugin never executes a model-supplied command.
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { randomBytes } from 'node:crypto';
 
 export const MAX_SURFACE_BYTES = 262144;
 export const MAX_ACTION_BYTES = 8192;
@@ -74,9 +75,17 @@ export async function writeSurface(home, value, now) {
   if (Buffer.byteLength(body) > MAX_SURFACE_BYTES) return { ok: false, error: 'surface-too-large' };
   await fs.mkdir(agentUiDir(home), { recursive: true });
   const target = surfacePath(home);
-  const temporary = target + '.tmp';
-  await fs.writeFile(temporary, body, { mode: 0o600 });
-  await fs.rename(temporary, target);
+  const temporary = `${target}.tmp.${randomBytes(16).toString('hex')}`;
+  const file = await fs.open(temporary, 'wx', 0o600);
+  try {
+    await file.writeFile(body);
+    await file.close();
+    await fs.rename(temporary, target);
+  } catch (error) {
+    await file.close().catch(() => {});
+    await fs.unlink(temporary).catch(() => {});
+    throw error;
+  }
   return { ok: true, surface: payload };
 }
 
