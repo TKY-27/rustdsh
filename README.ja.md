@@ -81,6 +81,7 @@ cargo install rdsh
 ```
 
 `cargo install` はソースからビルドし、リリースアーカイブと同じバイナリをインストールします。
+Debian / Ubuntu や Fedora / RHEL では、リリースの [`.deb` / `.rpm`](#ネイティブパッケージdeb--rpm) を `apt` / `dnf` で導入することもできます。
 
 ### 2. 環境確認 & 初期セットアップ
 
@@ -109,6 +110,25 @@ rdsh --profile web              # Web プロファイルで起動
 | 任意 | [Node.js ダッシュボード](dashboard/README.md) には Node.js 22 以上、`search-web` には SearXNG が必要 |
 
 ## インストール
+
+### ネイティブパッケージ（`.deb` / `.rpm`）
+
+Debian / Ubuntu（WSL を含む）や Fedora / RHEL 系の Linux x86_64 では、同じ
+リリースバイナリを OS のパッケージマネージャーで導入できます。
+[最新リリース](https://github.com/jimoto-no-llm/rustdsh/releases/latest) から
+`.deb` または `.rpm` をダウンロードし、そのファイルを直接インストールします。
+リポジトリの追加は不要です。
+
+```sh
+sudo apt install ./rdsh_<version>_amd64.deb      # Debian / Ubuntu / WSL
+sudo dnf install ./rdsh-<version>-1.x86_64.rpm   # Fedora / RHEL / Rocky / AlmaLinux
+```
+
+`<version>` はリリースタグから先頭の `v` を除いた値です（`v0.6.0` なら `0.6.0`）。
+パッケージは `/usr/bin/rdsh` とライセンス・README を配置するため、導入直後から
+Rust ツールチェーンや `install.sh` なしで `rdsh --version` が動きます。中身は
+`rdsh-linux-x64.tar.gz` と同じ glibc ビルドなので、古いディストロでは musl
+アーカイブと `install.sh` を引き続き使ってください。
 
 ### ソースからのビルドと高度なオプション
 

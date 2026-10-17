@@ -17,8 +17,9 @@ installer and badge links use that owner. Keep historical evidence intact.
   the verification matrix in `CONTRIBUTING.md`.
 - Use annotated tags. Never move or delete published tags or overwrite release
   assets. Candidates use exact-tag installer URLs and never replace `latest`.
-- Preserve all five platform archives, their SHA256 sidecars, and both installers.
-  Publication belongs to the final CD job after upload verification.
+- Preserve all five platform archives, their SHA256 sidecars, both installers
+  and the `.deb`/`.rpm` native packages. Publication belongs to the final CD
+  job after upload verification.
 - Publication is not finished until the digests are pinned: merge the pull
   request the `pin-release-digests` workflow opens, or run
   `python3 scripts/pin-release-digests.py vX.Y.Z`. Installers and the automatic
