@@ -233,6 +233,16 @@ jobs:
           for language in en zh-CN ja; do
             RDSH_LANG="$language" RDSH_NATIVE_MODULES="$RUNNER_TEMP/rdsh-headless-candidate/node_modules" node tests/e2e/answer-guard-native.mjs
           done
+      - name: Test the direct-model SDK adapters without DSH
+        working-directory: plugins/rdsh-direct-models
+        run: |
+          for attempt in 1 2 3; do
+            npm ci --ignore-scripts --no-audit --no-fund --prefer-offline && break
+            echo "npm ci attempt ${attempt} failed; retrying" >&2
+            [ "$attempt" -lt 3 ] || exit 1
+            sleep $((attempt * 10))
+          done
+          npm run test:hermetic
 
   muse-subscription:
     name: "muse-subscription (${{ matrix.os }})${{ github.event_name == 'push' && github.ref_type == 'branch' && github.event.repository.default_branch && github.ref_name != github.event.repository.default_branch && ' [branch push]' || '' }}"
