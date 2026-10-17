@@ -539,7 +539,12 @@ pub(crate) fn build_approval_in(config: &str) -> bool {
                             .is_some_and(|(_, flag)| approves(flag))
                     })
             }
-            "dangerouslyallowallbuilds" => value != "false" && value != "0",
+            "dangerouslyallowallbuilds" => {
+                // A trailing YAML comment is not part of the value, so
+                // "false # temporarily disabled" still means false.
+                let flag = value.split(" #").next().unwrap_or_default().trim();
+                flag != "false" && flag != "0"
+            }
             _ => false,
         };
         approved
@@ -1240,6 +1245,10 @@ mod tests {
             "allowBuilds:",
             "  sharp: true"
         ])));
+        // A trailing YAML comment is not part of the value.
+        assert!(!build_approval_in(
+            "dangerouslyAllowAllBuilds: false # not yet"
+        ));
         assert!(build_approval_in("onlyBuiltDependencies: [sharp]"));
         // A trailing comment or single quotes do not hide an explicit approval.
         assert!(build_approval_in(&config(&[
