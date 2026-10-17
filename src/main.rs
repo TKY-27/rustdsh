@@ -570,6 +570,13 @@ enum SubagentsAction {
         #[arg(long = "json")]
         json: bool,
     },
+    /// Print the limits a plan request inherits when it omits limits
+    /// (the subagents section of rdsh.json; docs/SUBAGENT-PLANNING.md)
+    Defaults {
+        /// JSON output (the default; accepted for script compatibility)
+        #[arg(long = "json")]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -1317,6 +1324,7 @@ fn main() {
             SubagentsAction::Plan { input_file, .. } => {
                 subagent_plan::cmd_plan(&input_file, locale)
             }
+            SubagentsAction::Defaults { .. } => subagent_plan::cmd_defaults(locale),
         },
         Some(Commands::CostLedger { action, input_file }) => {
             cost_ledger::cmd_cost_ledger(&action, &input_file, locale)
@@ -2069,6 +2077,10 @@ fn localized_command_about(name: &str, locale: locale::Locale) -> Option<&'stati
         "plan" => (
             "读取请求并生成分派计划，不启动代理",
             "要求を読み取り割り当て計画を作成（エージェントは起動しません）",
+        ),
+        "defaults" => (
+            "输出分派计划继承的默认上限",
+            "割り当て計画が継承する既定の上限を出力",
         ),
         "budget-admission" => (
             "应用、验证预算准入记录或输出公开视图",
@@ -3039,7 +3051,11 @@ fn node_wrapper_warnings(
                 for token in line {
                     let base = token.rsplit(['/', '\\']).next().unwrap_or_default();
                     has_node |= base == "node" || base == "node.exe";
-                    has_dsh |= token.contains("dsh");
+                    // An explicit `node /path/to/dsh/index.js` entry does not
+                    // resolve the `dsh` command, so shadowing cannot break it.
+                    // docs/DOCTOR.md promises exactly this exclusion.
+                    let explicit_js_entry = token.contains('/') && token.ends_with(".js");
+                    has_dsh |= token.contains("dsh") && !explicit_js_entry;
                 }
             }
             has_node && has_dsh && !skip.contains(&name.as_str())
@@ -4012,6 +4028,35 @@ mod doctor_wrapper_tests {
             "{broken:?}"
         );
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn node_wrapper_diagnostic_ignores_an_explicit_js_entry() {
+        // docs/DOCTOR.md: an explicit `node /path/to/dsh/index.js` wrapper does
+        // not resolve the `dsh` command, so it cannot break when dsh is shadowed.
+        let text = |body: &str| super::WrapperScan {
+            texts: vec![("dsh-wrapper".to_string(), body.to_string())],
+            broken_links: Vec::new(),
+            non_executable: Vec::new(),
+        };
+        assert!(super::node_wrapper_warnings(
+            &text("exec /usr/bin/node /opt/dsh/lib/bin.js \"$@\"\n"),
+            Path::new("unused"),
+            true,
+            &[],
+            crate::locale::Locale::English
+        )
+        .is_empty());
+        // The command-substitution form still breaks, so it keeps its warning.
+        let warnings = super::node_wrapper_warnings(
+            &text("exec node \"$(command -v dsh)\" \"$@\"\n"),
+            Path::new("unused"),
+            true,
+            &[],
+            crate::locale::Locale::English,
+        );
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("dsh-wrapper"), "{warnings:?}");
     }
 
     #[test]
