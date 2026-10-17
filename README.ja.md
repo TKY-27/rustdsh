@@ -604,6 +604,9 @@ rdsh が利用・改変・推薦している第三者製 DSH プラグインで�
 - [dsh-gitview](https://github.com/yugapor/dsh-gitview)（yugapor）— 推奨プラグイン
   `gitview`（サイドバー Git パネル）。web/desktop では既定で導入し、`--recommended=none`／
   `GITVIEW=0`／`features.gitview=false` でスキップできます
+- [dsh-intelligent-ui](https://github.com/cwd514/dsh-intelligent-ui)（cwd514、MIT、Copyright (c) 2026 cwd514）—
+  推奨プラグイン `intelligent-ui`（宣言的な `render_ui` ツールによる表・グラフ・比較などの視覚回答）。
+  既定では導入せず、`--recommended=intelligent-ui` または `INTELLIGENT_UI=1` で有効にします
 
 ## ライセンス
 

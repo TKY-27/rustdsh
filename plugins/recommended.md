@@ -25,11 +25,12 @@ Choose a set explicitly (or for CI) with `--recommended`:
 | `id,id` | exactly the listed ids |
 
 Ids: `translation`, `compute`, `easy-work`, `subagents`, `ui-comfort`,
-`sound`, `gitview`. The `RECOMMENDED` environment variable carries the same
-value for callers that only set the environment. An explicit spec replaces the
-`TRANSLATION`, `COMPUTE`, `EASY_WORK`, `SUBAGENTS`, `UI_COMFORT`, `SOUND` and
-`GITVIEW` defaults; `features.sound=false` / `features.gitview=false` in
-`rdsh.json` still veto those two, even under `--recommended=all`.
+`sound`, `gitview`, `intelligent-ui`. The `RECOMMENDED` environment variable
+carries the same value for callers that only set the environment. An explicit
+spec replaces the `TRANSLATION`, `COMPUTE`, `EASY_WORK`, `SUBAGENTS`,
+`UI_COMFORT`, `INTELLIGENT_UI`, `SOUND` and `GITVIEW` defaults;
+`features.sound=false` / `features.gitview=false` in `rdsh.json` still veto
+those two, even under `--recommended=all`.
 
 ```sh
 ./plugins/install.sh                    # PROFILE=headless (default); historical defaults
@@ -40,6 +41,7 @@ PROFILE=web ./plugins/install.sh        # + web defaults (translation, sound, gi
 ./plugins/install.sh --recommended=compute,gitview
 DRY_RUN=1 ./plugins/install.sh --recommended=all  # print the dsh plugin commands only
 PROFILE=web SOUND=0 GITVIEW=0 ./plugins/install.sh  # skip the default third-party Web UI plugins
+PROFILE=web INTELLIGENT_UI=1 ./plugins/install.sh    # add the opt-in visual answers
 ```
 
 ### Essential plugins (always installed)
@@ -80,18 +82,26 @@ check its duplicate-ID behavior before migrating existing profiles.
 | `ui-comfort` | `rdsh-ui-comfort` | off | Deliberate Enter in the DSH Web chat: the composer sends on a second Enter within 1.5 s instead of the first, and the goal editor keeps Enter from committing the edit; both toggle live in the **rdsh 入力** settings section through `localStorage`. |
 | `sound` | `github:cwd514/dsh-sound-notifications` (MIT, (c) 2026 cwd514) | web, desktop | Effect sounds (Web Audio synthesis, no audio files) and desktop notifications for reply-done / approval-waiting / questions / errors / re-login. Zero dependencies, no build step. |
 | `gitview` | `github:yugapor/dsh-gitview` (MIT, (c) 2026 yugapor) | web, desktop | Git panel in the Web sidebar: working-tree changes, staging and commits, unified/side-by-side diffs, commit graph, branches, blame, reflog, and CI status. |
+| `intelligent-ui` | `github:cwd514/dsh-intelligent-ui` (MIT, (c) 2026 cwd514) | off | ChatGPT-style visual answers: the model calls the declarative `render_ui` tool and the plugin draws the view (tables, charts, comparisons, timelines, inputs, calculators; 15 block types, nesting up to 6 levels). A browser client plugin, so `PROFILE=web` is the intended target; opt in with `--recommended=intelligent-ui` or `INTELLIGENT_UI=1`. |
 
 Notes:
 
-- The two GitHub entries are fetched from upstream at install time, not
+- The three GitHub entries are fetched from upstream at install time, not
   vendored here, so fixes arrive without a rustdsh release. Upstream repos:
-  <https://github.com/cwd514/dsh-sound-notifications> and
-  <https://github.com/yugapor/dsh-gitview>. Both are used with upstream
-  permission under their MIT licenses (see [Credits](../README.md#credits)).
+  <https://github.com/cwd514/dsh-sound-notifications>,
+  <https://github.com/yugapor/dsh-gitview> and
+  <https://github.com/cwd514/dsh-intelligent-ui>. `sound` and `gitview` are
+  used with upstream permission under their MIT licenses (see
+  [Credits](../README.md#credits)); `intelligent-ui` is MIT by its author.
 - `sound` and `gitview` are browser client plugins, so `PROFILE=web` is the
   intended target. Desktop notifications additionally need a secure context
   (`127.0.0.1`/`localhost`/`https`) and the browser's notification
   permission; otherwise only the sounds play (see the upstream README).
+- `intelligent-ui` is a third-party Web client plugin fetched from upstream
+  at install time. Unlike `sound` and `gitview` it stays **off** by default, so
+  the non-interactive web/desktop set is unchanged; opt in with
+  `--recommended=intelligent-ui`, `INTELLIGENT_UI=1`, or the app's Plugins
+  page. It has no `features.*` veto in `rdsh.json`.
 - `ui-comfort` is a Web client plugin that deliberately replaces the stock
   Enter-to-send in the composer, so it stays **off** by default and never enters
   the web/desktop default set: opt in with `--recommended=ui-comfort` (or
@@ -134,6 +144,7 @@ authors.
 | [Smart-DSH](https://github.com/hikarioyama/Smart-DSH) by hikarioyama | MIT | Source of the phone-width layout bundled as `rdsh-mobile-ui` (the mobile rail of its `dsh-notify-push` browser bundle). Its Web Push notifications, Esc-to-stop, task hub and shared-HMR workaround are not bundled. |
 | [dsh-sound-notifications](https://github.com/cwd514/dsh-sound-notifications) by cwd514 | MIT | Recommended `sound` plugin: effect sounds and desktop notifications. Default on for web/desktop; skip with `--recommended=none`, `SOUND=0`, or `features.sound=false`. |
 | [dsh-gitview](https://github.com/yugapor/dsh-gitview) by yugapor | MIT | Recommended `gitview` plugin: sidebar Git panel. Default on for web/desktop; skip with `--recommended=none`, `GITVIEW=0`, or `features.gitview=false`. |
+| [dsh-intelligent-ui](https://github.com/cwd514/dsh-intelligent-ui) by cwd514 | MIT | Recommended `intelligent-ui` plugin: `render_ui` visual answers in the DSH Web chat. Opt-in only; add with `--recommended=intelligent-ui` or `INTELLIGENT_UI=1`. |
 
 ## Workflow board source preparation
 

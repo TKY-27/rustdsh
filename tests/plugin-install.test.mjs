@@ -36,6 +36,9 @@ async function runInstaller(env, args = []) {
 
 const RECOMMENDED_BUNDLED = ['rdsh-translation', 'rdsh-compute', 'rdsh-easy-work', 'rdsh-subagent-optimizer', 'rdsh-ui-comfort'];
 const RECOMMENDED_THIRD_PARTY = ['dsh-sound-notifications', 'dsh-gitview'];
+// Opt-in only: never in the non-interactive per-profile defaults.
+const RECOMMENDED_OPT_IN_THIRD_PARTY = ['dsh-intelligent-ui'];
+const ALL_RECOMMENDED = [...RECOMMENDED_BUNDLED, ...RECOMMENDED_THIRD_PARTY, ...RECOMMENDED_OPT_IN_THIRD_PARTY];
 
 test('non-interactive defaults keep the historical per-profile set', skip, async (t) => {
   const { env: headlessEnv } = await installerEnv(t, { PROFILE: 'headless' });
@@ -50,6 +53,7 @@ test('non-interactive defaults keep the historical per-profile set', skip, async
     assert.match(web, new RegExp(name));
   assert.match(web, /rdsh-update-banner  # essential/); // web-only essential
   assert.doesNotMatch(web, /rdsh-compute|rdsh-easy-work|rdsh-subagent-optimizer|rdsh-ui-comfort/);
+  assert.doesNotMatch(web, /dsh-intelligent-ui/); // opt-in only
 
   const { env: desktopEnv } = await installerEnv(t, { PROFILE: 'desktop', RDSH_BIN: process.execPath });
   const desktop = await runInstaller(desktopEnv);
@@ -57,25 +61,48 @@ test('non-interactive defaults keep the historical per-profile set', skip, async
     assert.match(desktop, new RegExp(name));
   assert.doesNotMatch(desktop, /rdsh-update-banner/); // web only
   assert.doesNotMatch(desktop, /rdsh-ui-comfort/); // off by default
+  assert.doesNotMatch(desktop, /dsh-intelligent-ui/); // opt-in only
 });
 
 test('--recommended=all|none|id,id selects exactly that set', skip, async (t) => {
   const { env: webEnv } = await installerEnv(t, { PROFILE: 'web' });
   const none = await runInstaller(webEnv, ['--recommended=none']);
   assert.match(none, /dsh-tool-present  # essential/); // essential stays
-  for (const name of [...RECOMMENDED_BUNDLED, ...RECOMMENDED_THIRD_PARTY])
+  for (const name of ALL_RECOMMENDED)
     assert.doesNotMatch(none, new RegExp(name));
 
   const { env: headlessEnv } = await installerEnv(t, { PROFILE: 'headless' });
   const all = await runInstaller(headlessEnv, ['--recommended=all']);
-  for (const name of [...RECOMMENDED_BUNDLED, ...RECOMMENDED_THIRD_PARTY])
+  for (const name of ALL_RECOMMENDED)
     assert.match(all, new RegExp(name));
 
   const { env: pickEnv } = await installerEnv(t, { PROFILE: 'web' });
   const picked = await runInstaller(pickEnv, ['--recommended=compute,gitview']);
   assert.match(picked, /rdsh-compute  # recommended/);
   assert.match(picked, /dsh-gitview/);
-  assert.doesNotMatch(picked, /rdsh-translation|dsh-sound-notifications|rdsh-easy-work/);
+  assert.doesNotMatch(picked, /rdsh-translation|dsh-sound-notifications|rdsh-easy-work|dsh-intelligent-ui/);
+});
+
+test('--recommended=intelligent-ui selects only the opt-in visual-answer plugin', skip, async (t) => {
+  const { env } = await installerEnv(t, { PROFILE: 'web' });
+  const picked = await runInstaller(env, ['--recommended=intelligent-ui']);
+  assert.match(picked, /dsh-intelligent-ui  # recommended/);
+  assert.doesNotMatch(picked,
+    /rdsh-translation|rdsh-compute|rdsh-easy-work|rdsh-subagent-optimizer|rdsh-ui-comfort|dsh-sound-notifications|dsh-gitview/);
+
+  const { env: aliasEnv } = await installerEnv(t, { PROFILE: 'web' });
+  const alias = await runInstaller(aliasEnv, ['--recommended=intelligent_ui']);
+  assert.match(alias, /dsh-intelligent-ui  # recommended/);
+
+  const { env: envVarEnv } = await installerEnv(t, { PROFILE: 'headless', INTELLIGENT_UI: '1' });
+  const envVar = await runInstaller(envVarEnv);
+  assert.match(envVar, /dsh-intelligent-ui  # recommended/);
+  assert.doesNotMatch(envVar, /dsh-sound-notifications|dsh-gitview/); // only the requested plugin
+
+  const { env: webEnv } = await installerEnv(t, { PROFILE: 'web', INTELLIGENT_UI: '1' });
+  const webVar = await runInstaller(webEnv);
+  assert.match(webVar, /dsh-intelligent-ui  # recommended/);
+  assert.match(webVar, /dsh-sound-notifications|dsh-gitview/); // web defaults stay unchanged
 });
 
 test('--recommended=ui-comfort selects only the comfort plugin', skip, async (t) => {
@@ -122,6 +149,7 @@ test('--recommended=list prints the catalog, essential tier first, and installs 
   assert.ok(stdout.indexOf('Essential plugins') < stdout.indexOf('Recommended plugins'));
   assert.match(stdout, /@deepseek-ai\/dsh-tool-present/);
   assert.match(stdout, /github:cwd514\/dsh-sound-notifications/);
+  assert.match(stdout, /intelligent-ui\s+github:cwd514\/dsh-intelligent-ui/);
   assert.match(stdout, /ui-comfort\s+rdsh-ui-comfort/);
   assert.doesNotMatch(stdout, /dsh plugin --profile/);
 
@@ -143,6 +171,7 @@ test('an unknown or missing recommended value fails before installing', skip, as
     assert.equal(error.code, 2);
     assert.match(error.stderr, /unknown recommended plugin 'bogus'/);
     assert.match(error.stderr, /ui-comfort/); // the id list names the new entry
+    assert.match(error.stderr, /intelligent-ui/); // including the opt-in one
     assert.doesNotMatch(error.stdout, /dsh plugin --profile/);
     return true;
   });
@@ -163,10 +192,10 @@ test('the desktop forwarder honors the recommended selection', skip, async (t) =
   const dry = await runInstaller(desktopEnv, ['--recommended=none']);
   assert.match(dry, /desktop install --no-bundled/);
   assert.match(dry, /rdsh-settings/);
-  assert.doesNotMatch(dry, /rdsh-translation|dsh-sound-notifications|dsh-gitview/);
+  assert.doesNotMatch(dry, /rdsh-translation|dsh-sound-notifications|dsh-gitview|dsh-intelligent-ui/);
 
   const real = await runInstaller({ ...desktopEnv, DRY_RUN: '0' }, ['--recommended=all']);
   assert.match(real, /^STUB desktop install --no-bundled/);
-  for (const name of [...RECOMMENDED_BUNDLED, ...RECOMMENDED_THIRD_PARTY])
+  for (const name of ALL_RECOMMENDED)
     assert.match(real, new RegExp(name));
 });
