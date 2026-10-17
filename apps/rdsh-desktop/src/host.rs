@@ -101,7 +101,7 @@ impl Host {
             }
             read_new_lines(&log_path, &mut position, &mut seen);
             if let Some((url, origin, token)) = parse_ready(&seen) {
-                write_cache(&url, &origin, &token, child.id())?;
+                write_cache(&url, &origin, child.id())?;
                 return Ok(Self {
                     url,
                     origin,
@@ -127,7 +127,9 @@ pub fn stop_cached() -> Result<String> {
         return Ok("no cached host".to_string());
     };
     let mut stopped = false;
-    if cached.pid > 0 {
+    // The PID may have been reused since the host was cached; only signal a
+    // process that is still the detached `dsh web` host.
+    if cached.pid > 0 && is_dsh_web(cached.pid) {
         stopped = Command::new("kill")
             .args(["-TERM", &cached.pid.to_string()])
             .status()
@@ -140,6 +142,18 @@ pub fn stop_cached() -> Result<String> {
     } else {
         "cleared the cached host".to_string()
     })
+}
+
+fn is_dsh_web(pid: u32) -> bool {
+    Command::new("ps")
+        .args(["-o", "command=", "-p", &pid.to_string()])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
+        .is_some_and(|command| {
+            command.contains("dsh") && command.split_whitespace().any(|word| word == "web")
+        })
 }
 
 struct Cached {
@@ -167,26 +181,35 @@ fn read_cache() -> Option<Cached> {
     })
 }
 
-fn write_cache(url: &str, origin: &str, token: &str, pid: u32) -> Result<()> {
+fn write_cache(url: &str, origin: &str, pid: u32) -> Result<()> {
     let dir = cache_dir()?;
     fs::create_dir_all(&dir)?;
     let path = dir.join("host.json");
+    // The ready URL still carries the process token; nothing reads a separate
+    // token field, so it is not stored twice.
     let body = serde_json::json!({
         "url": url,
         "origin": origin,
-        "token": token,
         "pid": pid,
         "startedAt": std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|value| value.as_secs())
             .unwrap_or(0),
     });
-    fs::write(&path, serde_json::to_vec(&body)?)?;
+    // Create the file owner-only from the start instead of tightening it after
+    // the token-bearing URL is already on disk.
+    let _ = fs::remove_file(&path);
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
     }
+    let mut file = options
+        .open(&path)
+        .with_context(|| format!("create {}", path.display()))?;
+    std::io::Write::write_all(&mut file, &serde_json::to_vec(&body)?)?;
     Ok(())
 }
 
@@ -207,16 +230,27 @@ fn candidate_origins() -> Vec<String> {
 }
 
 /// A live host accepts TCP connections on its loopback port.
+///
+/// The signed session cookie is sent to whatever answers here, so a candidate
+/// (including `RDSH_DESKTOP_ORIGIN`) is accepted only when every address it
+/// resolves to is loopback.
 fn alive(origin: &str) -> bool {
-    let Some(authority) = origin.strip_prefix("http://") else {
-        return false;
-    };
-    let Ok(addresses) = authority.to_socket_addrs() else {
+    let Some(addresses) = loopback_addresses(origin) else {
         return false;
     };
     addresses
         .into_iter()
         .any(|address| TcpStream::connect_timeout(&address, Duration::from_millis(250)).is_ok())
+}
+
+fn loopback_addresses(origin: &str) -> Option<Vec<std::net::SocketAddr>> {
+    let authority = origin.strip_prefix("http://")?;
+    if authority.is_empty() || authority.contains(['/', '?', '#', '@']) {
+        return None;
+    }
+    let addresses: Vec<_> = authority.to_socket_addrs().ok()?.collect();
+    (!addresses.is_empty() && addresses.iter().all(|address| address.ip().is_loopback()))
+        .then_some(addresses)
 }
 
 fn read_new_lines(path: &Path, position: &mut u64, out: &mut String) {
@@ -298,7 +332,7 @@ fn resolve_dsh() -> Result<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_ready;
+    use super::{loopback_addresses, parse_ready};
 
     #[test]
     fn reads_the_ready_url_from_noisy_output() {
@@ -307,6 +341,23 @@ mod tests {
         assert_eq!(url, "http://127.0.0.1:46051/?token=abc123");
         assert_eq!(origin, "http://127.0.0.1:46051");
         assert_eq!(token, "abc123");
+    }
+
+    #[test]
+    fn attaches_only_to_loopback_origins() {
+        assert!(loopback_addresses("http://127.0.0.1:3080").is_some());
+        assert!(loopback_addresses("http://[::1]:3080").is_some());
+        assert!(loopback_addresses("http://localhost:3080").is_some());
+        for origin in [
+            "http://192.0.2.10:3080",
+            "https://127.0.0.1:3080",
+            "http://127.0.0.1:3080/path",
+            "http://user@127.0.0.1:3080",
+            "http://127.0.0.1",
+            "http://",
+        ] {
+            assert!(loopback_addresses(origin).is_none(), "{origin}");
+        }
     }
 
     #[test]
