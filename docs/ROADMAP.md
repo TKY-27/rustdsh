@@ -5,13 +5,21 @@ Managed under [PROJECTS.md](PROJECTS.md): this file states direction only,
 issues and milestones are the source of truth for status.
 
 Backlog index: [issue #74](https://github.com/jimoto-no-llm/rustdsh/issues/74)
-(all 72 proposals mapped to feature issues, `P0`-`P3`).
+(all 72 proposals mapped to feature issues, `P0`-`P3`; closed once all 62
+child issues were closed).
 Update this file at each minor release; status churn stays in issues.
 
-## Now (`P0`-`P1`, released through `v0.5.2`; `v0.6.0` on `main`) — shipped
+## Now (`P0`-`P1`, released through `v0.7.0`) — shipped
 
-`v0.6.0` is prepared on `main` (`Cargo.toml`, `CHANGELOG.md`, release
-notes) and is not tagged yet, so `v0.5.2` is the latest published release.
+`v0.7.0` is the latest published release, with its Unix and Windows
+digests pinned. `[Unreleased]` on `main` turns delegated `dsh` telemetry
+and Discord Rich Presence off by default (`features.telemetry`,
+`features.discord`; see `docs/PRIVACY.md`, #585).
+
+- `v0.7.0` ships native Linux packages (`.deb` / `.rpm`) and pinned
+  Homebrew, Scoop and winget manifests that
+  `scripts/update-packaging-manifests.py --check` keeps in step with the
+  pinned digests (#728, `docs/PACKAGE-MANAGERS.md`).
 
 - Delegation stays byte-identical while upstream `dsh` evolves
   (`--passthrough` is the reference; see `docs/ARCHITECTURE.md`).
@@ -71,32 +79,41 @@ notes) and is not tagged yet, so `v0.5.2` is the latest published release.
   recommended plugins (#713), and the UI sends on the second Enter and guards
   goal editing against Enter (#716).
 
-## Next (`P1`-`P2`, `v0.6.x` and later)
+## Next (`P1`-`P2`, `v0.7.x` and later)
 
-The `v0.5.0` milestone is still open and carries the items below that did not
-finish with the release; issues and milestones stay the source of truth.
+Open issues and milestones stay the source of truth. The closed issues named
+below finished their rustdsh-side scope; only the residual stated here is
+still open.
 
-- One-click translation of non-Japanese answers with history replacement
-  (#448): Step 1 (display only) shipped (#664) and Step 2 landed (#718),
-  replacing the model-visible surface. Replacing what the screen shows still
-  needs a DSH-side API, so it stays here.
-- Windows dashboard flake (#209): the tray ready wait now follows observed
-  startup progress (#717) and needs a Windows CI run to confirm, while the
-  `routing probe` exec deadline has no progress to observe and is unchanged.
-- Start routing experiments (#87): only
-  `docs/proposals/provider-quota-routing.md` landed (#513); the first provider
-  route declaration, quota read and effective-cost conversion are still to do,
-  and the child issues (#450, #484) are open.
+- macOS dashboard process-management boundary (#485, the last open item of
+  the `v0.5.0` milestone).
 - Cargo workspace split into `rdsh-cli` / `rdsh-guard` / `rdsh-core` /
   `rdsh-web` (#703).
-- Gradual JS-to-Rust migration (`rust` label): eight slices landed (#509,
-  #520, #521, #524, #535, #538, #546, #547), migration order 1 to 4 is still
-  unchecked, and the current-state ledger (#666) is open (see #516).
-- Unfinished `v0.5.0` milestone items: the Codex headless WebSocket cache
-  (#488) and the macOS dashboard process-management boundary (#485).
+- Routing experiments: the decision for #87 is an opt-in plan
+  (`features.route_plan`, default off) with five measurement steps and five
+  falsification conditions in `docs/proposals/provider-quota-routing.md`
+  (#513, #742); `src/route_plan.rs` is not implemented yet. The child issues
+  Command Code as a provider (#450) and the ZDR-only mode (#484) are open.
+- Translated answers on screen: Step 1 (#664) and Step 2 (#718) replace the
+  model-visible surface (#448, closed). Replacing what the screen shows needs
+  a DSH-side API (assistant-node display or a per-message display slot).
+- Codex headless exit: the opt-in pinned runtime exits 157-281 ms after
+  `turn_end` (#505; #488, closed). Fixing the stock install needs upstream
+  APIs (an awaitable cleanup, an unref'd idle timer and a DSH disposal
+  bridge).
 
 ## Later (`P2`-`P3`, no milestone yet)
 
+- Gradual JS-to-Rust migration (`rust` label): eight slices landed (#509,
+  #520, #521, #524, #535, #538, #546, #547); the rest of the execution logic
+  moves after the workspace split (#703; #516, closed).
+- Windows `routing probe` exec deadline (win32 60000 ms): the tray wait
+  follows observed startup progress (#717; #209, closed), but the probe has
+  no progress to observe, so only runner load can exceed it.
+- Windows worker Git `dirtyPaths` is 1.35x the JS baseline; settle the
+  benchmark fallback rule (#586).
+- `rdsh-docs` skill acceptance: measure skill selection and body loading at
+  model run time (`plugins/skills/rdsh-docs`, #741; #84, closed).
 - Windows-native dashboard parity with the WSL flow.
 - Startup and memory regression tracking in CI (fail on >10 percent slip).
 - Full i18n: `en` / `zh-CN` / `ja` UI strings shipped (#617), so what
