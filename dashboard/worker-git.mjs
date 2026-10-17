@@ -158,7 +158,11 @@ async function supportsWorkerGit(file) {
   const key = [file, stat.dev, stat.ino, stat.size, stat.mtimeMs].join(":");
   let pending = workerGitCapabilities.get(key);
   if (!pending) {
-    pending = exec(file, ["worker-git", "--help"], {
+    // The bridge marker lives in the command's English about text, which
+    // `general.language` / `LANG` would translate away, so pin the probe to
+    // English. Without this the native bridge looks unavailable and every
+    // worker Git call silently falls back to the JavaScript path (#586).
+    pending = exec(file, ["--language", "en", "worker-git", "--help"], {
       env: environment(),
       windowsHide: true,
       shell: false,
@@ -178,7 +182,9 @@ async function supportsWorkerGit(file) {
   return pending;
 }
 
-async function workerGitExecutable() {
+// Exported so the worker Git benchmark can prove which backend ran instead of
+// reporting a JavaScript fallback as a native measurement (#586).
+export async function workerGitExecutable() {
   const name = process.platform === "win32" ? "rdsh.exe" : "rdsh";
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
   const override = process.env.RDSH_BIN;

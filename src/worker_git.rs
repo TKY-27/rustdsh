@@ -622,22 +622,7 @@ fn run_bounded(mut command: Command, timeout: Duration, max_bytes: usize) -> Res
         let _ = stderr_tx.send(read_limited(stderr, max_bytes));
     });
     let started = Instant::now();
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) if started.elapsed() < timeout => thread::sleep(Duration::from_millis(5)),
-            Ok(None) => {
-                process_tree.terminate(&mut child);
-                let _ = child.wait();
-                bail!("Git command timed out after {} seconds", timeout.as_secs());
-            }
-            Err(error) => {
-                process_tree.terminate(&mut child);
-                let _ = child.wait();
-                return Err(error).context("wait for Git command");
-            }
-        }
-    };
+    let status = wait_with_timeout(&mut child, &mut process_tree, timeout)?;
     let remaining = timeout.saturating_sub(started.elapsed());
     let stdout_result = match stdout_rx.recv_timeout(remaining) {
         Ok(result) => result,
@@ -672,6 +657,120 @@ fn run_bounded(mut command: Command, timeout: Duration, max_bytes: usize) -> Res
         stdout,
         stderr,
     })
+}
+
+/// Wait for one Git child with a bounded deadline, without polling.
+///
+/// `Child::try_wait` has no timed blocking form in std, so the previous loop
+/// quantised every Git call to the platform timer tick. That tick is >=5 ms
+/// here and the Windows default of 15.6 ms there, and it dominated the
+/// single-`git status` `dirtyPaths` operation (issue #586). A watchdog thread
+/// carries only the platform termination primitive and kills the tree when the
+/// deadline expires; the main thread blocks in `Child::wait` and returns the
+/// moment Git exits.
+#[cfg(any(unix, windows))]
+fn wait_with_timeout(
+    child: &mut std::process::Child,
+    process_tree: &mut ProcessTreeGuard,
+    timeout: Duration,
+) -> Result<ExitStatus> {
+    let killer = ChildKiller::new(child);
+    let (cancel_tx, cancel_rx) = mpsc::channel::<()>();
+    let watchdog = thread::spawn(move || match cancel_rx.recv_timeout(timeout) {
+        Ok(()) => false,
+        Err(_) => {
+            killer.terminate();
+            true
+        }
+    });
+    let waited = child.wait();
+    let _ = cancel_tx.send(());
+    let timed_out = watchdog.join().unwrap_or(false);
+    let status = match waited {
+        Ok(status) => status,
+        Err(error) => {
+            process_tree.terminate(child);
+            return Err(error).context("wait for Git command");
+        }
+    };
+    if timed_out {
+        // The watchdog already signalled the direct child. Terminate the group
+        // or job so descendants that outlived it are reaped too.
+        process_tree.terminate(child);
+        bail!("Git command timed out after {} seconds", timeout.as_secs());
+    }
+    Ok(status)
+}
+
+/// Platforms without a process-group or process-handle kill keep the bounded
+/// poll; they are not part of the release matrix.
+#[cfg(not(any(unix, windows)))]
+fn wait_with_timeout(
+    child: &mut std::process::Child,
+    process_tree: &mut ProcessTreeGuard,
+    timeout: Duration,
+) -> Result<ExitStatus> {
+    let started = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Ok(status),
+            Ok(None) if started.elapsed() < timeout => thread::sleep(Duration::from_millis(5)),
+            Ok(None) => {
+                process_tree.terminate(child);
+                let _ = child.wait();
+                bail!("Git command timed out after {} seconds", timeout.as_secs());
+            }
+            Err(error) => {
+                process_tree.terminate(child);
+                let _ = child.wait();
+                return Err(error).context("wait for Git command");
+            }
+        }
+    }
+}
+
+/// The platform primitive a watchdog thread needs to stop one Git child. The
+/// child stays owned by `wait_with_timeout`; this handle only signals it, so
+/// the raw Windows handle is held as an integer to keep the watchdog Send.
+#[cfg(any(unix, windows))]
+struct ChildKiller {
+    #[cfg(unix)]
+    process_group: i32,
+    #[cfg(windows)]
+    handle: isize,
+}
+
+#[cfg(any(unix, windows))]
+impl ChildKiller {
+    fn new(child: &std::process::Child) -> Self {
+        #[cfg(unix)]
+        {
+            Self {
+                process_group: child.id() as i32,
+            }
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::io::AsRawHandle;
+            Self {
+                handle: child.as_raw_handle() as isize,
+            }
+        }
+    }
+
+    fn terminate(self) {
+        #[cfg(unix)]
+        unsafe {
+            libc::kill(-self.process_group, libc::SIGKILL);
+        }
+        #[cfg(windows)]
+        unsafe {
+            windows_sys::Win32::System::Threading::TerminateProcess(
+                self.handle as windows_sys::Win32::Foundation::HANDLE,
+                1,
+            );
+        }
+    }
 }
 
 #[cfg(unix)]

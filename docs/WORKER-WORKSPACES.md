@@ -95,6 +95,50 @@ blocks mutations and is never reclaimed based on elapsed time. Corrupt or linked
 registry files are rejected without replacement. Assignment uses an empty
 checkout-hook directory.
 
+## Native Git bridge and its benchmark
+
+Worker Git reads run through the hidden `rdsh worker-git` JSON bridge, with the
+JavaScript implementation as a fallback for binaries that do not provide it. The
+bridge is the default on every platform and keeps process-tree containment.
+`dashboard/worker-git.mjs` probes the binary with `--language en worker-git
+--help`, because the capability marker is the command's English about text and
+`general.language` / `LANG` would otherwise translate it away and silently
+select the JavaScript path.
+
+Measure both paths with the same fixture and alternating measurement order:
+
+```sh
+cargo build --locked --release --bin rdsh
+TMPDIR=/var/tmp RDSH_BENCH_BIN=$PWD/target/release/rdsh node scripts/bench-worker-git.mjs
+```
+
+The script fails when the requested native binary is not selected, so a
+JavaScript fallback is never reported as a native measurement. It also compares
+each operation against a budget: the native median may exceed the JavaScript
+median by at most 20 ms. The budget is absolute rather than a ratio because
+`dirtyPaths` is one `git status` (about 4-5 ms of work) and the bridge adds a
+fixed process hop; a 1.2x target would demand sub-millisecond behavior. The
+multi-Git operations are expected to be at or below the baseline.
+
+Measured on Linux x64 (Node 22.23.1, 128 tracked / 8 dirty files, median of 7
+alternating pairs). The fix replaced the `Child::try_wait` sleep-poll in
+`run_bounded` with a bounded blocking wait, which had quantised every Git call
+to the platform timer tick (the 15.6 ms Windows default):
+
+| operation | JS (ms) | native before (ms) | native after (ms) |
+| --- | ---: | ---: | ---: |
+| repository | 8.21 | 15.22 | 10.05 |
+| sourceSnapshot | 13.54 | 15.19 | 9.66 |
+| dirtyPaths | 5.04 | 9.64 | 8.32 |
+| observeWorktree | 25.22 | 31.77 | 14.35 |
+
+Raw runs and the fallback rejection are in
+[`docs/evidence/worker-git-benchmark-586/`](evidence/worker-git-benchmark-586/README.md).
+The Windows `dirtyPaths` regression in issue #586 (51.36 ms native against
+37.93 ms JS) is the same fixed cost; the Windows bridge benchmark runs in
+`dashboard.yml` and fails the job when the native binary is not selected or the
+20 ms budget is exceeded.
+
 ## Integration and verification
 
 This CLI grants no merge/push authority and has no cleanup operation. Run the
