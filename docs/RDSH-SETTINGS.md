@@ -1,6 +1,6 @@
 # rdsh の設定画面
 
-DSH の「設定」を開き、左のメニューから「rdsh」を選ぶと、rdsh の設定を変えられます。
+DSH の「設定」を開き、左のメニューから「rdsh」を選ぶと、rdsh の設定を変更できます。
 
 ## できること
 
@@ -12,9 +12,9 @@ DSH の「設定」を開き、左のメニューから「rdsh」を選ぶと、
 
 ## 開き方
 
-1. DSH の左下「設定」を開く
+1. DSH の左下にある「設定」を開く
 2. 左メニューの「rdsh」を押す（見えないときは下へスクロール）
-3. 変えたら「保存する」を押す
+3. 変更したら「保存する」を押す
 
 ## 入っていないとき
 
@@ -22,22 +22,22 @@ DSH の「設定」を開き、左のメニューから「rdsh」を選ぶと、
 PROFILE=web ./plugins/install.sh
 ```
 
-で入ります。`headless` の場合は `PROFILE=headless`（初期値）で同じです。
+でインストールできます。`headless` の場合も `PROFILE=headless`（初期値）で同様です。
 
 ## 表示言語を日本語にする
 
-言語パックに対応したDSHでは、同梱の `rdsh-settings` が日本語を登録します。
+言語パックに対応した DSH では、同梱の `rdsh-settings` が日本語を登録します。
 Settings → General → Language で **日本語** を選ぶと、設定画面の一般項目と共通操作が日本語になります。
 翻訳のない項目は英語で表示されます。画面全体の翻訳ではありません。
 
-ローカルのWeb UIでは、選択した言語はDSHの設定として保存され、再起動後も反映されます。
-DSHが非ループバックのページとして扱う接続では、DSHの仕様により言語の選択はそのページを開いている間だけ有効です。
-この選択は `rdsh.json` の設定とは別です。
+ローカルの Web UI では、選択した言語は DSH の設定として保存され、再起動後も反映されます。
+DSH が非ループバックのページとして扱う接続では、DSH の仕様により言語の選択はそのページを開いている間だけ有効です。
+この選択は `rdsh.json` の設定とは独立しています。
 
-日本語が表示されない場合は、言語パックAPI（`locale.addLanguage`）に対応したDSHへ更新し、
+日本語が表示されない場合は、言語パック API（`locale.addLanguage`）に対応した DSH へ更新し、
 同梱プラグインを入れ直して画面を再読み込みしてください。
-旧DSHでは従来の言語メニューとrdsh設定を引き続き使えます。
-別のプラグインがすでに日本語を登録している場合は、そのプラグインの翻訳を使います。
+旧 DSH では従来の言語メニューと rdsh 設定を引き続き利用できます。
+別のプラグインがすでに日本語を登録している場合は、そのプラグインの翻訳が適用されます。
 
 ## コマンドから見る
 
@@ -66,11 +66,11 @@ rdsh context status   # 有効化後に記憶の状態を見る
 ```
 
 設定は `$DSH_HOME/rdsh.json` に保存され、コマンドと画面で共有されます。
-旧 `rdsh-context.json` は `rdsh.json` に context がないときだけ読みます。
+旧 `rdsh-context.json` は、`rdsh.json` に context が存在しない場合のみ読み込まれます。
 
-`general.language` は `auto`、`en`、`zh-CN`、`ja` のいずれかです。CLI と独立ダッシュボードの `auto` は最初の空でないロケール環境変数を使い、未設定・未対応なら英語になります。DSH 内の rdsh 設定プラグインでは `auto` がブラウザーの言語に従います。優先順は CLI の `--language`、`RDSH_LANG`、この設定、`LC_ALL`、`LC_MESSAGES`、`LANG` です。`general.language` を明示して不正な値にした設定ファイルは、通常の設定破損と同じく停止して保持します。
+`general.language` は `auto`、`en`、`zh-CN`、`ja` のいずれかです。CLI と独立ダッシュボードにおける `auto` は、空でない最初のロケール環境変数を使用し、未設定または未対応の場合は英語になります。DSH 内の rdsh 設定プラグインでは `auto` はブラウザーの言語設定に従います。優先順位は CLI の `--language`、`RDSH_LANG`、本設定、`LC_ALL`、`LC_MESSAGES`、`LANG` の順です。`general.language` に明示的に不正な値を指定した設定ファイルは、通常の設定破損時と同様に処理を停止し、ファイルを保持します。
 
-`settings init --force` は破損した設定の復旧用です。設定を使わない `task-outcomes` と `subagents plan` も設定ファイルを読み込まず、明示した `--language`、`RDSH_LANG`、OS のロケール環境変数の順に言語を解決します。これらの JSON コマンドは設定ファイルを変更しません。他のコマンドは設定が破損していると停止し、元のファイルを保持します。
+`settings init --force` は破損した設定の復旧用です。設定を使用しない `task-outcomes` と `subagents plan` も設定ファイルを読み込まず、明示された `--language`、`RDSH_LANG`、OS のロケール環境変数の順に言語を解決します。これらの JSON コマンドは設定ファイルを変更しません。その他のコマンドは、設定が破損している場合は処理を停止し、元のファイルを保持します。
 
 ローカル状態画面とWeb検索のオン／オフは `setup --web` のExtras、または
 `rdsh settings set extras.enable serve,search-web` で変更します。
@@ -88,7 +88,7 @@ rdsh context status   # 有効化後に記憶の状態を見る
 
 | id | 既定 | 内容 |
 | --- | --- | --- |
-| discord | on | Discord Rich Presence（DSH Web が動いているときだけ表示） |
+| discord | on | Discord Rich Presence（DSH Web の動作時のみ表示） |
 | update_check | on | 更新確認と更新バナーの表示 |
 | update_notifications | on | 更新が見つかったときの通知 |
 | sound | on | DSH サウンド通知の導入（不要ならインストーラの SOUND=0／`features.sound=false`） |
@@ -99,23 +99,23 @@ rdsh context status   # 有効化後に記憶の状態を見る
 | models_sync | on | 毎日の自動更新でプロバイダのモデルカタログも更新する（`RDSH_MODELS_SYNC=0` で1回だけスキップ） |
 | compute | off | 常駐 pure-compute worker 連携（RDSH_COMPUTE=1） |
 | budget_guard | on | 予算ガードフック |
-| answer_guard | on | 本文が空（reasoning のみ）でターンが閉じるとき、再出力を1回だけ促す |
-| agent_tool_sandbox | off | 委譲したエージェントツールを --share-file の範囲に限定（ネットワーク・ホスト書き込みなし） |
+| answer_guard | on | 本文が空（reasoning のみ）でターンが終了する際、再出力を1回だけ促す |
+| agent_tool_sandbox | off | 委譲したエージェントツールの動作を --share-file の範囲に限定（ネットワーク・ホストへの書き込みなし） |
 | release_probe | off | リリース検証プローブ（環境変数があるときだけ実行） |
 | setup_web | on | rdsh setup --web |
 | sessions_token_cache | on | セッションの token サイズキャッシュ |
 | node_compile_cache | on | Node コンパイルキャッシュ |
 | slim_lazy_plugins | on | slim 時にプラグインを遅延読み込み |
-| slim_disable_voice | on | slim 時に DSH の音声機能を止める |
-| slim_disable_auto_review | on | slim 時に自動レビューを止める |
+| slim_disable_voice | on | slim 時に DSH の音声機能を無効化 |
+| slim_disable_auto_review | on | slim 時に自動レビューを無効化 |
 
-なお、`rdsh settings set features.<id> true|false` でも同じように設定できます。
+なお、`rdsh settings set features.<id> true|false` でも同様に設定できます。
 
 ## 機能スイッチの効き方
 
-- ネイティブ側（`serve` / `search-web` / `context_engine` / `setup_web`）は、無効なコマンドを実行すると理由と有効化方法を表示して終了します。
+- ネイティブ側（`serve` / `search-web` / `context_engine` / `setup_web`）は、無効化されているコマンドを実行すると理由と有効化方法を表示して終了します。
 - slim のヒント（`slim_lazy_plugins` / `slim_disable_voice` / `slim_disable_auto_review`）と `node_compile_cache` は、委譲して起動する DSH プロセスの環境変数に反映されます。
-- プラグイン側（`discord` / `sound` / `gitview` / `compute` / `budget_guard` / `answer_guard` / `release_probe` / `update_check` / `update_notifications`）は `rdsh.json` を読み込んで動作を停止します。DSH を再起動すると反映されます。
+- プラグイン側（`discord` / `sound` / `gitview` / `compute` / `budget_guard` / `answer_guard` / `release_probe` / `update_check` / `update_notifications`）は、`rdsh.json` を読み込んで動作を停止します。DSH を再起動すると反映されます。
 
 ## context engine（実験的、既定OFF）
 
@@ -130,8 +130,8 @@ open_tasks > retrieved の順で、予算超過時は retrieved から削りま�
 
 ## context の自動注入（inject）
 
-`rdsh context inject` は DSH の `UserPromptSubmit` フックとして毎ターンの文脈を注入します。
-組み立てに失敗してもプロンプトを止めない fail-open です。
+`rdsh context inject` は、DSH の `UserPromptSubmit` フックとして毎ターンのコンテキストを注入します。
+組み立てに失敗してもプロンプトの実行を中断しない fail-open 設計です。
 
 ```sh
 rdsh context hook install          # $DSH_HOME/hooks.json に追記（冪等、バックアップ自動作成）
@@ -142,7 +142,7 @@ rdsh context hook remove           # 追加した1件だけを消す
 | 設定キー | 既定 | 範囲 | 意味 |
 | --- | --- | --- | --- |
 | `context.inject_budget` | 1200 | 200-8000 | 1回の注入に使うトークン予算 |
-| `context.inject_deadline_ms` | 1200 | 100-10000 | 組み立ての期限。超えたら検索と依存閉包を省略 |
+| `context.inject_deadline_ms` | 1200 | 100-10000 | 組み立ての期限。超過した場合は検索と依存閉包を省略 |
 | `context.inject_sessions` | true | | 直近セッションの継承を含める |
 | `context.inject_session_count` | 2 | 0-10 | 継承するセッション数 |
 
@@ -165,7 +165,7 @@ rdsh context forget <id>
 
 ## 依存グラフ（deps）
 
-`dep_graph` は既定 ON です（読み取り専用の解析コマンドのため）。
+`dep_graph` は既定で ON です（読み取り専用の解析コマンドであるため）。
 
 ```sh
 rdsh deps build --json
@@ -173,4 +173,4 @@ rdsh deps query engine_score --json
 rdsh deps impact src/core.rs --depth 3 --json
 ```
 
-索引は `$DSH_HOME/rdsh-index/<root-key>.json`。size+mtime が同じファイルは再解析しません。
+インデックスの保存先は `$DSH_HOME/rdsh-index/<root-key>.json` です。size+mtime が同一のファイルは再解析しません。
