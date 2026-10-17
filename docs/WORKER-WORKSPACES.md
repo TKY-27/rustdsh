@@ -116,14 +116,15 @@ The script fails when the requested native binary is not selected, so a
 JavaScript fallback is never reported as a native measurement. It also compares
 each operation against a budget: the native median may exceed the JavaScript
 median by at most 20 ms. The budget is absolute rather than a ratio because
-`dirtyPaths` is one `git status` (about 4-5 ms of work) and the bridge adds a
-fixed process hop; a 1.2x target would demand sub-millisecond behavior. The
-multi-Git operations are expected to be at or below the baseline.
+`dirtyPaths` is one `git status` and the measured Windows cost of starting the
+extra bridge process is about 13 ms; a 1.2x target on a ~30 ms operation would
+leave no room for that process hop. The multi-Git operations are expected to be
+at or below the baseline.
 
 Measured on Linux x64 (Node 22.23.1, 128 tracked / 8 dirty files, median of 7
 alternating pairs). The fix replaced the `Child::try_wait` sleep-poll in
-`run_bounded` with a bounded blocking wait, which had quantised every Git call
-to the platform timer tick (the 15.6 ms Windows default):
+`run_bounded` with a bounded blocking wait, which removed the per-Git timer
+quantisation:
 
 | operation | JS (ms) | native before (ms) | native after (ms) |
 | --- | ---: | ---: | ---: |
@@ -132,12 +133,28 @@ to the platform timer tick (the 15.6 ms Windows default):
 | dirtyPaths | 5.04 | 9.64 | 8.32 |
 | observeWorktree | 25.22 | 31.77 | 14.35 |
 
-Raw runs and the fallback rejection are in
-[`docs/evidence/worker-git-benchmark-586/`](evidence/worker-git-benchmark-586/README.md).
-The Windows `dirtyPaths` regression in issue #586 (51.36 ms native against
-37.93 ms JS) is the same fixed cost; the Windows bridge benchmark runs in
-`dashboard.yml` and fails the job when the native binary is not selected or the
-20 ms budget is exceeded.
+The Windows dashboard job runs the same benchmark on every pull request
+(win32-x64 runner, Node 22.23.3). It selects the native bridge and passes the
+budget:
+
+| operation | JS (ms) | native (ms) | native - JS (ms) |
+| --- | ---: | ---: | ---: |
+| repository | 119.20 | 73.13 | -46.07 |
+| sourceSnapshot | 150.76 | 76.46 | -74.30 |
+| dirtyPaths | 30.45 | 43.26 | 12.81 |
+| observeWorktree | 330.61 | 165.83 | -164.79 |
+
+`dirtyPaths` stays about 1.4x the JavaScript baseline. It is a single
+`git status`, so the Windows cost of starting the extra `rdsh` bridge process
+is not amortised, and the sleep-poll fix does not remove that process hop. The
+bridge is kept as the default on Windows: it is about twice as fast on the
+multi-Git operations, and selecting JavaScript for `dirtyPaths` alone would
+drop process-tree containment and the single code path for a 13 ms difference
+on one operation. The 20 ms budget bounds that residual. Raw runs and the
+fallback rejection are in
+[`docs/evidence/worker-git-benchmark-586/`](evidence/worker-git-benchmark-586/README.md);
+the Windows bridge benchmark in `dashboard.yml` fails the job when the native
+binary is not selected or the 20 ms budget is exceeded.
 
 ## Integration and verification
 
