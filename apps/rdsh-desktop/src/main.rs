@@ -85,6 +85,39 @@ fn main() {
         return;
     }
 
+    if args.iter().any(|arg| arg == "--select-model") {
+        let session = args
+            .iter()
+            .position(|arg| arg == "--session")
+            .and_then(|index| args.get(index + 1))
+            .map(String::as_str)
+            .unwrap_or_default();
+        let provider = args
+            .iter()
+            .position(|arg| arg == "--provider")
+            .and_then(|index| args.get(index + 1))
+            .map(String::as_str)
+            .unwrap_or_default();
+        let model = args
+            .iter()
+            .position(|arg| arg == "--model")
+            .and_then(|index| args.get(index + 1))
+            .map(String::as_str)
+            .unwrap_or_default();
+        if session.is_empty() || provider.is_empty() || model.is_empty() {
+            eprintln!("[rdsh-desktop] --select-model needs --session --provider --model");
+            std::process::exit(2);
+        }
+        match select_model(session, provider, model) {
+            Ok(report) => println!("{report}"),
+            Err(error) => {
+                eprintln!("[rdsh-desktop] select-model failed: {error:#}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+
     if args.iter().any(|arg| arg == "--stop-host") {
         match host::stop_cached() {
             Ok(message) => println!("{message}"),
@@ -182,6 +215,15 @@ fn main() {
         ..Default::default()
     };
 
+    // Fail with a clear message instead of a panic when started outside a
+    // graphical session (for example from a service or a plain SSH shell).
+    if std::env::var_os("WAYLAND_DISPLAY").is_none() && std::env::var_os("DISPLAY").is_none() {
+        eprintln!(
+            "[rdsh-desktop] no graphical session: set WAYLAND_DISPLAY or DISPLAY, or use a headless mode such as --dump-ui"
+        );
+        std::process::exit(1);
+    }
+
     // GPUI reports renderer and window problems through `log`; without a
     // subscriber a failed surface looks like an idle process.
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
@@ -209,6 +251,28 @@ fn main() {
 
 
 
+
+
+/// Switch the model of one conversation (used by tests and by the operator).
+fn select_model(session: &str, provider: &str, model: &str) -> anyhow::Result<String> {
+    let mut chat = app::Chat::connect(|_step| {})?;
+    chat.switch_model(session, provider, model)?;
+    let value = chat
+        .projections(session)
+        .map(|value| {
+            value
+                .get("modelSelection")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null)
+        })
+        .unwrap_or(serde_json::Value::Null);
+    Ok(serde_json::to_string_pretty(&serde_json::json!({
+        "session": session,
+        "provider": provider,
+        "model": model,
+        "modelSelection": value,
+    }))?)
+}
 
 /// Verify that conversation titles resolve (the window fills them in the
 /// background; this mode does the same work sequentially).
@@ -384,6 +448,32 @@ fn dump_ui() -> anyhow::Result<String> {
             "questions": session.questions,
         })),
         "messages": chat.messages.len(),
+        // Model picker data: one entry per provider with every model id, plus
+        // the order the picker renders (current provider first).
+        "modelGroups": chat
+            .catalog
+            .iter()
+            .map(|provider| serde_json::json!({
+                "id": provider.id,
+                "name": provider.name,
+                "models": provider
+                    .models
+                    .iter()
+                    .map(|model| model.id.clone())
+                    .collect::<Vec<_>>(),
+            }))
+            .collect::<Vec<_>>(),
+        "modelOrder": app::order_providers(
+            &chat.catalog,
+            current
+                .as_ref()
+                .map(|session| session.model.provider.as_str())
+                .unwrap_or_default(),
+        )
+        .iter()
+        .map(|provider| provider.id.clone())
+        .collect::<Vec<_>>(),
+        "currentModel": current.as_ref().map(|session| app::composer_model_label(&session.model, &chat.catalog)),
     });
     Ok(serde_json::to_string_pretty(&report)?)
 }

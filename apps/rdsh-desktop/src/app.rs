@@ -43,11 +43,21 @@ impl Model {
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct CatalogEntry {
-    pub provider: String,
-    pub model: String,
-    pub label: String,
+/// One selectable model inside a provider group. `id` is what
+/// `session/selectModel` takes; `name` is the display label.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CatalogModel {
+    pub id: String,
+    pub name: String,
+}
+
+/// One provider group from `session/modelCatalog`: the provider id, its display
+/// name (the group's `name` field) and every model it offers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CatalogProvider {
+    pub id: String,
+    pub name: String,
+    pub models: Vec<CatalogModel>,
 }
 
 #[derive(Clone, Debug)]
@@ -91,7 +101,7 @@ pub struct Chat {
     pub sessions: Vec<Session>,
     pub selected: Option<usize>,
     pub messages: Vec<Message>,
-    pub catalog: Vec<CatalogEntry>,
+    pub catalog: Vec<CatalogProvider>,
     pub reused: bool,
     pub startup_ms: u128,
 }
@@ -139,42 +149,11 @@ impl Chat {
         self.api.cookie()
     }
 
-    fn load_catalog(&self) -> Vec<CatalogEntry> {
-        let Ok(value) = self.api.model_catalog() else {
-            return Vec::new();
-        };
-        let mut entries = Vec::new();
-        if let Some(groups) = value.get("groups").and_then(Value::as_array) {
-            for group in groups {
-                let provider = group
-                    .get("id")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string();
-                if let Some(models) = group.get("models").and_then(Value::as_array) {
-                    for model in models {
-                        let id = model
-                            .get("id")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default()
-                            .to_string();
-                        let name = model
-                            .get("name")
-                            .and_then(Value::as_str)
-                            .unwrap_or(&id)
-                            .to_string();
-                        if !id.is_empty() {
-                            entries.push(CatalogEntry {
-                                provider: provider.clone(),
-                                model: id,
-                                label: format!("{name} · {provider}"),
-                            });
-                        }
-                    }
-                }
-            }
+    fn load_catalog(&self) -> Vec<CatalogProvider> {
+        match self.api.model_catalog() {
+            Ok(value) => providers_from_catalog(&value),
+            Err(_) => Vec::new(),
         }
-        entries
     }
 
     fn reload_sessions(&mut self) -> anyhow::Result<()> {
@@ -407,6 +386,19 @@ impl Chat {
         self.selected = Some(0);
         self.messages.clear();
         Ok(id)
+    }
+
+    pub fn switch_model(&mut self, session_id: &str, provider: &str, model: &str) -> anyhow::Result<()> {
+        self.api.unary(
+            "session/selectModel",
+            serde_json::json!({"request": {"sessionId": session_id, "provider": provider, "model": model}}),
+        )?;
+        Ok(())
+    }
+
+    /// Current projection values for one conversation.
+    pub fn projections(&self, session_id: &str) -> anyhow::Result<Value> {
+        self.api.unary("session/projections", serde_json::json!({"sessionId": session_id}))
     }
 
     pub fn approve(
@@ -728,13 +720,137 @@ pub fn project_path(cwd: &str) -> String {
     }
 }
 
+/// Parse a `session/modelCatalog` value into provider groups. Every group with
+/// an id is kept in catalog order and every model with an id is kept; a missing
+/// `name` falls back to the id so nothing is dropped from the picker.
+pub fn providers_from_catalog(value: &Value) -> Vec<CatalogProvider> {
+    let mut providers = Vec::new();
+    let Some(groups) = value.get("groups").and_then(Value::as_array) else {
+        return providers;
+    };
+    for group in groups {
+        let id = group.get("id").and_then(Value::as_str).unwrap_or_default();
+        if id.is_empty() {
+            continue;
+        }
+        let name = group
+            .get("name")
+            .and_then(Value::as_str)
+            .filter(|name| !name.is_empty())
+            .unwrap_or(id)
+            .to_string();
+        let mut models = Vec::new();
+        if let Some(entries) = group.get("models").and_then(Value::as_array) {
+            for entry in entries {
+                let model_id = entry.get("id").and_then(Value::as_str).unwrap_or_default();
+                if model_id.is_empty() {
+                    continue;
+                }
+                let model_name = entry
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or(model_id)
+                    .to_string();
+                models.push(CatalogModel {
+                    id: model_id.to_string(),
+                    name: model_name,
+                });
+            }
+        }
+        providers.push(CatalogProvider {
+            id: id.to_string(),
+            name,
+            models,
+        });
+    }
+    providers
+}
+
+/// Order providers for the picker: the provider that owns the current selection
+/// comes first, every other provider keeps its catalog order and no model is
+/// dropped. An unknown current provider leaves the catalog order untouched.
+pub fn order_providers(
+    providers: &[CatalogProvider],
+    current_provider: &str,
+) -> Vec<CatalogProvider> {
+    let mut ordered = providers.to_vec();
+    if let Some(index) = ordered
+        .iter()
+        .position(|provider| provider.id == current_provider)
+    {
+        let current = ordered.remove(index);
+        ordered.insert(0, current);
+    }
+    ordered
+}
+
+/// The catalog entry for one provider/model pair, if the catalog lists it.
+pub fn catalog_model<'a>(
+    providers: &'a [CatalogProvider],
+    provider: &str,
+    model: &str,
+) -> Option<&'a CatalogModel> {
+    providers
+        .iter()
+        .find(|entry| entry.id == provider)?
+        .models
+        .iter()
+        .find(|entry| entry.id == model)
+}
+
+/// Composer text for the current selection. The catalog display name is used
+/// when the catalog knows the pair; a selection the catalog does not list is
+/// still shown, with a note saying so. An empty catalog means "unknown", not
+/// "absent", so it does not add the note.
+pub fn composer_model_label(model: &Model, providers: &[CatalogProvider]) -> String {
+    if model.is_empty() {
+        return String::new();
+    }
+    if providers.is_empty() {
+        return model.label();
+    }
+    match catalog_model(providers, &model.provider, &model.model) {
+        Some(entry) => {
+            let name = if entry.name.is_empty() {
+                short_model(&model.model)
+            } else {
+                entry.name.clone()
+            };
+            if model.provider.is_empty() {
+                name
+            } else {
+                format!("{} · {}", name, model.provider)
+            }
+        }
+        None => format!("{}（カタログにありません）", model.label()),
+    }
+}
+
 fn short_model(model: &str) -> String {
     model.rsplit('/').next().unwrap_or(model).to_string()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{project_label, project_path, short_model, Model};
+    use super::{
+        composer_model_label, order_providers, project_label, project_path,
+        providers_from_catalog, short_model, CatalogModel, CatalogProvider, Model,
+    };
+
+    fn provider(id: &str, name: &str, models: &[&str]) -> CatalogProvider {
+        CatalogProvider {
+            id: id.to_string(),
+            name: name.to_string(),
+            models: models
+                .iter()
+                .map(|model| CatalogModel {
+                    id: model.to_string(),
+                    name: model.to_string(),
+                })
+                .collect(),
+        }
+    }
 
     #[test]
     fn strips_checkout_hashes_from_folder_names() {
@@ -776,6 +892,127 @@ mod tests {
     #[test]
     fn empty_model_is_reported_as_empty() {
         assert!(Model::default().is_empty());
+    }
+
+    #[test]
+    fn catalog_groups_keep_every_provider_and_model() {
+        let value = serde_json::json!({
+            "groups": [
+                {
+                    "id": "deepseek-official",
+                    "name": "DeepSeek",
+                    "models": [
+                        { "id": "deepseek-flash", "name": "DeepSeek-V41-Flash" },
+                        { "id": "deepseek-v4-pro", "name": "DeepSeek-V4-Pro" }
+                    ]
+                },
+                {
+                    // No group name: the provider id is the display name.
+                    "id": "opencode-go",
+                    "models": [ { "id": "minimax-m3" } ]
+                },
+                {
+                    "id": "commandcode-goat",
+                    "name": "CommandCode Goat",
+                    "models": [
+                        { "id": "deepseek/deepseek-v4.1-flash", "name": "DeepSeek V4.1 Flash" },
+                        { "id": "claude-sonnet-5", "name": "Claude Sonnet 5" }
+                    ]
+                }
+            ]
+        });
+        let providers = providers_from_catalog(&value);
+        assert_eq!(providers.len(), 3, "one section per provider");
+        assert_eq!(providers[0].id, "deepseek-official");
+        assert_eq!(providers[0].name, "DeepSeek");
+        assert_eq!(providers[1].name, "opencode-go", "missing name falls back to id");
+        assert_eq!(providers[1].models[0].name, "minimax-m3", "missing model name falls back to id");
+        assert_eq!(providers[2].id, "commandcode-goat");
+        assert_eq!(providers[2].name, "CommandCode Goat");
+        assert_eq!(
+            providers[2].models[0].id,
+            "deepseek/deepseek-v4.1-flash",
+            "the commandcode-goat section is not truncated"
+        );
+        let total: usize = providers.iter().map(|provider| provider.models.len()).sum();
+        assert_eq!(total, 5, "every model is retained");
+    }
+
+    #[test]
+    fn ordering_puts_the_current_provider_first_and_keeps_the_rest_stable() {
+        let providers = vec![
+            provider("deepseek-official", "DeepSeek", &["deepseek-flash", "deepseek-v4-pro"]),
+            provider("openai-codex", "Codex", &["gpt-5.5"]),
+            provider("opencode-go", "opencode-go", &["minimax-m3"]),
+            provider("opencode-free", "opencode-free", &["opencode/glm-5.3-flash-free"]),
+            provider(
+                "commandcode-goat",
+                "CommandCode Goat",
+                &["deepseek/deepseek-v4.1-flash", "claude-sonnet-5"],
+            ),
+        ];
+
+        let ordered = order_providers(&providers, "commandcode-goat");
+        let ids: Vec<&str> = ordered.iter().map(|provider| provider.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            [
+                "commandcode-goat",
+                "deepseek-official",
+                "openai-codex",
+                "opencode-go",
+                "opencode-free",
+            ],
+            "current provider first, the rest stable"
+        );
+        assert_eq!(
+            ordered[0].models[0].id, "deepseek/deepseek-v4.1-flash",
+            "the current provider keeps all of its models"
+        );
+        let total: usize = ordered.iter().map(|provider| provider.models.len()).sum();
+        assert_eq!(total, 7, "no model is dropped while reordering");
+
+        let untouched: Vec<String> = order_providers(&providers, "not-installed")
+            .into_iter()
+            .map(|provider| provider.id)
+            .collect();
+        assert_eq!(
+            untouched,
+            providers.iter().map(|provider| provider.id.clone()).collect::<Vec<_>>(),
+            "an unknown current provider leaves the catalog order alone"
+        );
+    }
+
+    #[test]
+    fn composer_says_when_the_current_model_is_not_in_the_catalog() {
+        let providers = vec![provider(
+            "commandcode-goat",
+            "CommandCode Goat",
+            &["deepseek/deepseek-v4.1-flash"],
+        )];
+        let known = Model {
+            provider: "commandcode-goat".to_string(),
+            model: "deepseek/deepseek-v4.1-flash".to_string(),
+        };
+        assert_eq!(
+            composer_model_label(&known, &providers),
+            "deepseek/deepseek-v4.1-flash · commandcode-goat"
+        );
+
+        let unknown = Model {
+            provider: "commandcode-goat".to_string(),
+            model: "deepseek/deepseek-v4.1-flash-ghost".to_string(),
+        };
+        assert_eq!(
+            composer_model_label(&unknown, &providers),
+            "deepseek-v4.1-flash-ghost · commandcode-goat（カタログにありません）"
+        );
+
+        // An empty catalog is "unknown", not "absent".
+        assert_eq!(
+            composer_model_label(&unknown, &[]),
+            "deepseek-v4.1-flash-ghost · commandcode-goat"
+        );
     }
 }
 
@@ -821,6 +1058,7 @@ pub struct DesktopApp {
     picker: bool,
     sidebar_scroll: ScrollHandle,
     timeline_scroll: ScrollHandle,
+    model_scroll: ScrollHandle,
 }
 
 impl DesktopApp {
@@ -900,6 +1138,7 @@ impl DesktopApp {
             picker: false,
             sidebar_scroll: ScrollHandle::new(),
             timeline_scroll: ScrollHandle::new(),
+            model_scroll: ScrollHandle::new(),
         }
     }
 
@@ -1405,6 +1644,22 @@ impl Render for DesktopApp {
                             .gap(px(10.))
                             .text_size(theme::micro_size())
                             .text_color(theme::tertiary())
+                            .when(
+                                current
+                                    .as_ref()
+                                    .map(|session| !session.model.is_empty())
+                                    .unwrap_or(false),
+                                |element| {
+                                    element.child(
+                                        current
+                                            .as_ref()
+                                            .map(|session| {
+                                                composer_model_label(&session.model, &catalog)
+                                            })
+                                            .unwrap_or_default(),
+                                    )
+                                },
+                            )
                             .child(
                                 current
                                     .as_ref()
@@ -1643,41 +1898,101 @@ impl Render for DesktopApp {
         });
 
         let picker_panel = picker.then(|| {
+            let current_provider = current
+                .as_ref()
+                .map(|session| session.model.provider.clone())
+                .unwrap_or_default();
+            let current_model = current
+                .as_ref()
+                .map(|session| session.model.model.clone())
+                .unwrap_or_default();
             let mut list = div().flex().flex_col().gap(px(2.)).px(px(8.)).py(px(6.));
-            for entry in catalog.iter().take(60) {
-                let provider = entry.provider.clone();
-                let model = entry.model.clone();
-                let label = entry.label.clone();
+            if catalog.is_empty() {
                 list = list.child(
                     div()
-                        .id(SharedString::from(format!("model-{provider}/{model}")))
-                        .h(px(28.))
                         .px(px(10.))
-                        .flex()
-                        .items_center()
-                        .rounded(theme::radius_sm())
-                        .cursor_pointer()
-                        .hover(|style| style.bg(rgb(0xf1f2f5)))
+                        .py(px(6.))
                         .text_size(theme::micro_size())
-                        .text_color(theme::label())
-                        .on_click(cx.listener(move |this, _event, _window, cx| {
-                            if let Some(chat) = this.chat.as_mut() {
-                                match chat.select_model(&provider, &model) {
-                                    Ok(()) => this.status = format!("モデルを変更: {model}"),
-                                    Err(error) => this.status = format!("変更できません: {error}"),
-                                }
-                            }
-                            this.picker = false;
-                            cx.notify();
-                        }))
-                        .child(label),
+                        .text_color(theme::tertiary())
+                        .child("カタログを読み込めませんでした"),
                 );
             }
+            // One section per provider; the current provider is first so its
+            // model list is visible without scrolling.
+            for provider in order_providers(&catalog, &current_provider) {
+                list = list.child(
+                    div()
+                        .px(px(10.))
+                        .pt(px(8.))
+                        .pb(px(2.))
+                        .text_size(theme::micro_size())
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(theme::tertiary())
+                        .child(provider.name.clone()),
+                );
+                for entry in provider.models {
+                    let provider_id = provider.id.clone();
+                    let model_id = entry.id.clone();
+                    let label = entry.name.clone();
+                    let active = provider_id == current_provider && model_id == current_model;
+                    list = list.child(
+                        div()
+                            .id(SharedString::from(format!("model-{provider_id}/{model_id}")))
+                            .h(px(28.))
+                            .px(px(10.))
+                            .flex()
+                            .items_center()
+                            .rounded(theme::radius_sm())
+                            .cursor_pointer()
+                            .when(active, |element| element.bg(rgb(0xeef3fd)))
+                            .hover(|style| style.bg(rgb(0xf1f2f5)))
+                            .text_size(theme::micro_size())
+                            .text_color(if active {
+                                theme::accent()
+                            } else {
+                                theme::label()
+                            })
+                            .when(active, |element| {
+                                element.font_weight(FontWeight::SEMIBOLD)
+                            })
+                            .on_click(cx.listener(move |this, _event, _window, cx| {
+                                let mut switched = false;
+                                if let Some(chat) = this.chat.as_mut() {
+                                    match chat.select_model(&provider_id, &model_id) {
+                                        Ok(()) => {
+                                            this.status = format!("モデルを変更: {model_id}");
+                                            switched = true;
+                                        }
+                                        Err(error) => {
+                                            let text = error.to_string();
+                                            this.status = if text.contains("model-unavailable") {
+                                                format!("{model_id} はこの会話では利用できません")
+                                            } else {
+                                                format!("変更できません: {text}")
+                                            };
+                                        }
+                                    }
+                                }
+                                // Close on success; keep the panel open after a
+                                // rejection so another model can be picked.
+                                this.picker = !switched;
+                                cx.notify();
+                            }))
+                            .child(if active {
+                                format!("● {label}")
+                            } else {
+                                format!("   {label}")
+                            }),
+                    );
+                }
+            }
             div()
+                .id("model-picker")
                 .mx(px(32.))
                 .mb(px(8.))
-                .max_h(px(260.))
-                .overflow_hidden()
+                .max_h(px(320.))
+                .overflow_y_scroll()
+                .track_scroll(&self.model_scroll)
                 .rounded(theme::radius_lg())
                 .bg(theme::page())
                 .border_1()
@@ -1759,7 +2074,7 @@ impl Render for DesktopApp {
                             .child(
                                 current
                                     .as_ref()
-                                    .map(|session| session.model.label())
+                                    .map(|session| composer_model_label(&session.model, &catalog))
                                     .filter(|label| !label.is_empty())
                                     .unwrap_or_else(|| "モデルを選択".to_string()),
                             ),
