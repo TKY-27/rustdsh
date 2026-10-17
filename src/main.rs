@@ -2582,7 +2582,8 @@ fn feature_summary(locale: locale::Locale, def: &rdsh_config::FeatureDef) -> &'s
         return def.summary;
     }
     let (chinese, japanese) = match def.id {
-        "discord" => ("Discord Rich Presence（需要运行 DSH Web 服务）", "Discord Rich Presence（DSH Web サービスの起動が必要）"),
+        "discord" => ("Discord Rich Presence（默认关闭，需要运行 DSH Web 服务）", "Discord Rich Presence（既定OFF。DSH Web サービスの起動が必要）"),
+        "telemetry" => ("允许委派的 DSH 发送会话遥测（OpenTelemetry）", "委譲先 DSH のセッション telemetry 送信を許可（OpenTelemetry）"),
         "update_check" => ("检查 rustdsh 更新并显示更新横幅", "rustdsh の更新を確認して更新バナーを表示"),
         "update_notifications" => ("发现更新时发送通知", "更新が見つかったときに通知する"),
         "sound" => ("允许安装 DSH 声音通知（installer SOUND=1）", "DSH サウンド通知の導入を許可（installer SOUND=1）"),
