@@ -15,7 +15,8 @@ Format follows Keep a Changelog, versioning follows Semantic Versioning.
   `docs/PACKAGE-MANAGERS.md`. `scripts/update-packaging-manifests.py`
   regenerates every pinned value from `release-digests.tsv` and
   `release-digests-windows.tsv` and verifies them with `--check`, so the
-  manifests never drop out of sync with what the installers trust.
+  manifests never drop out of sync with what the installers trust
+  (#728).
 
 ## [0.6.0] - 2026-10-17
 
