@@ -2292,20 +2292,22 @@ fn print_guide(locale: crate::locale::Locale) {
         if need.state != "missing" {
             continue;
         }
-        let Some(key) = &need.api_key_env else {
+        let Some(key_env_name) = need.api_key_env.as_deref() else {
             continue;
         };
+        // The environment variable *name* is printed, never its value; the name
+        // is what the user has to set, so it is not sensitive.
         println!(
             "{}",
             localized_format!(
                 locale,
-                "[rdsh setup] profile {}: {}/{} needs key {}",
-                "[rdsh setup] 配置文件 {}：{}/{} 需要密钥 {}",
-                "[rdsh setup] プロファイル {}: {}/{} には鍵 {} が必要です",
+                "[rdsh setup] profile {}: {}/{} needs the environment variable {}",
+                "[rdsh setup] 配置文件 {}：{}/{} 需要设置环境变量 {}",
+                "[rdsh setup] プロファイル {}: {}/{} には環境変数 {} の設定が必要です",
                 need.profile,
                 need.provider,
                 need.model,
-                key
+                key_env_name
             )
         );
     }
