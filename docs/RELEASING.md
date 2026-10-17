@@ -27,16 +27,20 @@ Generation failure stops publication.
 
 ## Release cadence
 
-Ship small: a user-visible change that lands on `main` gets its own patch
-release instead of waiting for a milestone.
+Ship small: a change that lands on `main` goes out on its own instead of waiting
+for a milestone, and the version follows semantic versioning, so the bump is
+chosen from what users can do after the release.
 
-- **Patch `vX.Y.(Z+1)`** — the default. Any change users can see or run
-  differently: a fix, a CLI or UI behaviour change, a new flag, or an installer
-  change.
-- **Minor `vX.(Y+1).0`** — a coherent feature milestone, or a breaking change.
-  While the project is `0.x` there is no `1.0.0` yet, so breaking changes take a
-  minor bump, exactly as the existing `0.x` releases do.
-- **Major `v(X+1).0.0`** — `1.0.0` and later only.
+| Bump | When | Typical changes |
+| --- | --- | --- |
+| **patch** `vX.Y.(Z+1)` | The default. Nothing new for users to learn. | Bug fixes, documentation, dependency updates, internal improvements, small UX adjustments. |
+| **minor** `vX.(Y+1).0` | An important addition users notice. | A new command or feature, a new distribution channel, a change to a default users can see, security hardening users recognise. |
+| **major** `v(X+1).0.0` | A breaking change. | While the project is `0.x` there is no `1.0.0` yet, so a breaking change takes a minor bump exactly as the existing `0.x` releases do; the CHANGELOG entry and the release notes must still say so. |
+
+When in doubt, ask whether a user would recognise the change as a new feature:
+if yes, it is a minor. Leave one line in the release notes saying why that
+version was chosen; `docs/releases/vX.Y.Z.md` starts from the automatic
+decision, so keep or correct that line.
 
 Every release empties `[Unreleased]`: promote the whole section into the dated
 `## [X.Y.Z] - YYYY-MM-DD` entry, then start appending to a fresh, empty
@@ -47,7 +51,11 @@ notes.
 runs daily and, once `[Unreleased]` has content, pushes `release/vX.Y.Z-prep`
 with the version bump, the CHANGELOG promotion and a notes skeleton, then opens
 the preparation pull request (or, while Actions cannot create pull requests, an
-issue naming the branch and the next step). It never tags.
+issue naming the branch and the next step). It never tags. The bump is decided
+the same way as this table: a `### Added` section in `[Unreleased]`, or a
+merged pull request labelled `feature`, `enhancement` or `breaking` since the
+previous tag, is a minor; anything else is a patch. The decision and its reason
+are recorded in the preparation pull request.
 
 **Tag on the exact SHA whose required checks are green.** Create the annotated
 `vX.Y.Z` tag only after the preparation pull request is merged and that commit's
@@ -297,6 +305,17 @@ git diff release-digests.tsv release-digests-windows.tsv
 
 Review both updated ledgers before announcing the new stable channel. Their
 `latest` rows must name the release GitHub marks Latest.
+
+The package-manager manifests in `packaging/` pin the same release, so refresh
+them in the same follow-up and review the regenerated files:
+
+```sh
+python3 scripts/update-packaging-manifests.py --version vX.Y.Z
+python3 -m unittest discover -s tests -p 'test_release_packaging_manifests.py'
+```
+
+[docs/PACKAGE-MANAGERS.md](PACKAGE-MANAGERS.md) describes the Homebrew, Scoop
+and winget channels and what each manifest pins.
 
 Test README installation commands in a clean environment. Announcements use the
 published notes. Failed builds leave staged artifacts; failed uploads or verification

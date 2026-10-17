@@ -161,6 +161,36 @@ cd rustdsh
 | WSL | `./install.sh` inside distro | Auto-detects WSL. `install.ps1 -Wsl` installs in both environments. |
 | Windows (native) | `.\install.ps1` | Needs Rust and MSVC build tools (`winget install Rustlang.Rustup`). |
 
+### Package Managers (Homebrew / Scoop / winget)
+
+Advanced users on macOS and Windows can let a package manager own the installed
+`rdsh` binary. The manifests in [packaging/](packaging/README.md) pin the exact
+release archives and their SHA-256 values;
+[docs/PACKAGE-MANAGERS.md](docs/PACKAGE-MANAGERS.md) lists the install commands
+and the update procedure.
+
+**macOS (Homebrew)** — installs the Apple Silicon or Intel archive:
+
+```sh
+brew install --formula ./packaging/homebrew/rdsh.rb
+```
+
+**Windows (Scoop)**:
+
+```powershell
+scoop install https://raw.githubusercontent.com/jimoto-no-llm/rustdsh/main/packaging/scoop/rdsh.json
+```
+
+**Windows (winget)** — winget 1.6 or newer reads the three manifests directly;
+submitting them to `microsoft/winget-pkgs` stays a manual step:
+
+```powershell
+winget install --manifest .\packaging\winget
+```
+
+These channels track one release at a time, so a new tag is not served until
+`python3 scripts/update-packaging-manifests.py --version vX.Y.Z` refreshes them.
+
 ## Usage
 
 ### Running with `dsh` Compatibility
@@ -712,6 +742,7 @@ For startup, run `rdsh bench --n 5`. See
 | [docs/PROVIDERS.md](docs/PROVIDERS.md) | `rdsh provider`: HAI, Sarashina and home LLM server routes |
 | [docs/DESKTOP-INTEGRATION.md](docs/DESKTOP-INTEGRATION.md) | DeepSeek Harness Desktop (Electron) integration |
 | [docs/FEDORA.md](docs/FEDORA.md) | Fedora / RHEL packages, optional tools, and the Linux desktop reality |
+| [docs/PACKAGE-MANAGERS.md](docs/PACKAGE-MANAGERS.md) | Homebrew, Scoop and winget manifests, and how to update them |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | Project roadmap and planned capabilities |
 | [docs/RELEASING.md](docs/RELEASING.md) | Release procedures |
 | [docs/SERIAL-PROXY.md](docs/SERIAL-PROXY.md) | Concurrency-limiting proxy for single-slot providers |
