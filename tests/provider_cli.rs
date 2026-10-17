@@ -1131,6 +1131,11 @@ fn provider_http_failure_localizes_owned_context_and_preserves_endpoint_and_stat
                     Err(error) => panic!("local fixture failed: {error}"),
                 }
             };
+            // BSD `accept` hands back a socket that inherited the listener's
+            // `O_NONBLOCK` (Linux clears it), so waiting for the client's
+            // header bytes needs the flag explicitly cleared; otherwise the
+            // first read races the request and fails with `WouldBlock`.
+            stream.set_nonblocking(false).unwrap();
             stream
                 .set_read_timeout(Some(std::time::Duration::from_secs(10)))
                 .unwrap();
