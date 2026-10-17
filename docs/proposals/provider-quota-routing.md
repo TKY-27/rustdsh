@@ -22,7 +22,8 @@ ROADMAP の「one provider at a time」は、メンテナの分割案（1社ず�
 - リクエスト中継とヘッダー注入（直列化プロキシは `scripts/serial-proxy.mjs` の担当）。
 - 12プロバイダの一括対応。1社ずつ追加する。
 - サブスクのプラン区分の自動判定。MVP は入力（`--plan-tier`）を正とし、不明なら推測しない。
-- ZDR（Zero Data Retention）要件。[#484](https://github.com/jimoto-no-llm/rustdsh/issues/484) で定義中。
+- ZDR（Zero Data Retention）要件。要件は [docs/ZDR.md](../ZDR.md) で定義
+  （[#484](https://github.com/jimoto-no-llm/rustdsh/issues/484)）。
 - 予算の強制執行（[#45](https://github.com/jimoto-no-llm/rustdsh/issues/45)）と
   利用枠・再試行時刻の表示（[#59](https://github.com/jimoto-no-llm/rustdsh/issues/59)）。
 - 実際の請求額の保証。提示する値は公式情報に基づく推定で、請求書の検証ではない。
@@ -299,7 +300,8 @@ plan_pressure(model, usage)  = effective_cost / monthly_limit_usd
 
 ### [87-5] ZDR モード
 
-- すでに [#484](https://github.com/jimoto-no-llm/rustdsh/issues/484) として分離済み。重複起票しない。
+- すでに [#484](https://github.com/jimoto-no-llm/rustdsh/issues/484) として分離済み。要件は
+  [docs/ZDR.md](../ZDR.md)。重複起票しない。
 
 ## 検証方法（fixture、ネットワークなし）
 
