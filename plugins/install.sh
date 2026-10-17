@@ -10,7 +10,7 @@
 #                 existing scripts are unchanged.
 #
 # Usage: [PROFILE=headless] [DRY_RUN=1] [SOUND=0] [GITVIEW=0] [COMPUTE=1]
-#        [EASY_WORK=1] [SUBAGENTS=1] [UI_COMFORT=1]
+#        [EASY_WORK=1] [SUBAGENTS=1] [UI_COMFORT=1] [INTELLIGENT_UI=1]
 #        [RECOMMENDED=all|none|list|id,...]
 #        ./plugins/install.sh [--recommended=all|none|list|id,...] [--list]
 # PROFILE=desktop targets the Electron application's reserved profile: the npm
@@ -23,6 +23,9 @@
 # - Git panel (yugapor/dsh-gitview).
 # They are browser client plugins, so PROFILE=web is the intended target.
 # Set SOUND=0 or GITVIEW=0 to skip one. Other profiles can opt in with =1.
+# One further third-party browser plugin is opt-in only and never part of the
+# defaults: visual answers (cwd514/dsh-intelligent-ui, MIT) with
+# INTELLIGENT_UI=1 or --recommended=intelligent-ui.
 set -u
 PROFILE="${PROFILE:-headless}"
 DRY_RUN="${DRY_RUN:-0}"
@@ -33,9 +36,10 @@ COMPUTE="${COMPUTE:-0}"
 EASY_WORK="${EASY_WORK:-0}"
 SUBAGENTS="${SUBAGENTS:-0}"
 UI_COMFORT="${UI_COMFORT:-0}"
+INTELLIGENT_UI="${INTELLIGENT_UI:-0}"
 TRANSLATION="${TRANSLATION:-$BROWSER_PLUGINS_DEFAULT}"
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-RECOMMENDED_IDS="translation compute easy-work subagents ui-comfort sound gitview"
+RECOMMENDED_IDS="translation compute easy-work subagents ui-comfort sound gitview intelligent-ui"
 
 usage() {
   cat <<EOF
@@ -46,7 +50,7 @@ Usage: [PROFILE=...] [DRY_RUN=1] ./plugins/install.sh [--recommended=SPEC] [--li
   --recommended=id,id     install exactly the listed recommended plugins
   --list                  alias for --recommended=list
   ids: $RECOMMENDED_IDS
-Env: PROFILE DRY_RUN SOUND GITVIEW COMPUTE EASY_WORK SUBAGENTS UI_COMFORT TRANSLATION
+Env: PROFILE DRY_RUN SOUND GITVIEW COMPUTE EASY_WORK SUBAGENTS UI_COMFORT INTELLIGENT_UI TRANSLATION
      RECOMMENDED (same values as --recommended)
 EOF
 }
@@ -76,6 +80,7 @@ Recommended plugins (optional; choose with --recommended)
   ui-comfort   rdsh-ui-comfort               deliberate Enter in the Web chat
   sound        github:cwd514/dsh-sound-notifications   effect sounds and desktop notifications
   gitview      github:yugapor/dsh-gitview    Web sidebar Git panel
+  intelligent-ui github:cwd514/dsh-intelligent-ui   interactive visual answers (render_ui)
 EOF
 }
 
@@ -114,14 +119,15 @@ rec_compute="$COMPUTE"
 rec_easy_work="$EASY_WORK"
 rec_subagents="$SUBAGENTS"
 rec_ui_comfort="$UI_COMFORT"
+rec_intelligent_ui="$INTELLIGENT_UI"
 rec_sound="$SOUND"
 rec_gitview="$GITVIEW"
 
 recommended_all() {
-  rec_translation=1; rec_compute=1; rec_easy_work=1; rec_subagents=1; rec_ui_comfort=1; rec_sound=1; rec_gitview=1
+  rec_translation=1; rec_compute=1; rec_easy_work=1; rec_subagents=1; rec_ui_comfort=1; rec_intelligent_ui=1; rec_sound=1; rec_gitview=1
 }
 recommended_none() {
-  rec_translation=0; rec_compute=0; rec_easy_work=0; rec_subagents=0; rec_ui_comfort=0; rec_sound=0; rec_gitview=0
+  rec_translation=0; rec_compute=0; rec_easy_work=0; rec_subagents=0; rec_ui_comfort=0; rec_intelligent_ui=0; rec_sound=0; rec_gitview=0
 }
 
 apply_recommended_spec() {
@@ -137,6 +143,7 @@ apply_recommended_spec() {
           easy-work|easy_work|rdsh-easy-work) rec_easy_work=1 ;;
           subagents|subagent|rdsh-subagent-optimizer) rec_subagents=1 ;;
           ui-comfort|ui_comfort|rdsh-ui-comfort) rec_ui_comfort=1 ;;
+          intelligent-ui|intelligent_ui|dsh-intelligent-ui) rec_intelligent_ui=1 ;;
           sound|dsh-sound-notifications) rec_sound=1 ;;
           gitview|dsh-gitview) rec_gitview=1 ;;
           *)
@@ -168,12 +175,14 @@ select_recommended_individually() {
   if prompt_yes_no "rdsh-ui-comfort (deliberate Enter in the Web chat)" "$rec_ui_comfort"; then rec_ui_comfort=1; else rec_ui_comfort=0; fi
   if prompt_yes_no "github:cwd514/dsh-sound-notifications" "$rec_sound"; then rec_sound=1; else rec_sound=0; fi
   if prompt_yes_no "github:yugapor/dsh-gitview" "$rec_gitview"; then rec_gitview=1; else rec_gitview=0; fi
+  if prompt_yes_no "github:cwd514/dsh-intelligent-ui" "$rec_intelligent_ui"; then rec_intelligent_ui=1; else rec_intelligent_ui=0; fi
 }
 
 prompt_recommended() {
   printf '\nRecommended plugins (optional):\n' >&2
   printf '  rdsh-translation, rdsh-compute, rdsh-easy-work, rdsh-subagent-optimizer,\n' >&2
-  printf '  rdsh-ui-comfort, github:cwd514/dsh-sound-notifications, github:yugapor/dsh-gitview\n' >&2
+  printf '  rdsh-ui-comfort, github:cwd514/dsh-sound-notifications, github:yugapor/dsh-gitview,\n' >&2
+  printf '  github:cwd514/dsh-intelligent-ui\n' >&2
   printf 'Install recommended plugins? [Y/n/a=all/s=select individually] ' >&2
   IFS= read -r _answer || _answer=""
   case "$_answer" in
@@ -258,6 +267,7 @@ if [ "$PROFILE" = "desktop" ]; then
     for p in $RECOMMENDED_BUNDLED; do echo "  [recommended] $REPO_ROOT/plugins/$p" >&2; done
     if [ "$rec_sound" = "1" ]; then echo "  [recommended] github:cwd514/dsh-sound-notifications" >&2; fi
     if [ "$rec_gitview" = "1" ]; then echo "  [recommended] github:yugapor/dsh-gitview" >&2; fi
+    if [ "$rec_intelligent_ui" = "1" ]; then echo "  [recommended] github:cwd514/dsh-intelligent-ui" >&2; fi
     exit 1
   fi
   set -- --no-bundled
@@ -266,6 +276,7 @@ if [ "$PROFILE" = "desktop" ]; then
   for p in $RECOMMENDED_BUNDLED; do set -- "$@" --package "$REPO_ROOT/plugins/$p"; done
   if [ "$rec_sound" = "1" ]; then set -- "$@" --package github:cwd514/dsh-sound-notifications; fi
   if [ "$rec_gitview" = "1" ]; then set -- "$@" --package github:yugapor/dsh-gitview; fi
+  if [ "$rec_intelligent_ui" = "1" ]; then set -- "$@" --package github:cwd514/dsh-intelligent-ui; fi
   if [ "$DRY_RUN" = "1" ]; then
     printf '%s ' "$RDSH" desktop install "$@"
     printf '\n'
@@ -302,6 +313,9 @@ if [ "$rec_sound" = "1" ]; then
 fi
 if [ "$rec_gitview" = "1" ]; then
   run_add github:yugapor/dsh-gitview "recommended third-party git panel"
+fi
+if [ "$rec_intelligent_ui" = "1" ]; then
+  run_add github:cwd514/dsh-intelligent-ui "recommended third-party visual answers"
 fi
 echo "done: $ok ok, $fail failed (profile: $PROFILE)"
 [ "$fail" -eq 0 ]

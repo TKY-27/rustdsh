@@ -725,6 +725,10 @@ authors):
   cwd514 — opt-in effect sounds and desktop notifications (`SOUND=1`)
 - [dsh-gitview](https://github.com/yugapor/dsh-gitview) by yugapor — optional
   sidebar Git panel
+- [dsh-intelligent-ui](https://github.com/cwd514/dsh-intelligent-ui) by cwd514
+  (MIT, (c) 2026 cwd514) — opt-in visual answers in the DSH Web chat via the
+  declarative `render_ui` tool (`--recommended=intelligent-ui` or
+  `INTELLIGENT_UI=1`)
 
 ## License
 
