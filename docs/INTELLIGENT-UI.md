@@ -135,7 +135,7 @@ DSH Webのチャットに、エージェントが提示したUIを表示して�
 - 値はテキストかSVG要素としてのみ描画し、エージェント由来のHTML/JSは実行しません。
 - ルートはDSHのGUIセッションとHost/Origin検証を通過した要求だけを受け付けます。
 - 導入: dsh plugin --profile web add /path/to/rustdsh/plugins/rdsh-agent-ui
-- 検証: node --test plugins/rdsh-agent-ui/test/store.test.mjs
+- 検証: node --test plugins/rdsh-agent-ui/test/*.test.mjs
 
 実ブラウザでの確認では、クライアントのバンドル（rdsh-agent-ui/client.js）が読み込まれ、
 コンソールエラーが0件であることを確認しています。
