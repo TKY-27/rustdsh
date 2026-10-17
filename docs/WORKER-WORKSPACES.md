@@ -113,13 +113,19 @@ TMPDIR=/var/tmp RDSH_BENCH_BIN=$PWD/target/release/rdsh node scripts/bench-worke
 ```
 
 The script fails when the requested native binary is not selected, so a
-JavaScript fallback is never reported as a native measurement. It also compares
-each operation against a budget: the native median may exceed the JavaScript
+JavaScript fallback is never reported as a native measurement. It pins the
+selected binary to a private execution copy, records both paths and the copy's
+SHA-256, and dispatches the JavaScript baseline and the native bridge directly so
+binary discovery and the capability preflight stay out of the timed region. Each
+operation row carries the seven raw samples and the measurement boundary. It also
+compares each operation against a budget: the native median may exceed the JavaScript
 median by at most 20 ms. The budget is absolute rather than a ratio because
 `dirtyPaths` is one `git status` and the measured Windows cost of starting the
 extra bridge process is about 13 ms; a 1.2x target on a ~30 ms operation would
 leave no room for that process hop. The multi-Git operations are expected to be
-at or below the baseline.
+at or below the baseline. The benchmark's own regression tests raise the budget
+through `RDSH_BENCH_MAX_OVERHEAD_MS` because their Node-based fake native pays
+interpreter startup; the dashboard job keeps the 20 ms default.
 
 Measured on Linux x64 (Node 22.23.1, 128 tracked / 8 dirty files, median of 7
 alternating pairs). The fix replaced the `Child::try_wait` sleep-poll in
