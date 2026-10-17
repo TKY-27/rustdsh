@@ -105,6 +105,67 @@ test("tray helper is resolved from an absolute PATH entry, never the working dir
   }
 });
 
+test(
+  "tray selects an app execution alias whose target stat() cannot open",
+  {
+    // chmod cannot deny traversal on Windows, and root ignores it.
+    skip: process.platform === "win32" || process.getuid?.() === 0,
+  },
+  async () => {
+    // WindowsApps\pwsh.exe is a link into a package directory that stat()
+    // reports as EACCES; the later empty placeholder would fail with EFTYPE.
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "rdsh-tray-alias-"));
+    const alias = path.join(root, "WindowsApps");
+    const sealed = path.join(root, "package");
+    await fs.mkdir(alias);
+    await fs.mkdir(sealed);
+    await fs.writeFile(path.join(sealed, "pwsh.exe"), "#!/bin/sh\n");
+    await fs.symlink(path.join(sealed, "pwsh.exe"), path.join(alias, "pwsh.exe"));
+    await fs.chmod(sealed, 0o000);
+    const searched = process.env.PATH;
+    process.env.PATH = alias + path.delimiter + searched;
+    try {
+      await assert.rejects(fs.stat(path.join(alias, "pwsh.exe")), {
+        code: "EACCES",
+      });
+      const f = fixture(async () => {});
+      f.child.stdout.write("ready\n");
+      (await f.pending).dispose();
+      assert.equal(f.invocation[0], path.join(alias, "pwsh.exe"));
+    } finally {
+      process.env.PATH = searched;
+      await fs.chmod(sealed, 0o700);
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
+test("tray skips a dangling pwsh.exe link and keeps searching PATH", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "rdsh-tray-dangling-"));
+  const searched = process.env.PATH;
+  try {
+    await fs.symlink(
+      path.join(root, "missing", "pwsh.exe"),
+      path.join(root, "pwsh.exe"),
+    );
+  } catch (error) {
+    // Unprivileged Windows accounts cannot create symbolic links.
+    await fs.rm(root, { recursive: true, force: true });
+    if (error.code === "EPERM") return t.skip("symbolic links need privilege");
+    throw error;
+  }
+  process.env.PATH = root + path.delimiter + searched;
+  try {
+    const f = fixture(async () => {});
+    f.child.stdout.write("ready\n");
+    (await f.pending).dispose();
+    assert.notEqual(path.dirname(f.invocation[0]), root);
+  } finally {
+    process.env.PATH = searched;
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test("tray fails closed before spawning when PATH has no pwsh.exe", async () => {
   const empty = await fs.mkdtemp(path.join(os.tmpdir(), "rdsh-tray-empty-"));
   const searched = process.env.PATH;

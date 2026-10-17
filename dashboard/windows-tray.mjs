@@ -1,16 +1,36 @@
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { lstatSync, readlinkSync, statSync } from "node:fs";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
+
+// A Microsoft Store PowerShell is reached through an app execution alias
+// (WindowsApps\pwsh.exe): a link whose packaged target stat() cannot open from
+// every logon session (EACCES over SSH), although CreateProcess launches the
+// alias itself. Skipping it would select a later, possibly unusable, PATH entry.
+function isPowershellCandidate(candidate) {
+  try {
+    return !statSync(candidate).isDirectory();
+  } catch (error) {
+    if (error.code !== "EACCES" && error.code !== "EPERM") return false;
+    try {
+      return (
+        lstatSync(candidate).isSymbolicLink() &&
+        path.isAbsolute(readlinkSync(candidate))
+      );
+    } catch {
+      return false;
+    }
+  }
+}
 
 // spawn() with a bare name tries the working directory before PATH (CWE-427).
 function powershellPath() {
   for (const directory of (process.env.PATH || "").split(path.delimiter)) {
     if (!path.isAbsolute(directory)) continue;
     const candidate = path.join(directory, "pwsh.exe");
-    if (existsSync(candidate)) return candidate;
+    if (isPowershellCandidate(candidate)) return candidate;
   }
   throw new Error(
     "pwsh.exe is not on PATH; the Windows tray requires PowerShell 7",
