@@ -271,7 +271,9 @@ export function sanitizeSettings(j) {
       port: clampInt(sv.port, 1, 65535, d.serve.port),
     },
     guard: {
-      deny: strList(gu.deny, 50, 300),
+      // Rust 側の TEXT_CHARS と同じ上限（src/rdsh_config.rs）。300 のままだと
+      // 同じ入力でも GUI と CLI で保存される長さが違っていた。
+      deny: strList(gu.deny, 50, 500),
       reason: str(gu.reason, 500, d.guard.reason),
     },
     bench: {

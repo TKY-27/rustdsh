@@ -41,6 +41,14 @@ test('truncation never leaves a lone surrogate at the boundary', () => {
   assert.doesNotThrow(() => JSON.parse(JSON.stringify(out)));
 });
 
+// Rust は guard.deny を TEXT_CHARS(500) で切る。GUI だけ 300 だったため、
+// 同じ入力を保存しても GUI と CLI で結果が違っていた。
+test('guard.deny keeps the Rust text limit', () => {
+  const kept = 'a'.repeat(400);
+  assert.equal(sanitizeSettings({ guard: { deny: [kept] } }).guard.deny[0], kept);
+  assert.equal(sanitizeSettings({ guard: { deny: ['a'.repeat(600)] } }).guard.deny[0].length, 500);
+});
+
 test('truncation counts code points, like the Rust side', () => {
   const emoji = '\u{1F44D}';
   const dir = 'a'.repeat(299) + emoji; // 300 code points, 301 UTF-16 units
