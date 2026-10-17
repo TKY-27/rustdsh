@@ -1230,10 +1230,18 @@ impl Render for DesktopApp {
                         }))
                     })
                     .when(!loading, |element| {
-                        element.children(groups.into_iter().map(|group| {
+                        // Only the rows that fit the viewport are built; a long
+                        // history would otherwise create thousands of elements
+                        // on every frame.
+                        let mut budget = 60usize;
+                        element.children(groups.into_iter().filter_map(|group| {
+                            if budget == 0 {
+                                return None;
+                            }
                             let rows: Vec<AnyElement> = group
                                 .sessions
                                 .into_iter()
+                                .take(budget)
                                 .map(|(index, session)| {
                                     let active = selected == Some(index);
                                     let title = titles
@@ -1312,6 +1320,8 @@ impl Render for DesktopApp {
                                         .into_any_element()
                                 })
                                 .collect();
+                            budget = budget.saturating_sub(rows.len());
+                            Some(
                             div()
                                 .flex()
                                 .flex_col()
@@ -1331,7 +1341,8 @@ impl Render for DesktopApp {
                                         ),
                                 )
                                 .children(rows)
-                                .into_any_element()
+                                .into_any_element(),
+                            )
                         }))
                     }),
             )
