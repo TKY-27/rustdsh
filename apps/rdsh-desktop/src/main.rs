@@ -7,6 +7,7 @@
 mod api;
 mod app;
 mod cookies;
+mod editor;
 mod host;
 mod http;
 mod live;
