@@ -10,7 +10,8 @@
 #                 existing scripts are unchanged.
 #
 # Usage: [PROFILE=headless] [DRY_RUN=1] [SOUND=0] [GITVIEW=0] [COMPUTE=1]
-#        [EASY_WORK=1] [SUBAGENTS=1] [RECOMMENDED=all|none|list|id,...]
+#        [EASY_WORK=1] [SUBAGENTS=1] [UI_COMFORT=1]
+#        [RECOMMENDED=all|none|list|id,...]
 #        ./plugins/install.sh [--recommended=all|none|list|id,...] [--list]
 # PROFILE=desktop targets the Electron application's reserved profile: the npm
 # dsh CLI refuses it, so the work is forwarded to the Desktop-installed command
@@ -31,9 +32,10 @@ GITVIEW="${GITVIEW:-$BROWSER_PLUGINS_DEFAULT}"
 COMPUTE="${COMPUTE:-0}"
 EASY_WORK="${EASY_WORK:-0}"
 SUBAGENTS="${SUBAGENTS:-0}"
+UI_COMFORT="${UI_COMFORT:-0}"
 TRANSLATION="${TRANSLATION:-$BROWSER_PLUGINS_DEFAULT}"
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-RECOMMENDED_IDS="translation compute easy-work subagents sound gitview"
+RECOMMENDED_IDS="translation compute easy-work subagents ui-comfort sound gitview"
 
 usage() {
   cat <<EOF
@@ -44,7 +46,7 @@ Usage: [PROFILE=...] [DRY_RUN=1] ./plugins/install.sh [--recommended=SPEC] [--li
   --recommended=id,id     install exactly the listed recommended plugins
   --list                  alias for --recommended=list
   ids: $RECOMMENDED_IDS
-Env: PROFILE DRY_RUN SOUND GITVIEW COMPUTE EASY_WORK SUBAGENTS TRANSLATION
+Env: PROFILE DRY_RUN SOUND GITVIEW COMPUTE EASY_WORK SUBAGENTS UI_COMFORT TRANSLATION
      RECOMMENDED (same values as --recommended)
 EOF
 }
@@ -71,6 +73,7 @@ Recommended plugins (optional; choose with --recommended)
   compute      rdsh-compute                  compute bridge
   easy-work    rdsh-easy-work                guided workflow entry points
   subagents    rdsh-subagent-optimizer       subagent prompt shaping
+  ui-comfort   rdsh-ui-comfort               deliberate Enter in the Web chat
   sound        github:cwd514/dsh-sound-notifications   effect sounds and desktop notifications
   gitview      github:yugapor/dsh-gitview    Web sidebar Git panel
 EOF
@@ -110,14 +113,15 @@ rec_translation="$TRANSLATION"
 rec_compute="$COMPUTE"
 rec_easy_work="$EASY_WORK"
 rec_subagents="$SUBAGENTS"
+rec_ui_comfort="$UI_COMFORT"
 rec_sound="$SOUND"
 rec_gitview="$GITVIEW"
 
 recommended_all() {
-  rec_translation=1; rec_compute=1; rec_easy_work=1; rec_subagents=1; rec_sound=1; rec_gitview=1
+  rec_translation=1; rec_compute=1; rec_easy_work=1; rec_subagents=1; rec_ui_comfort=1; rec_sound=1; rec_gitview=1
 }
 recommended_none() {
-  rec_translation=0; rec_compute=0; rec_easy_work=0; rec_subagents=0; rec_sound=0; rec_gitview=0
+  rec_translation=0; rec_compute=0; rec_easy_work=0; rec_subagents=0; rec_ui_comfort=0; rec_sound=0; rec_gitview=0
 }
 
 apply_recommended_spec() {
@@ -132,6 +136,7 @@ apply_recommended_spec() {
           compute|rdsh-compute) rec_compute=1 ;;
           easy-work|easy_work|rdsh-easy-work) rec_easy_work=1 ;;
           subagents|subagent|rdsh-subagent-optimizer) rec_subagents=1 ;;
+          ui-comfort|ui_comfort|rdsh-ui-comfort) rec_ui_comfort=1 ;;
           sound|dsh-sound-notifications) rec_sound=1 ;;
           gitview|dsh-gitview) rec_gitview=1 ;;
           *)
@@ -160,6 +165,7 @@ select_recommended_individually() {
   if prompt_yes_no "rdsh-compute (compute bridge)" "$rec_compute"; then rec_compute=1; else rec_compute=0; fi
   if prompt_yes_no "rdsh-easy-work (file organization)" "$rec_easy_work"; then rec_easy_work=1; else rec_easy_work=0; fi
   if prompt_yes_no "rdsh-subagent-optimizer (bounded subagents)" "$rec_subagents"; then rec_subagents=1; else rec_subagents=0; fi
+  if prompt_yes_no "rdsh-ui-comfort (deliberate Enter in the Web chat)" "$rec_ui_comfort"; then rec_ui_comfort=1; else rec_ui_comfort=0; fi
   if prompt_yes_no "github:cwd514/dsh-sound-notifications" "$rec_sound"; then rec_sound=1; else rec_sound=0; fi
   if prompt_yes_no "github:yugapor/dsh-gitview" "$rec_gitview"; then rec_gitview=1; else rec_gitview=0; fi
 }
@@ -167,7 +173,7 @@ select_recommended_individually() {
 prompt_recommended() {
   printf '\nRecommended plugins (optional):\n' >&2
   printf '  rdsh-translation, rdsh-compute, rdsh-easy-work, rdsh-subagent-optimizer,\n' >&2
-  printf '  github:cwd514/dsh-sound-notifications, github:yugapor/dsh-gitview\n' >&2
+  printf '  rdsh-ui-comfort, github:cwd514/dsh-sound-notifications, github:yugapor/dsh-gitview\n' >&2
   printf 'Install recommended plugins? [Y/n/a=all/s=select individually] ' >&2
   IFS= read -r _answer || _answer=""
   case "$_answer" in
@@ -236,6 +242,7 @@ if [ "$rec_translation" = "1" ]; then RECOMMENDED_BUNDLED="$RECOMMENDED_BUNDLED 
 if [ "$rec_compute" = "1" ]; then RECOMMENDED_BUNDLED="$RECOMMENDED_BUNDLED rdsh-compute"; fi
 if [ "$rec_easy_work" = "1" ]; then RECOMMENDED_BUNDLED="$RECOMMENDED_BUNDLED rdsh-easy-work"; fi
 if [ "$rec_subagents" = "1" ]; then RECOMMENDED_BUNDLED="$RECOMMENDED_BUNDLED rdsh-subagent-optimizer"; fi
+if [ "$rec_ui_comfort" = "1" ]; then RECOMMENDED_BUNDLED="$RECOMMENDED_BUNDLED rdsh-ui-comfort"; fi
 
 # The Desktop profile is owned by the Electron application. The npm dsh CLI
 # refuses to manage it, so every package goes through the Desktop-installed
