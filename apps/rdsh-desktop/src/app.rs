@@ -13,6 +13,7 @@ use gpui::*;
 use serde_json::Value;
 
 use crate::api::Api;
+use crate::editor::{Editor, Motion};
 use crate::host::Host;
 use crate::live::{self, LiveCmd, LiveEvent, Pending};
 use crate::mux::Mux;
@@ -423,14 +424,18 @@ impl Chat {
         &self,
         session_id: &str,
         call_id: &str,
-        label: &str,
+        answers: &[(String, Vec<String>)],
     ) -> anyhow::Result<()> {
+        let payload: Vec<serde_json::Value> = answers
+            .iter()
+            .map(|(id, selected)| serde_json::json!({ "id": id, "selected": selected }))
+            .collect();
         self.api.unary(
             "userQuestions/answer",
             serde_json::json!({
                 "sessionId": session_id,
                 "callId": call_id,
-                "answer": { "answers": [ { "id": "q1", "selected": [label] } ] }
+                "answer": { "answers": payload }
             }),
         )?;
         Ok(())
@@ -799,6 +804,67 @@ pub fn catalog_model<'a>(
         .find(|entry| entry.id == model)
 }
 
+/// Maximum composer height: eight body lines at 24px plus a little padding.
+const COMPOSER_MAX_HEIGHT: f32 = 200.;
+
+/// Rows of the composer text field.
+///
+/// The editor text is split on hard line breaks; each logical line becomes one
+/// flex row that wraps inside the field width. The caret is rendered inline
+/// between the text before and after it, so within a row it lands exactly at
+/// the character boundary without needing the caret's x offset.
+fn input_rows(input: &str, caret: usize) -> Vec<AnyElement> {
+    let caret = caret.min(input.len());
+    let mut rows = Vec::new();
+    let mut start = 0usize;
+    loop {
+        let break_at = input[start..].find('\n').map(|index| start + index);
+        let end = break_at.unwrap_or(input.len());
+        let line = &input[start..end];
+        // The caret is always on a character boundary, but stay defensive: a
+        // mis-aligned offset must degrade to a caret-less line, not panic.
+        let (before, after) = if caret < start || line.get(..caret - start).is_none() {
+            ("", line)
+        } else if caret <= end {
+            let offset = caret - start;
+            (&line[..offset], &line[offset..])
+        } else {
+            (line, "")
+        };
+        let mut row = div()
+            .w_full()
+            .min_h(theme::body_line_height())
+            .flex()
+            .flex_row()
+            .flex_wrap()
+            .items_start()
+            .text_size(theme::body_size())
+            .line_height(theme::body_line_height())
+            .text_color(theme::label());
+        if !before.is_empty() {
+            row = row.child(before.to_string());
+        }
+        if (start..=end).contains(&caret) {
+            row = row.child(
+                div()
+                    .w(px(2.))
+                    .h(theme::body_line_height())
+                    .flex_none()
+                    .bg(theme::accent()),
+            );
+        }
+        if !after.is_empty() {
+            row = row.child(after.to_string());
+        }
+        rows.push(row.into_any_element());
+        match break_at {
+            Some(index) => start = index + 1,
+            None => break,
+        }
+    }
+    rows
+}
+
 /// Composer text for the current selection. The catalog display name is used
 /// when the catalog knows the pair; a selection the catalog does not list is
 /// still shown, with a note saying so. An empty catalog means "unknown", not
@@ -1047,8 +1113,11 @@ pub struct DesktopApp {
     chat: Option<Box<Chat>>,
     titles: HashMap<String, String>,
     status: String,
-    input: String,
+    /// Composer editing model: text, caret and selection.
+    editor: Editor,
     focus: FocusHandle,
+    /// Kept in sync with the composer's text area so typing scrolls it.
+    composer_scroll: ScrollHandle,
     live: Sender<LiveCmd>,
     pending: Option<Pending>,
     client_id: Option<String>,
@@ -1123,12 +1192,29 @@ impl DesktopApp {
 
         poll(cx, update_rx, live_evt_rx, live_cmd_rx, live_evt_tx);
 
+        // The composer is the only text field in the window, so it starts
+        // focused: defer past this frame, when the window can accept focus.
+        let composer = cx.focus_handle();
+        cx.defer(move |cx| {
+            let Some(window) = cx.active_window() else {
+                return;
+            };
+            window
+                .update(cx, |_view, window, _cx| {
+                    if window.is_window_active() {
+                        window.focus(&composer);
+                    }
+                })
+                .ok();
+        });
+
         Self {
             chat: None,
             titles: HashMap::new(),
             status: "ハーネスを起動しています…".to_string(),
-            input: String::new(),
+            editor: Editor::new(),
             focus: cx.focus_handle(),
+            composer_scroll: ScrollHandle::new(),
             live: live_cmd_tx,
             pending: None,
             client_id: None,
@@ -1151,11 +1237,12 @@ impl DesktopApp {
     }
 
     fn submit(&mut self) {
-        let text = self.input.trim().to_string();
+        let text = self.editor.text().trim().to_string();
         if text.is_empty() {
             return;
         }
-        self.input.clear();
+        self.editor.clear();
+        self.composer_scroll.scroll_to_bottom();
         let Some(chat) = self.chat.as_mut() else {
             self.status = "接続が完了していません".to_string();
             return;
@@ -1201,20 +1288,20 @@ impl DesktopApp {
         }
     }
 
-    fn answer_pending(&mut self, allow: bool, choice: Option<String>) {
+    fn answer_pending(&mut self, allow: bool, answers: Option<Vec<(String, Vec<String>)>>) {
         let Some(pending) = self.pending.take() else {
             return;
         };
         let Some(chat) = self.chat.as_mut() else {
             return;
         };
-        let result = match (pending, choice) {
+        let result = match (pending, answers) {
             (Pending::Approval { event_id, .. }, _) => match self.client_id.clone() {
                 Some(client_id) => chat.approve(&client_id, &event_id, allow),
                 None => Ok(()),
             },
-            (Pending::Question { call_id, session_id, .. }, Some(label)) => {
-                chat.answer_question(&session_id, &call_id, &label)
+            (Pending::Question { call_id, session_id, .. }, Some(answers)) => {
+                chat.answer_question(&session_id, &call_id, &answers)
             }
             (Pending::Question { .. }, None) => Ok(()),
         };
@@ -1399,7 +1486,7 @@ impl Render for DesktopApp {
             .as_ref()
             .and_then(|chat| chat.selected_session().cloned());
         let status = self.status.clone();
-        let input = self.input.clone();
+        let input = self.editor.text().to_string();
         let titles = self.titles.clone();
         let loading = self.chat.is_none();
         let streaming = self.streaming.clone();
@@ -1477,7 +1564,7 @@ impl Render for DesktopApp {
                         // Only the rows that fit the viewport are built; a long
                         // history would otherwise create thousands of elements
                         // on every frame.
-                        let mut budget = 60usize;
+                        let mut budget = usize::MAX;
                         element.children(groups.into_iter().filter_map(|group| {
                             if budget == 0 {
                                 return None;
@@ -1852,9 +1939,16 @@ impl Render for DesktopApp {
                     .into_any_element()
             }
             Pending::Question {
-                question, options, ..
+                questions,
+                question,
+                options,
+                ..
             } => {
                 let question = question.clone();
+                let question_id = questions
+                    .first()
+                    .map(|question| question.id.clone())
+                    .unwrap_or_default();
                 let options = options.clone();
                 let mut buttons = div().flex().flex_row().gap(px(8.));
                 for (index, option) in options.into_iter().enumerate() {
@@ -1864,9 +1958,12 @@ impl Render for DesktopApp {
                         label,
                         true,
                         cx,
-                        move |this, label: &str| {
-                            let label = label.to_string();
-                            this.answer_pending(true, Some(label))
+                        {
+                            let question_id = question_id.clone();
+                            move |this, label: &str| {
+                                let label = label.to_string();
+                                this.answer_pending(true, Some(vec![(question_id.clone(), vec![label])]))
+                            }
                         },
                     ));
                 }
@@ -2001,6 +2098,9 @@ impl Render for DesktopApp {
                 .into_any_element()
         });
 
+        // An empty composer shows the placeholder instead of an empty row.
+        let placeholder = "メッセージを入力…".to_string();
+
         let composer = div()
             .id("composer")
             .track_focus(&self.focus)
@@ -2020,35 +2120,118 @@ impl Render for DesktopApp {
                 cx.notify();
             }))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
-                match event.keystroke.key.as_str() {
-                    "enter" => this.submit(),
-                    "backspace" => {
-                        this.input.pop();
+                let keystroke = &event.keystroke;
+                let modifiers = keystroke.modifiers;
+                let command = modifiers.platform || modifiers.control;
+                let shift = modifiers.shift;
+                // While an IME is composing, Enter commits the composition
+                // instead of sending a half-composed message, and the keys
+                // arrive with an empty key_char.
+                if keystroke.is_ime_in_progress() {
+                    return;
+                }
+                let mut changed = false;
+                let mut submitted = false;
+                match keystroke.key.as_str() {
+                    "enter" => {
+                        if shift || modifiers.alt {
+                            this.editor.insert_newline();
+                            changed = true;
+                        } else {
+                            this.submit();
+                            submitted = true;
+                        }
                     }
-                    "space" => this.input.push(' '),
+                    "escape" => {
+                        this.editor.clear();
+                        changed = true;
+                    }
+                    "backspace" => {
+                        this.editor.delete_backward();
+                        changed = true;
+                    }
+                    "delete" => {
+                        this.editor.delete_forward();
+                        changed = true;
+                    }
+                    "left" if command => this.editor.moved(Motion::WordLeft),
+                    "right" if command => this.editor.moved(Motion::WordRight),
+                    "up" | "left" => this.editor.moved(Motion::Left),
+                    "down" | "right" => this.editor.moved(Motion::Right),
+                    "home" => this.editor.moved(Motion::Home),
+                    "end" => this.editor.moved(Motion::End),
+                    "a" if command => this.editor.select_all(),
+                    "c" if command => {
+                        let selected = this.editor.selected_text().to_string();
+                        if !selected.is_empty() {
+                            cx.write_to_clipboard(ClipboardItem::new_string(selected));
+                        }
+                    }
+                    "x" if command => {
+                        let removed = this.editor.cut_forward();
+                        if !removed.is_empty() {
+                            cx.write_to_clipboard(ClipboardItem::new_string(removed));
+                            changed = true;
+                        }
+                    }
+                    "v" if command => {
+                        if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
+                            if !text.is_empty() {
+                                let text = text.replace('\r', "").replace('\0', "");
+                                this.editor.insert(&text);
+                                changed = true;
+                            }
+                        }
+                    }
                     _ => {
-                        if let Some(text) = event.keystroke.key_char.as_ref() {
-                            this.input.push_str(text);
+                        // Printable input only: no command/alt chords, no
+                        // unmodified keys that produce no text (arrows,
+                        // function keys, dead keys, IME composition).
+                        let printable = keystroke
+                            .key_char
+                            .as_deref()
+                            .filter(|text| !text.is_empty())
+                            .filter(|text| !text.chars().any(char::is_control));
+                        if let Some(text) = printable {
+                            if !command && !modifiers.alt {
+                                this.editor.insert(text);
+                                changed = true;
+                            }
                         }
                     }
                 }
-                cx.notify();
+                if changed || submitted {
+                    this.composer_scroll.scroll_to_bottom();
+                    cx.notify();
+                }
             }))
             .child(
+                // The editable area: one row per hard line, wrapping inside a
+                // row. Grows to eight 24px lines and then scrolls internally,
+                // so the model chip and send button never move.
                 div()
+                    .id("composer-text")
+                    .w_full()
                     .min_h(px(theme::COMPOSER_MIN_HEIGHT))
-                    .flex()
-                    .items_center()
+                    .max_h(px(COMPOSER_MAX_HEIGHT))
+                    .overflow_y_scroll()
+                    .track_scroll(&self.composer_scroll)
+                    .cursor(CursorStyle::IBeam)
                     .text_size(theme::body_size())
-                    .text_color(if input.is_empty() {
-                        theme::tertiary()
-                    } else {
-                        theme::label()
-                    })
-                    .child(if input.is_empty() {
-                        "メッセージを入力…".to_string()
-                    } else {
-                        input.clone()
+                    .line_height(theme::body_line_height())
+                    .flex()
+                    .flex_col()
+                    .items_start()
+                    .children(input_rows(&input, self.editor.caret()))
+                    .when(input.is_empty(), |element| {
+                        element.child(
+                            div()
+                                .h(theme::body_line_height())
+                                .flex()
+                                .items_center()
+                                .text_color(theme::tertiary())
+                                .child(placeholder),
+                        )
                     }),
             )
             .child(

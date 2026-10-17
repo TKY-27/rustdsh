@@ -113,11 +113,15 @@ TMPDIR=/var/tmp RDSH_BENCH_BIN=$PWD/target/release/rdsh node scripts/bench-worke
 ```
 
 The script fails when the requested native binary is not selected, so a
-JavaScript fallback is never reported as a native measurement. It also compares
-each operation against a budget: the native median may exceed the JavaScript
-median by at most 20 ms, except `dirtyPaths`, which has a 30 ms allowance. The
-budgets are absolute rather than ratios because `dirtyPaths` is one
-`git status`; a 1.2x target on a ~30 ms operation would leave no room for the
+JavaScript fallback is never reported as a native measurement. It pins the
+selected binary to a private execution copy, records both paths and the copy's
+SHA-256, and dispatches the JavaScript baseline and the native bridge directly so
+binary discovery and the capability preflight stay out of the timed region. Each
+operation row carries the seven raw samples and the measurement boundary. It also
+compares each operation against a budget: the native median may exceed the
+JavaScript median by at most 20 ms, except `dirtyPaths`, which has a 30 ms
+allowance. The budgets are absolute rather than ratios because `dirtyPaths` is
+one `git status`; a 1.2x target on a ~30 ms operation would leave no room for the
 bridge process hop. The multi-Git operations are expected to be at or below the
 baseline, so only the one-shot operation gets the wider allowance.
 `RDSH_BENCH_MAX_OVERHEAD_MS` overrides every operation budget for benchmark

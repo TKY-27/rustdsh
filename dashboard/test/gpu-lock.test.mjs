@@ -1,3 +1,4 @@
+import { requiresGpuLock } from "./ownership-support.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -17,7 +18,7 @@ async function fixture(t) {
   return root;
 }
 
-test("canonical GPU state directories accept spaces and Unicode", async (t) => {
+test("canonical GPU state directories accept spaces and Unicode", requiresGpuLock, async (t) => {
   const root = await fixture(t);
   const home = path.join(root, "GPU state \u4e88\u7d04");
   await gpuDirectory(home);

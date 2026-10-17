@@ -19,7 +19,13 @@ const repo = fileURLToPath(new URL("../../", import.meta.url));
 const cli = path.join(repo, "dashboard/cli.mjs");
 const code = (expected) => (error) => error.code === expected;
 async function fixture(t) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "rdsh-releases-test-"));
+  const fixtureRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "rdsh-releases-test-"),
+  );
+  // macOS exposes /var through /private/var. Trusted GPU state directories
+  // reject any realpath mismatch, so tests use the canonical path while cleanup
+  // still guards the mkdtemp result.
+  const root = await fs.realpath(fixtureRoot);
   const releases = new Releases(path.join(root, "state/managed-releases"));
   const projects = [];
   for (const name of ["alpha", "beta"]) {
@@ -86,8 +92,8 @@ async function fixture(t) {
   t.after(async () => {
     for (const adapter of adapters) await adapter.stop();
     if (
-      path.dirname(path.resolve(root)) !== path.resolve(os.tmpdir()) ||
-      !path.basename(root).startsWith("rdsh-releases-test-")
+      path.dirname(path.resolve(fixtureRoot)) !== path.resolve(os.tmpdir()) ||
+      !path.basename(fixtureRoot).startsWith("rdsh-releases-test-")
     )
       throw new Error("Unsafe cleanup");
     // Release files deliberately have read-only permissions, including on Windows.
@@ -98,8 +104,8 @@ async function fixture(t) {
         else if (entry.isFile()) await fs.chmod(file, 0o600);
       }
     };
-    await unlock(root);
-    await fs.rm(root, { recursive: true });
+    await unlock(fixtureRoot);
+    await fs.rm(fixtureRoot, { recursive: true });
   });
   return { root, releases, projects, env, stage, attach };
 }
@@ -198,7 +204,7 @@ test("a captured pre-GPU adapter cannot silently ignore an explicit or restored 
   );
 });
 
-test("failed one-project canary retains observations and cannot alter or roll out to the other project", async (t) => {
+test("failed one-project canary retains observations and cannot alter or roll out to the other project", requiresOwnershipBackend, async (t) => {
   const {
     releases,
     projects: [alpha, beta],
