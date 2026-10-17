@@ -77,9 +77,9 @@ The `v0.5.0` milestone is still open and carries the items below that did not
 finish with the release; issues and milestones stay the source of truth.
 
 - One-click translation of non-Japanese answers with history replacement
-  (#448): Step 1 (display only) shipped (#664) and Step 2 replaces the
-  model-visible surface (#718, open). Replacing what the screen shows needs a
-  DSH-side API, so it stays here.
+  (#448): Step 1 (display only) shipped (#664) and Step 2 landed (#718),
+  replacing the model-visible surface. Replacing what the screen shows still
+  needs a DSH-side API, so it stays here.
 - Windows dashboard flake (#209): the tray ready wait now follows observed
   startup progress (#717) and needs a Windows CI run to confirm, while the
   `routing probe` exec deadline has no progress to observe and is unchanged.
