@@ -5,6 +5,18 @@ Format follows Keep a Changelog, versioning follows Semantic Versioning.
 
 ## [Unreleased]
 
+### Added
+
+- `packaging/` carries install manifests for the published macOS and Windows
+  archives: `packaging/homebrew/rdsh.rb` (Homebrew, Apple Silicon and Intel),
+  `packaging/scoop/rdsh.json` (Scoop) and the three `packaging/winget/`
+  manifests (winget). Each one pins the exact v0.6.0 URL and SHA-256, with
+  install commands and the update step in `packaging/README.md` and
+  `docs/PACKAGE-MANAGERS.md`. `scripts/update-packaging-manifests.py`
+  regenerates every pinned value from `release-digests.tsv` and
+  `release-digests-windows.tsv` and verifies them with `--check`, so the
+  manifests never drop out of sync with what the installers trust.
+
 ## [0.6.0] - 2026-10-17
 
 ### Security

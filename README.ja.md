@@ -140,6 +140,30 @@ cd rustdsh
 | WSL | ディストロ内で `./install.sh` | WSL を自動検出します。Windows 側と併用する場合は `install.ps1 -Wsl` も利用可能です。 |
 | Windows（ネイティブ） | `.\install.ps1` | Rust および MSVC ビルドツールが必要です（`winget install Rustlang.Rustup`）。 |
 
+### パッケージマネージャでの導入（Homebrew / Scoop / winget）
+
+macOS／Windows の上級者向けに、パッケージマネージャへ `rdsh` の管理を任せる導線も用意しています。[packaging/](packaging/README.md) のマニフェストは公開済みリリースのアーカイブと SHA-256 を固定しており、インストールコマンドと更新手順は [docs/PACKAGE-MANAGERS.md](docs/PACKAGE-MANAGERS.md) にまとめています。
+
+**macOS（Homebrew）** — Apple Silicon／Intel のアーカイブを自動で選んでインストールします：
+
+```sh
+brew install --formula ./packaging/homebrew/rdsh.rb
+```
+
+**Windows（Scoop）**:
+
+```powershell
+scoop install https://raw.githubusercontent.com/jimoto-no-llm/rustdsh/main/packaging/scoop/rdsh.json
+```
+
+**Windows（winget）** — winget 1.6 以降は3つのマニフェストを直接読み込みます。`microsoft/winget-pkgs` への提出は手動のままです：
+
+```powershell
+winget install --manifest .\packaging\winget
+```
+
+これらのチャネルは1リリースずつ固定されるため、新しいタグは `python3 scripts/update-packaging-manifests.py --version vX.Y.Z` を実行するまで反映されません。
+
 ## 使い方
 
 ### `dsh` 互換での実行
@@ -571,6 +595,7 @@ python3 scripts/benchmark-node-vs-rust.py --bin ./target/release/rdsh \
 | [docs/RDSH-SETTINGS.md](docs/RDSH-SETTINGS.md) | 設定画面の機能と CLI キー一覧 |
 | [docs/DESKTOP-INTEGRATION.md](docs/DESKTOP-INTEGRATION.md) | デスクトップアプリ (Electron) との連携 |
 | [docs/FEDORA.md](docs/FEDORA.md) | Fedora / RHEL 向けパッケージ・任意ツール・Linux でのデスクトップ事情 |
+| [docs/PACKAGE-MANAGERS.md](docs/PACKAGE-MANAGERS.md) | Homebrew・Scoop・winget での導入とマニフェストの更新 |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | 今後の開発ロードマップ |
 | [docs/RELEASING.md](docs/RELEASING.md) | リリース手順 |
 | [docs/SERIAL-PROXY.md](docs/SERIAL-PROXY.md) | 同時リクエスト数制限プロキシ |
