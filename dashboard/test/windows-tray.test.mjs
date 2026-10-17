@@ -105,6 +105,83 @@ test("tray helper is resolved from an absolute PATH entry, never the working dir
   }
 });
 
+// A pwsh.exe link on PATH whose target sits beneath a directory stat() cannot
+// traverse, as WindowsApps\pwsh.exe does for a Store PowerShell package.
+async function sealedLinkResolution(sealedName) {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "rdsh-tray-alias-"));
+  const alias = path.join(root, "alias");
+  const sealed = path.join(root, sealedName);
+  await fs.mkdir(alias);
+  await fs.mkdir(path.join(sealed, "Microsoft.PowerShell"), { recursive: true });
+  const target = path.join(sealed, "Microsoft.PowerShell", "pwsh.exe");
+  await fs.writeFile(target, "#!/bin/sh\n");
+  await fs.symlink(target, path.join(alias, "pwsh.exe"));
+  await fs.chmod(sealed, 0o000);
+  const searched = process.env.PATH;
+  process.env.PATH = alias + path.delimiter + searched;
+  try {
+    await assert.rejects(fs.stat(path.join(alias, "pwsh.exe")), {
+      code: "EACCES",
+    });
+    const f = fixture(async () => {});
+    f.child.stdout.write("ready\n");
+    (await f.pending).dispose();
+    return { alias: path.join(alias, "pwsh.exe"), selected: f.invocation[0] };
+  } finally {
+    process.env.PATH = searched;
+    await fs.chmod(sealed, 0o700);
+    await fs.rm(root, { recursive: true, force: true });
+  }
+}
+
+// chmod cannot deny traversal on Windows, and root ignores it.
+const sealedLinkSkip = process.platform === "win32" || process.getuid?.() === 0;
+
+test(
+  "tray selects an app execution alias whose WindowsApps target stat() cannot open",
+  { skip: sealedLinkSkip },
+  async () => {
+    // Skipping the alias would select the later empty placeholder (EFTYPE).
+    const { alias, selected } = await sealedLinkResolution("WindowsApps");
+    assert.equal(selected, alias);
+  },
+);
+
+test(
+  "tray skips another pwsh.exe link whose target stat() cannot open",
+  { skip: sealedLinkSkip },
+  async () => {
+    const { alias, selected } = await sealedLinkResolution("private");
+    assert.notEqual(selected, alias);
+  },
+);
+
+test("tray skips a dangling pwsh.exe link and keeps searching PATH", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "rdsh-tray-dangling-"));
+  const searched = process.env.PATH;
+  try {
+    await fs.symlink(
+      path.join(root, "missing", "pwsh.exe"),
+      path.join(root, "pwsh.exe"),
+    );
+  } catch (error) {
+    // Unprivileged Windows accounts cannot create symbolic links.
+    await fs.rm(root, { recursive: true, force: true });
+    if (error.code === "EPERM") return t.skip("symbolic links need privilege");
+    throw error;
+  }
+  process.env.PATH = root + path.delimiter + searched;
+  try {
+    const f = fixture(async () => {});
+    f.child.stdout.write("ready\n");
+    (await f.pending).dispose();
+    assert.notEqual(path.dirname(f.invocation[0]), root);
+  } finally {
+    process.env.PATH = searched;
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test("tray fails closed before spawning when PATH has no pwsh.exe", async () => {
   const empty = await fs.mkdtemp(path.join(os.tmpdir(), "rdsh-tray-empty-"));
   const searched = process.env.PATH;

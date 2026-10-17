@@ -48,6 +48,7 @@ RELEASE_DIGESTS_URL="https://raw.githubusercontent.com/jimoto-no-llm/rustdsh/mai
 VER="latest"
 USE_MUSL="${RDSH_MUSL:-0}"
 DESKTOP=0
+NO_SETUP=0
 for a in "$@"; do
   case "$a" in
     --as-dsh) MODE="as-dsh" ;;
@@ -57,9 +58,10 @@ for a in "$@"; do
     --from-release) FROM_RELEASE=1 ;;
     --musl) USE_MUSL=1 ;;
     --desktop) DESKTOP=1 ;;
+    --no-setup) NO_SETUP=1 ;;
     --version=*) VER="${a#--version=}" ;;
     -h|--help)
-      echo "usage: ./install.sh [--as-dsh] [--restore] [--prefix=DIR] [--no-rustup] [--from-release] [--musl] [--desktop] [--version=VER]"
+      echo "usage: ./install.sh [--as-dsh] [--restore] [--prefix=DIR] [--no-rustup] [--from-release] [--musl] [--desktop] [--no-setup] [--version=VER]"
       echo "  (default)  build + install rdsh to PREFIX/rdsh (Linux, macOS, WSL)"
       echo "  --as-dsh   also install rdsh as PREFIX/dsh (backs up original to PREFIX/dsh-orig)"
       echo "  --restore  restore PREFIX/dsh from PREFIX/dsh-orig"
@@ -67,6 +69,7 @@ for a in "$@"; do
       echo "  --from-release  install a prebuilt binary from GitHub Releases (no Rust needed)"
       echo "  --musl  use the static musl build (rdsh-linux-x64-musl.tar.gz; also via RDSH_MUSL=1)"
       echo "  --desktop  also attach the bundled + default third-party (sound, gitview) plugins to the Desktop profile"
+      echo "  --no-setup  do not open the browser setup screen after installing"
       echo "  --version=VER  release to fetch with --from-release (default: latest, resolved from repository pins)"
       echo "  RDSH_NO_CHECKSUM=1  skip SHA-256 verification only after typing YES at a terminal"
       echo "  native Windows: use install.ps1 instead (it can also side-install into WSL via -Wsl)"
@@ -733,7 +736,6 @@ if [ "$MODE" = as-dsh ]; then
 fi
 echo "--- rdsh doctor ---"
 "$PREFIX/rdsh" doctor 2>&1 | head -n 12 || true
-echo "next: run '$PREFIX/rdsh setup' to connect a model (GPT subscription via OAuth needs no API key)"
 if [ -f "./plugins/install.sh" ]; then
   echo "next: PROFILE=web ./plugins/install.sh adds recommended plugins, including the rdsh settings UI and the phone-width Web layout"
 fi
@@ -753,4 +755,15 @@ if printf '%s' "$desktop_status" | grep -q "desktop profile: .*(initialized)"; t
   else
     echo "next: rdsh desktop install --plugins-dir . attaches the rdsh plugins to the Desktop app"
   fi
+fi
+# First run: at an interactive terminal (also when piped from curl, through
+# /dev/tty), open the browser setup screen; otherwise print the next step.
+if [ "$NO_SETUP" = 0 ] && [ -z "${CI:-}" ] && [ -t 1 ] && { [ -t 0 ] || { [ -r /dev/tty ] && [ -w /dev/tty ]; }; }   && [ "$MODE" != "restore" ] && [ -x "$PREFIX/rdsh" ]; then
+  case "${LC_ALL:-${LC_MESSAGES:-${LANG:-}}}" in
+    ja*) echo "ブラウザでセットアップ画面を開きます。終わったら画面の「セットアップを終える」を押してください。" ;;
+    *) echo "Opening the setup screen in your browser. Press \"Finish setup\" there when you are done." ;;
+  esac
+  if [ -t 0 ]; then "$PREFIX/rdsh" setup --web || true; else "$PREFIX/rdsh" setup --web < /dev/tty || true; fi
+else
+  echo "next: run '$PREFIX/rdsh setup --web' to connect a model in your browser (GPT subscription via OAuth needs no API key)"
 fi

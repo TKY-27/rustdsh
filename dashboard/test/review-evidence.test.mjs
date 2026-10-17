@@ -51,7 +51,8 @@ const withTimeout = (promise, ms, message) => {
 };
 
 async function setup(t) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "rdsh-review-evidence-"));
+  // Temporary roots may contain aliases (for example Windows 8.3 paths).
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "rdsh-review-evidence-")));
   const repo = path.join(root, "project");
   await fs.mkdir(path.join(repo, "src"), { recursive: true });
   await git(repo, "init", "-b", "review-fixture");
@@ -117,6 +118,31 @@ async function setup(t) {
   });
   return { root, repo, project, projectStore, workers, inspection, reviews, input, baseSha, headSha };
 }
+
+test("the fixture canonicalizes temporary paths before recording evidence", async (t) => {
+  // A relative temporary path reproduces aliases without symlink privileges.
+  t.mock.method(os, "tmpdir", () => ".");
+  const f = await setup(t);
+  await f.reviews.record(f.input, {
+    state: f.projectStore.value,
+    workerInspection: f.inspection,
+  });
+  assert.equal(f.project.directory, await fs.realpath(f.project.directory));
+});
+
+test("a state home reached through an alias records evidence in its canonical directory", async (t) => {
+  const f = await setup(t);
+  const alias = path.join(f.root, "state-alias");
+  await fs.symlink(f.project.directory, alias, process.platform === "win32" ? "junction" : "dir");
+  const reviews = await ReviewEvidenceStore.open({ ...f.project, directory: alias });
+  const stored = await reviews.record(f.input, {
+    state: f.projectStore.value,
+    workerInspection: f.inspection,
+  });
+  assert.equal(stored.idempotent, false);
+  const written = JSON.parse(await fs.readFile(path.join(f.project.directory, "review-evidence.json"), "utf8"));
+  assert.deepEqual(written.reports.map((report) => report.review_id), ["review-run-1"]);
+});
 
 test("review reports bind separate worker roles and an exact binary diff, then stale on task or source changes", async (t) => {
   const f = await setup(t);

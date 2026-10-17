@@ -15,6 +15,7 @@
 #   .\install.ps1 -FromRelease -Version v0.1.2  # pinned release
 #   .\install.ps1 -FromRelease -NoChecksum      # skip SHA-256 only after typing YES at a terminal
 #   .\install.ps1 -Desktop         # also attach the rdsh + default third-party (sound, gitview) plugins to Desktop
+#   .\install.ps1 -NoSetup         # skip the first-run setup screen and the Start menu shortcut
 # -FromRelease verifies the Windows archive against this repository's
 # release-digests-windows.tsv, fetched from its fixed canonical URL; the release
 # origin's .sha256 sidecar is never trusted. RDSH_RELEASE_BASE only moves the
@@ -30,7 +31,8 @@ param(
   [switch]$FromRelease,
   [switch]$Desktop,
   [string]$Version = 'latest',
-  [switch]$NoChecksum
+  [switch]$NoChecksum,
+  [switch]$NoSetup
 )
 $ErrorActionPreference = 'Stop'
 $Repo = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -275,7 +277,6 @@ if ($Wsl) {
 
 Write-Host '--- rdsh doctor ---'
 & (Join-Path $Prefix 'rdsh.exe') doctor | Select-Object -First 12
-Write-Host "next: run 'rdsh setup' to connect a model (GPT subscription via OAuth needs no API key)"
 
 # DeepSeek Harness Desktop (Electron) keeps its own reserved profile; the npm
 # dsh CLI cannot manage it, so plugin attachment goes through the Desktop
@@ -294,4 +295,42 @@ if ($desktopStatus -match 'desktop profile: .*(initialized)') {
   } else {
     Write-Host "next: rdsh desktop install --plugins-dir . attaches the rdsh plugins to the Desktop app"
   }
+}
+
+# First run for people who have never used a terminal tool: offer the original
+# dsh when npm can install it, add a Start menu entry that reopens setup, and
+# open the browser setup screen. Only at an interactive console, never in CI.
+# Japanese text is base64 UTF-8: this file stays ASCII (no BOM before the
+# shebang) and Windows PowerShell 5.1 would misread raw UTF-8.
+$Interactive = [Environment]::UserInteractive -and -not [Console]::IsInputRedirected -and -not $env:CI
+$Ja = (Get-UICulture).Name -like 'ja*'
+function Text([string]$JaBase64, [string]$EnText) {
+  if ($Ja) { [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($JaBase64)) } else { $EnText }
+}
+if ($Interactive -and -not $NoSetup) {
+  if (-not (Get-Command dsh -ErrorAction SilentlyContinue) -and (Get-Command npm -ErrorAction SilentlyContinue)) {
+    # "Install DeepSeek Harness (dsh), used for conversations, now?"
+    $answer = Read-Host (Text 'QUnjgajjga7kvJroqbHjgavkvb/jgYYgRGVlcFNlZWsgSGFybmVzcyAoZHNoKSDjgpLku4rjgqTjg7Pjgrnjg4jjg7zjg6vjgZfjgb7jgZnjgYvvvJ8gW1kvbl0=' 'Install DeepSeek Harness (dsh), used for conversations, now? [Y/n]')
+    if ($answer -notmatch '^[nN]') {
+      & npm install -g '@deepseek-ai/dsh'
+      if ($LASTEXITCODE -ne 0) { Write-Host (Text 'ZHNoIOOBruOCpOODs+OCueODiOODvOODq+OBq+WkseaVl+OBl+OBvuOBl+OBn+OAguOCu+ODg+ODiOOCouODg+ODl+eUu+mdouOBq+aJi+mghuOCkuihqOekuuOBl+OBvuOBmeOAgg==' 'dsh install failed; the setup screen shows the steps.') }
+    }
+  }
+  try {
+    $menu = Join-Path ([Environment]::GetFolderPath('Programs')) 'rdsh'
+    New-Item -ItemType Directory -Force -Path $menu | Out-Null
+    $shell = New-Object -ComObject WScript.Shell
+    $link = $shell.CreateShortcut((Join-Path $menu (Text 'cmRzaCDjgrvjg4Pjg4jjgqLjg4Pjg5cubG5r' 'rdsh setup.lnk')))
+    $link.TargetPath = Join-Path $Prefix 'rdsh.exe'
+    $link.Arguments = 'setup --web'
+    $link.WorkingDirectory = $env:USERPROFILE
+    $link.IconLocation = (Join-Path $Prefix 'rdsh.exe') + ',0'
+    $link.Description = 'rdsh first-run setup'
+    $link.Save()
+    Write-Host (Text '44K544K/44O844OI44Oh44OL44Ol44O844Gr44CMcmRzaCDjgrvjg4Pjg4jjgqLjg4Pjg5fjgI3jgpLov73liqDjgZfjgb7jgZfjgZ/vvIjjgYLjgajjgYvjgonoqK3lrprjgpLplovjgY3nm7TjgZvjgb7jgZnvvIk=' "added 'rdsh setup' to the Start menu (reopen setup any time)")
+  } catch { Write-Host ((Text '44K544K/44O844OI44Oh44OL44Ol44O844G444Gu6L+95Yqg44Gv44K544Kt44OD44OX44GX44G+44GX44GfOiA=' 'skipped the Start menu shortcut: ') + $_.Exception.Message) }
+  Write-Host (Text '44OW44Op44Km44K244Gn44K744OD44OI44Ki44OD44OX55S76Z2i44KS6ZaL44GN44G+44GZ44CC57WC44KP44Gj44Gf44KJ55S76Z2i44Gu44CM44K744OD44OI44Ki44OD44OX44KS57WC44GI44KL44CN44KS5oq844GX44Gm44GP44Gg44GV44GE44CC' 'Opening the setup screen in your browser. Press "Finish setup" there when you are done.')
+  & (Join-Path $Prefix 'rdsh.exe') setup --web
+} else {
+  Write-Host "next: run 'rdsh setup --web' to connect a model in your browser (GPT subscription via OAuth needs no API key)"
 }

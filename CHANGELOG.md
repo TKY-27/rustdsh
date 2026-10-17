@@ -7,6 +7,31 @@ Format follows Keep a Changelog, versioning follows Semantic Versioning.
 
 ### Added
 
+- First-run wizard: `rdsh setup --web` is now a three-step page (check,
+  connect AI, done) that opens already connected through a protected local
+  launcher file, so the token never reaches argv or the terminal and nobody
+  has to paste it. It detects Node.js, dsh, Codex, OpenCode and the Desktop
+  app; shares a found Codex/OpenCode login with one click (the same persistent
+  `--select SOURCE:CREDENTIAL --import` path); starts `codex login` /
+  `opencode auth login` in a new terminal window; saves DeepSeek, OpenAI or
+  Anthropic keys; and starts the first conversation (Desktop app, `rdsh tui`
+  or the web profile). The token-paste box remains as the fallback.
+- Installers open that wizard after an interactive install (`install.ps1
+  -NoSetup` / `install.sh --no-setup` skip it, as does `CI`). On Windows the
+  installer also offers `npm install -g @deepseek-ai/dsh` when dsh is missing
+  and adds an "rdsh setup" Start menu shortcut.
+- Project dashboard: a simple view (default) shows only the current state,
+  what waits for the person, the agent's screens, tasks and reports;
+  "くわしく表示 / Detailed view" brings back every other panel. Typography
+  uses a Japanese system font stack with calmer sizes and light motion that
+  respects reduced-motion settings.
+
+### Fixed
+
+- Project dashboard stylesheet: two unclosed rules made browsers drop roughly
+  the last 1,100 lines of CSS (workspace grid, attention inbox, mobile layout
+  and more). A unit test now keeps the stylesheet balanced.
+
 - `features.telemetry` (default off) and `RDSH_TELEMETRY=on`: delegated `dsh`
   runs now receive `DSH_TELEMETRY_DISABLED=1` by default, so upstream session
   telemetry (OpenTelemetry) is not sent unless the user opts in. A

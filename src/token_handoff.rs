@@ -11,10 +11,36 @@ pub struct TokenHandoff {
 
 impl TokenHandoff {
     pub fn create(token: &str, locale: crate::locale::Locale) -> Result<Self> {
+        Self::create_file("rdsh-token", "txt", token, locale)
+    }
+
+    /// A protected local page that forwards the browser to `base` with the
+    /// token in the fragment. Opening this file keeps the credential out of
+    /// the browser-launch argv (only the path is passed) while sparing the
+    /// person from pasting the handoff file by hand.
+    pub fn launcher(base: &str, token: &str, locale: crate::locale::Locale) -> Result<Self> {
+        let target = format!("{base}#key={token}");
+        let page = format!(
+            "<!doctype html><meta charset=\"utf-8\"><meta name=\"referrer\" content=\"no-referrer\">\
+<title>rdsh</title><script>location.replace({target:?});</script>\
+<p><a href=\"{target}\">rdsh</a></p>"
+        );
+        Self::create_file("rdsh-open", "html", &page, locale)
+    }
+
+    fn create_file(
+        prefix: &str,
+        extension: &str,
+        content: &str,
+        locale: crate::locale::Locale,
+    ) -> Result<Self> {
         let dir = std::env::temp_dir();
         for _ in 0..8 {
             // The name is independently random; the bearer credential is only file content.
-            let name = format!("rdsh-token-{}.txt", crate::local_http::random_token()?);
+            let name = format!(
+                "{prefix}-{}.{extension}",
+                crate::local_http::random_token()?
+            );
             let path = dir.join(name);
             let mut file = match open_restricted(&path, locale) {
                 Ok(file) => file,
@@ -34,7 +60,7 @@ impl TokenHandoff {
                     });
                 }
             };
-            if let Err(error) = write_handoff(&mut file, &path, token, locale) {
+            if let Err(error) = write_handoff(&mut file, &path, content, locale) {
                 drop(file);
                 let _ = fs::remove_file(&path);
                 return Err(error);
@@ -264,6 +290,25 @@ mod tests {
         }
         let path = handoff.path().to_owned();
         drop(handoff);
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn launcher_forwards_with_fragment_token_and_is_removed_on_drop() {
+        let token = "0123456789abcdef";
+        let launcher = TokenHandoff::launcher(
+            "http://127.0.0.1:38082/",
+            token,
+            crate::locale::Locale::English,
+        )
+        .unwrap();
+        let name = launcher.path().file_name().unwrap().to_string_lossy();
+        assert!(name.starts_with("rdsh-open-") && name.ends_with(".html"));
+        assert!(!name.contains(token));
+        let page = std::fs::read_to_string(launcher.path()).unwrap();
+        assert!(page.contains("location.replace(\"http://127.0.0.1:38082/#key=0123456789abcdef\")"));
+        let path = launcher.path().to_owned();
+        drop(launcher);
         assert!(!path.exists());
     }
 

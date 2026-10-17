@@ -3,94 +3,240 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
 <title>rdsh setup</title>
 <link rel="icon" type="image/png" href="/icon.png">
 <link rel="apple-touch-icon" href="/icon.png">
 <style>
+:root {
+  color-scheme: light;
+  --bg: #f6f6f3;
+  --card: #ffffff;
+  --line: #e6e5df;
+  --fg: #1f201c;
+  --mut: #6a6b64;
+  --soft: #f1f1ec;
+  --accent: #2f5fd0;
+  --accent-hover: #264fb3;
+  --accent-soft: #eaf0fc;
+  --ok: #2f7a4f;
+  --ok-soft: #e7f3ec;
+  --warn: #8a6214;
+  --warn-soft: #fbf2dc;
+  --danger: #a23b2b;
+  --shadow: 0 1px 2px rgba(31, 32, 28, .04), 0 12px 32px -18px rgba(31, 32, 28, .22);
+  --radius: 14px;
+  --ease: cubic-bezier(.2, .8, .25, 1);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --bg: #131411;
+    --card: #1c1d19;
+    --line: #30312b;
+    --fg: #ededea;
+    --mut: #a3a59b;
+    --soft: #24251f;
+    --accent: #6f98f5;
+    --accent-hover: #86a9f7;
+    --accent-soft: #1d2a45;
+    --ok: #7cc99b;
+    --ok-soft: #1c3125;
+    --warn: #e2bd68;
+    --warn-soft: #33290f;
+    --danger: #f0907e;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 16px 40px -20px rgba(0, 0, 0, .7);
+  }
+}
 * { box-sizing: border-box; }
-body { margin: 0; min-height: 100vh; font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Hiragino Sans", "Yu Gothic", system-ui, sans-serif; background: #000; color: #f5f5f7; -webkit-font-smoothing: antialiased; }
-.stage { position: fixed; inset: 0; padding: 0; }
-.app { display: flex; height: 100vh; background: #0b0b0d; color: #e8e8ea; filter: blur(2px) brightness(.72); transform: scale(.99); }
-.side { width: 250px; flex: none; background: #131316; border-right: 1px solid rgba(255,255,255,.07); padding: 14px 12px; font-size: 12.5px; }
-.logo { display: flex; align-items: center; gap: 8px; padding: 2px 8px 14px; font-weight: 700; font-size: 14px; }
-.chip { font-size: 9px; font-weight: 700; border: 1px solid rgba(255,255,255,.25); border-radius: 4px; padding: 1px 5px; color: rgba(255,255,255,.75); }
-.newbtn { border: 1px solid rgba(255,255,255,.16); border-radius: 9px; padding: 8px; text-align: center; color: rgba(255,255,255,.85); margin-bottom: 14px; }
-.nav { padding: 8px; color: rgba(255,255,255,.75); }
-.sect { padding: 12px 8px 6px; font-size: 11px; color: rgba(255,255,255,.42); }
-.srow { padding: 7px 8px; border-radius: 8px; color: rgba(255,255,255,.66); white-space: nowrap; overflow: hidden; }
-.srow.on { background: rgba(255,255,255,.09); color: #fff; }
-.main { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 0 5vw; }
-.hero { font-size: 26px; font-weight: 700; margin: 0 0 26px; }
-.hero em { font-style: normal; font-size: 11px; vertical-align: middle; border: 1px solid rgba(122,162,247,.5); color: #7aa2f7; border-radius: 20px; padding: 2px 10px; margin-left: 10px; }
-.ask { width: min(860px, 100%); background: #1c1c20; border: 1px solid rgba(255,255,255,.09); border-radius: 16px; padding: 14px 18px; }
-.ask .ph { font-size: 13px; color: rgba(255,255,255,.35); }
-.ask .bar { display: flex; align-items: center; margin-top: 26px; font-size: 12px; color: rgba(255,255,255,.6); }
-.send { margin-left: auto; width: 30px; height: 30px; border-radius: 50%; background: #0a84ff; }
-.scrim { position: fixed; inset: 0; background: rgba(0,0,0,.28); }
-.card { position: relative; z-index: 2; max-width: 560px; margin: 9vh auto; padding: 40px 40px 32px; border-radius: 22px; background: rgba(28,28,30,.66); -webkit-backdrop-filter: blur(26px) saturate(1.4); backdrop-filter: blur(26px) saturate(1.4); border: 1px solid rgba(255,255,255,.14); box-shadow: 0 24px 70px rgba(0,0,0,.4), inset 0 1px 0 rgba(255,255,255,.12); animation: rise .55s cubic-bezier(.2,.8,.25,1); }
-@keyframes rise { from { opacity: 0; transform: translateY(14px); } }
-h1 { margin: 0 0 6px; font-size: 22px; font-weight: 700; letter-spacing: -.01em; }
-.sub { margin: 0 0 22px; font-size: 13px; color: rgba(235,235,245,.6); }
-.okbar { display: none; margin: 0 0 18px; padding: 11px 16px; border-radius: 12px; font-size: 13px; font-weight: 600; color: #30d158; background: rgba(48,209,88,.12); border: 1px solid rgba(48,209,88,.32); }
-.row { display: flex; align-items: center; gap: 10px; padding: 11px 2px; font-size: 13.5px; border-bottom: 1px solid rgba(255,255,255,.09); }
-.dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
-.on { background: #30d158; }
-.off { background: rgba(235,235,245,.28); }
-.row small { margin-left: auto; font-size: 11.5px; color: rgba(235,235,245,.5); }
-h3 { font-size: 12px; font-weight: 600; letter-spacing: .05em; margin: 24px 0 6px; color: rgba(235,235,245,.55); }
-.cmd { display: flex; align-items: center; gap: 10px; padding: 10px 2px; border-bottom: 1px solid rgba(255,255,255,.09); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+[hidden] { display: none !important; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Hiragino Kaku Gothic ProN", "BIZ UDPGothic", "Noto Sans JP", "Noto Sans CJK JP", "Yu Gothic UI", Meiryo, system-ui, sans-serif;
+  font-size: 15px;
+  line-height: 1.75;
+  letter-spacing: .02em;
+  font-feature-settings: "palt" 1;
+  -webkit-font-smoothing: antialiased;
+}
+:lang(en) body, html:lang(en) body { letter-spacing: 0; font-feature-settings: normal; }
+.shell { max-width: 620px; margin: 0 auto; padding: 40px 20px 64px; }
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 15px; }
+.brand img { border-radius: 9px; }
+.steps { display: flex; gap: 6px; margin: 28px 0 18px; padding: 0; list-style: none; }
+.steps li { flex: 1; font-size: 12.5px; color: var(--mut); }
+.steps li::before { content: ""; display: block; height: 4px; border-radius: 4px; background: var(--line); margin-bottom: 8px; transition: background .35s var(--ease); }
+.steps li.done::before, .steps li.now::before { background: var(--accent); }
+.steps li.now { color: var(--fg); font-weight: 600; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 18px; box-shadow: var(--shadow); padding: 32px 32px 28px; }
+.step { animation: enter .32s var(--ease); }
+@keyframes enter { from { opacity: 0; transform: translateY(8px); } }
+h1 { margin: 0; font-size: 24px; line-height: 1.45; letter-spacing: .01em; font-weight: 700; }
+.lead { margin: 8px 0 24px; color: var(--mut); }
+h2 { margin: 0; font-size: 16px; font-weight: 700; line-height: 1.5; }
+.small, .hint { font-size: 13px; color: var(--mut); }
+.hint { margin: 10px 0 0; overflow-wrap: anywhere; }
+.checks { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
+.check { display: grid; grid-template-columns: 28px 1fr; gap: 4px 12px; padding: 16px 0; border-bottom: 1px solid var(--line); }
+.mark { width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; font-size: 13px; font-weight: 700; margin-top: 1px; }
+.mark.ok { background: var(--ok-soft); color: var(--ok); }
+.mark.todo { background: var(--warn-soft); color: var(--warn); }
+.check p { margin: 0; }
+.check .small { grid-column: 2; }
+.check .extra { grid-column: 2; margin-top: 6px; }
+.option { border: 1px solid var(--line); border-radius: var(--radius); padding: 18px 18px 16px; margin-top: 12px; transition: border-color .2s, box-shadow .2s; }
+.option.connected { border-color: color-mix(in srgb, var(--ok) 45%, var(--line)); }
+.option .head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.option p { margin: 4px 0 0; }
+.badge { font-size: 11.5px; font-weight: 600; padding: 1px 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); letter-spacing: .04em; }
+.badge.ok { background: var(--ok-soft); color: var(--ok); }
+.row-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; align-items: center; }
+button, .button { font: inherit; font-size: 14px; font-weight: 600; border-radius: 10px; padding: 9px 16px; cursor: pointer; border: 1px solid var(--line); background: var(--card); color: var(--fg); transition: background .15s, border-color .15s, transform .08s, opacity .2s; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; line-height: 1.4; }
+button:hover, .button:hover { border-color: color-mix(in srgb, var(--fg) 25%, var(--line)); }
+button:active, .button:active { transform: scale(.98); }
+button:disabled { opacity: .45; cursor: default; transform: none; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+button.big { padding: 12px 20px; font-size: 15px; }
+button.link, .linkish { border: 0; background: none; padding: 4px 2px; color: var(--accent); font-weight: 500; font-size: 13.5px; }
+h1:focus { outline: none; }
+:focus-visible { outline: 3px solid color-mix(in srgb, var(--accent) 45%, transparent); outline-offset: 2px; }
+.footer { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 28px; flex-wrap: wrap; }
+.footer .right { display: flex; gap: 8px; margin-left: auto; }
+.field { display: flex; gap: 8px; margin-top: 12px; }
+input[type=password], select { flex: 1; min-width: 0; font: inherit; font-size: 14px; background: var(--soft); border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; color: var(--fg); outline: none; transition: border-color .15s, background .15s; }
+input[type=password]:focus, select:focus { border-color: var(--accent); background: var(--card); }
+.cmd { display: flex; align-items: center; gap: 8px; margin-top: 8px; padding: 7px 8px 7px 12px; border-radius: 10px; background: var(--soft); font-family: ui-monospace, "Cascadia Code", "SFMono-Regular", Menlo, Consolas, monospace; font-size: 13px; letter-spacing: 0; }
 .cmd code { flex: 1; overflow-x: auto; white-space: nowrap; }
-.link { background: none; border: 0; padding: 4px 2px; font-size: 12.5px; font-weight: 500; color: #0a84ff; cursor: pointer; }
-.field { display: flex; gap: 10px; padding: 12px 0 2px; }
-input[type=password] { flex: 1; background: rgba(255,255,255,.07); border: 1px solid rgba(255,255,255,.14); border-radius: 10px; padding: 9px 12px; color: #fff; font-size: 13px; outline: none; }
-input[type=password]:focus { border-color: rgba(10,132,255,.7); }
-button.primary { border: 0; border-radius: 10px; padding: 9px 18px; font-size: 13px; font-weight: 600; color: #fff; background: #0a84ff; cursor: pointer; }
-button.primary:active { transform: scale(.98); }
-button.ghost { background: none; border: 1px solid rgba(255,255,255,.16); border-radius: 10px; padding: 8px 16px; font-size: 13px; color: #f5f5f7; cursor: pointer; }
-.hint { font-size: 12px; color: rgba(235,235,245,.5); margin: 10px 0 0; overflow-wrap: anywhere; }
-.foot { display: flex; gap: 10px; margin-top: 28px; }
-@media (prefers-color-scheme: light) {
-  body { color: #1d1d1f; }
-  .app { filter: blur(2px) brightness(.9); }
-  .scrim { background: rgba(255,255,255,.3); }
-  .card { background: rgba(255,255,255,.7); border-color: rgba(0,0,0,.08); box-shadow: 0 24px 70px rgba(0,0,0,.16), inset 0 1px 0 #fff; }
-  .sub,.row small,h3,.hint { color: rgba(60,60,67,.72); }
-  .row,.cmd { border-color: rgba(0,0,0,.09); }
-  .off { background: rgba(60,60,67,.3); }
-  input[type=password] { background: rgba(255,255,255,.75); color: #1d1d1f; border-color: rgba(0,0,0,.12); }
-  button.ghost { border-color: rgba(0,0,0,.14); color: #1d1d1f; }
-  input[type=password] { background: rgba(255,255,255,.75); color: #1d1d1f; border-color: rgba(0,0,0,.12); }
+.banner { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-radius: 12px; font-weight: 600; font-size: 14px; margin: 0 0 16px; animation: enter .3s var(--ease); }
+.banner.ok { background: var(--ok-soft); color: var(--ok); }
+.wait { display: inline-flex; align-items: center; gap: 8px; font-size: 13.5px; color: var(--mut); }
+.wait::before { content: ""; width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--line); border-top-color: var(--accent); animation: spin .9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+details { margin-top: 18px; }
+summary { cursor: pointer; font-size: 13.5px; color: var(--mut); list-style: none; display: inline-flex; align-items: center; gap: 6px; }
+summary::-webkit-details-marker { display: none; }
+summary::before { content: "›"; display: inline-block; transition: transform .2s var(--ease); font-size: 16px; line-height: 1; }
+details[open] > summary::before { transform: rotate(90deg); }
+.list .row { display: flex; align-items: center; gap: 10px; padding: 10px 2px; font-size: 13.5px; border-bottom: 1px solid var(--line); }
+.list .row small { margin-left: auto; font-size: 12px; color: var(--mut); }
+.dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.dot.on { background: var(--ok); }
+.dot.off { background: var(--line); }
+#extras .row { cursor: pointer; border-radius: 8px; transition: background .15s; padding-left: 8px; padding-right: 8px; }
+#extras .row:hover { background: var(--soft); }
+.done-mark { width: 56px; height: 56px; border-radius: 50%; background: var(--ok-soft); color: var(--ok); display: grid; place-items: center; margin-bottom: 18px; }
+.done-mark svg { width: 28px; height: 28px; stroke-dasharray: 30; stroke-dashoffset: 30; animation: draw .5s .15s var(--ease) forwards; }
+@keyframes draw { to { stroke-dashoffset: 0; } }
+.starts { display: grid; gap: 10px; margin-top: 4px; }
+.start { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 12px; text-align: left; width: 100%; padding: 14px 16px; border-radius: var(--radius); }
+.start strong { display: block; font-size: 15px; }
+.start span.small { display: block; font-weight: 400; }
+.start::after { content: "→"; color: var(--mut); transition: transform .2s var(--ease); }
+.start:hover::after { transform: translateX(3px); }
+.start.primary::after { color: #fff; }
+.start.primary span.small { color: rgba(255,255,255,.82); }
+.is-connected .option:not(.connected), .is-connected #other-keys { display: none; }
+#show-more { display: none; margin-top: 10px; }
+.is-connected #show-more { display: inline-flex; }
+.toast { position: fixed; left: 50%; bottom: 24px; transform: translate(-50%, 12px); opacity: 0; max-width: min(560px, calc(100vw - 32px)); background: var(--fg); color: var(--bg); padding: 10px 16px; border-radius: 12px; font-size: 13.5px; transition: opacity .25s, transform .25s var(--ease); pointer-events: none; }
+.toast.show { opacity: 1; transform: translate(-50%, 0); }
+@media (max-width: 560px) {
+  .shell { padding: 24px 16px 48px; }
+  .card { padding: 24px 18px 20px; border-radius: 16px; }
+  h1 { font-size: 21px; }
+  .field { flex-direction: column; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+  .done-mark svg { stroke-dashoffset: 0; }
 }
 </style>
 </head>
 <body>
-<div class="stage"><div class="app"><div class="side"><div class="logo"><img src="/icon.png" width="28" height="28" alt="rdsh"> rdsh <span class="chip" id="mock-setup">SETUP</span></div><div class="newbtn" id="mock-new">＋ 新しいセッション</div><div class="nav" id="mock-plugins">プラグイン</div><div class="sect" id="mock-workspaces">ワークスペース</div><div class="srow" id="mock-sample">適当</div><div class="srow on">rustdsh</div><div class="srow" id="mock-status">dshの現在の状況を確認</div><div class="srow">Flaxia</div><div class="sect" id="mock-settings">設定</div></div><div class="main"><p class="hero"><span id="mock-hero">新しい発見へ</span> <em id="mock-preview">プレビュー</em></p><div class="ask"><div class="ph" id="mock-prompt">作りたいものを説明してください（/コマンド、@ファイル／セッション）</div><div class="bar"><span id="mock-access">＋　Full access</span><span style="margin-left:auto">Muse Spark 1.3 Contributor</span><span class="send"></span></div></div></div></div></div>
-<div class="scrim"></div>
-<div class="card">
-<img src="/icon.png" width="44" height="44" alt="rdsh">
-<h1 id="t">モデル接続</h1>
-<p class="sub" id="s">Codex / opencode のログインから、共有する認証情報を選びます</p>
-<div class="okbar" id="okbar"></div>
-<div id="token-box" class="field" style="display:none"><input type="password" id="setup-token" autocomplete="off" spellcheck="false" placeholder="保護済みトークンファイルの内容"><button class="primary" id="setup-connect" onclick="connectSetup()">接続</button></div>
-<p class="hint" id="token-hint" style="display:none">端末に表示された保護済みトークンファイルの内容を入力してください。トークンはアドレスバーに保存されません。</p>
-<div id="list"></div>
-<h3 id="h0">dshが使うモデル</h3>
-<div id="defs"></div>
-<h3 id="hs">共有する認証情報を選ぶ</h3>
-<div id="sharing"></div>
-<p class="hint" id="sharehint"></p>
-<h3 id="hx">追加機能（任意）</h3>
-<div id="extras"></div>
-<p class="hint" id="khx">普段は不要です。必要になったものだけ有効にできます</p>
-<h3 id="h1">サブスクで使う — APIキー不要</h3>
-<div class="cmd"><code>opencode auth login</code><button class="link" id="copy-opencode" onclick="cp(this)">コピー</button></div>
-<div class="cmd"><code>codex login</code><button class="link" id="copy-codex" onclick="cp(this)">コピー</button></div>
-<h3 id="h2">DeepSeekキーを使う</h3>
-<div class="field"><input type="password" id="key" placeholder="DEEPSEEK_API_KEY"><button class="primary" id="save-key" onclick="setupAction(save)">保存</button></div>
-<p class="hint" id="kh">保存すると、表示した認証ファイルから全DSHプロファイルで利用できます。利用を止めるにはDSHを停止して該当refを削除し、キーの失効は発行元で行います。</p>
-<div><button class="ghost" id="issue" onclick="window.open('https://platform.deepseek.com','_blank','noopener')">キーを発行する</button></div>
-<div class="foot"><button class="ghost" id="refresh" onclick="setupAction(load)">更新</button><button class="ghost" id="done" onclick="setupAction(bye)" style="display:none">閉じる</button></div>
+<div class="shell">
+  <div class="brand"><img src="/icon.png" width="30" height="30" alt=""> rdsh</div>
+  <ol class="steps" id="steps" aria-label="setup">
+    <li data-step="ready" id="step-label-ready">準備</li>
+    <li data-step="connect" id="step-label-connect">AIとつなぐ</li>
+    <li data-step="finish" id="step-label-finish">完了</li>
+  </ol>
+  <main class="card">
+    <section class="step" id="step-token" hidden>
+      <h1 id="t">はじめましょう</h1>
+      <p class="lead" id="s">ターミナルに表示されたファイルの中身を貼り付けると、設定画面につながります。</p>
+      <div id="token-box" class="field"><input type="password" id="setup-token" autocomplete="off" spellcheck="false" placeholder="ファイルの中身"><button class="primary" id="setup-connect" onclick="connectSetup()">接続</button></div>
+      <p class="hint" id="token-hint">次回からは <code>rdsh setup --web</code> を実行すると、自動でつながった状態で開きます。</p>
+    </section>
+
+    <section class="step" id="step-ready" hidden>
+      <h1 id="ready-title">まずは準備を確認します</h1>
+      <p class="lead" id="ready-lead">必要なものがそろっているか、自動で調べました。</p>
+      <ul class="checks" id="checks"></ul>
+      <div class="footer">
+        <button class="link" id="recheck" onclick="setupAction(loadEnv)">もう一度確認</button>
+        <div class="right"><button class="primary big" id="ready-next" onclick="go('connect')">次へ</button></div>
+      </div>
+    </section>
+
+    <section class="step" id="step-connect" hidden>
+      <h1 id="connect-title">使うAIを選びましょう</h1>
+      <p class="lead" id="connect-lead">どれか1つつなげば始められます。迷ったら一番上がおすすめです。</p>
+      <div class="banner ok" id="okbar" hidden></div>
+      <div id="options"></div>
+      <div class="option" id="deepseek-option">
+        <div class="head"><h2 id="h2">DeepSeek の APIキー</h2><span class="badge ok" id="deepseek-saved" hidden>保存済み</span></div>
+        <p class="small" id="kh">キーをお持ちなら貼り付けてください。このPCの dsh 設定に保存します。</p>
+        <div class="field"><input type="password" id="key" autocomplete="off" spellcheck="false" placeholder="sk-..."><button id="save-key" onclick="setupAction(save)">保存</button></div>
+        <div class="row-actions"><a class="linkish" id="issue" href="https://platform.deepseek.com/api_keys" target="_blank" rel="noopener noreferrer">キーを発行する（DeepSeek）</a></div>
+      </div>
+      <button class="link" id="show-more" onclick="$('step-connect').classList.remove('is-connected')">ほかの方法でつなぐ</button>
+      <details id="other-keys">
+        <summary id="other-keys-summary">ほかの APIキー（OpenAI・Anthropic）</summary>
+        <div class="field"><select id="other-key-name" aria-label="key"><option value="OPENAI_API_KEY">OpenAI</option><option value="ANTHROPIC_API_KEY">Anthropic</option></select></div>
+        <div class="field"><input type="password" id="other-key" autocomplete="off" spellcheck="false" placeholder="API key"><button id="save-other-key" onclick="setupAction(saveOther)">保存</button></div>
+      </details>
+      <details id="detail-box">
+        <summary id="detail-summary">くわしい情報（上級者向け）</summary>
+        <h3 class="small" id="h0">dsh が使うモデル</h3>
+        <div class="list" id="defs"></div>
+        <h3 class="small" id="h-records">見つかったログイン</h3>
+        <div class="list" id="list"></div>
+        <h3 class="small" id="hs">コマンドで設定する場合</h3>
+        <div id="sharing"></div>
+        <p class="hint" id="sharehint"></p>
+      </details>
+      <div class="footer">
+        <button id="connect-back" onclick="go('ready')">戻る</button>
+        <div class="right"><button class="link" id="connect-skip" onclick="go('finish')">あとで設定する</button><button class="primary big" id="connect-next" onclick="go('finish')" disabled>次へ</button></div>
+      </div>
+    </section>
+
+    <section class="step" id="step-finish" hidden>
+      <div class="done-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></div>
+      <h1 id="finish-title">準備ができました</h1>
+      <p class="lead" id="finish-lead">さっそく AI に話しかけてみましょう。</p>
+      <div class="starts" id="starts"></div>
+      <p class="hint" id="finish-cmd-hint">うまく開かないときは、ターミナルで次のコマンドを実行してください。</p>
+      <div class="cmd" id="finish-cmd"><code>rdsh tui</code><button class="link" onclick="cp(this)">コピー</button></div>
+      <p class="hint" id="model-line"></p>
+      <details>
+        <summary id="hx">追加機能（必要なときだけ）</summary>
+        <div class="list" id="extras"></div>
+        <p class="hint" id="khx">ふだんは不要です。使いたいものだけ、押してオンにできます。</p>
+      </details>
+      <div class="footer">
+        <button id="finish-back" onclick="go('connect')">戻る</button>
+        <div class="right"><button class="primary" id="done" onclick="setupAction(bye)">セットアップを終える</button></div>
+      </div>
+    </section>
+  </main>
 </div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
 <script>
 var setupToken = new URLSearchParams(location.hash.slice(1)).get("key") || sessionStorage.getItem("rdsh_setup_token") || "";
 if (setupToken) sessionStorage.setItem("rdsh_setup_token", setupToken);
@@ -98,74 +244,365 @@ history.replaceState(null, "", location.pathname);
 var LANG = document.documentElement.dataset.rdshLocale || "en";
 var JA = LANG === "ja";
 var ZH = LANG === "zh-CN";
-function t(ja, en, zh){ return JA ? ja : (ZH ? zh : en); }
-function text(id, ja, en, zh){ document.getElementById(id).textContent = t(ja, en, zh); }
-text("t", "モデルを接続", "Connect a model", "连接模型"); text("s", "共有する Codex / opencode 認証情報を選びます", "Choose which Codex / opencode credentials to share", "选择要共享的 Codex / opencode 凭据"); text("h1", "サブスク — APIキー不要", "Subscription — no API key needed", "订阅 — 无需 API 密钥"); text("h2", "DeepSeekキーを使う", "Use a DeepSeek key", "使用 DeepSeek 密钥"); text("kh", "保存すると全DSHプロファイルで利用できます。利用を止めるにはDSHを停止して該当refを削除し、失効は発行元で行います。", "Saving persists this key for every DSH profile. Stop DSH and remove the ref to stop using the copy; revoke the key at its provider.", "保存后所有 DSH 配置文件都可使用此密钥。要停止使用副本，请停止 DSH 并删除对应 ref；请在提供方撤销密钥。"); text("h0", "dshが使用するモデル", "Models dsh will use", "dsh 将使用的模型"); text("hx", "追加機能（任意）", "Extras (optional)", "附加功能（可选）"); text("khx", "通常は不要です。必要な機能だけ有効にしてください。", "Usually unnecessary. Enable only what you need.", "通常不需要。只启用所需的功能。"); text("issue", "キーを発行する", "Get a key", "获取密钥"); text("mock-new", "＋ 新しいセッション", "+ New session", "+ 新建会话"); text("mock-plugins", "プラグイン", "Plugins", "插件"); text("mock-workspaces", "ワークスペース", "WORKSPACES", "工作区"); text("mock-sample", "適当", "Sample", "示例"); text("mock-status", "dshの現在の状況を確認", "Check dsh status", "检查 dsh 状态"); text("mock-settings", "設定", "Settings", "设置"); text("mock-hero", "新しい発見へ", "Discover what is next", "探索新发现"); text("mock-preview", "プレビュー", "Preview", "预览"); text("mock-prompt", "作りたいものを説明してください（/コマンド、@ファイル／セッション）", "Describe what you want to make (/ commands, @ files/sessions)", "描述你想创建的内容（/ 命令、@ 文件/会话）"); document.getElementById("setup-token").placeholder = t("保護済みトークンファイルの内容", "Protected token file contents", "受保护令牌文件的内容"); document.getElementById("token-hint").textContent = t("端末に表示された保護済みトークンファイルの内容を入力してください。トークンはアドレスバーに保存されません。", "Paste the contents of the protected token file printed in the terminal. The token is not stored in the address bar.", "粘贴终端中显示的受保护令牌文件内容。令牌不会保存在地址栏中。");
-text("hs", "共有する認証情報を選ぶ", "Choose credentials to share", "选择要共享的凭据");
-text("mock-setup", "設定", "SETUP", "设置");
-text("mock-access", "＋ 完全アクセス", "+ Full access", "+ 完全访问");
+var STATUS = null;
+var ENV = null;
+var pendingLogin = "";
+var current = "";
+var timer = 0;
+var wasConnected = false;
+function t(ja, en, zh) { return JA ? ja : (ZH ? zh : en); }
+function $(id) { return document.getElementById(id); }
+function text(id, ja, en, zh) { $(id).textContent = t(ja, en, zh); }
+function el(tag, cls, content) { var node = document.createElement(tag); if (cls) node.className = cls; if (content !== undefined) node.textContent = content; return node; }
+
+text("t", "はじめましょう", "Let's get started", "开始吧");
+text("s", "ターミナルに表示されたファイルの中身を貼り付けると、設定画面につながります。", "Paste the contents of the file shown in the terminal to open setup.", "粘贴终端中显示的文件内容即可打开设置。");
+$("setup-token").placeholder = t("ファイルの中身", "File contents", "文件内容");
 text("setup-connect", "接続", "Connect", "连接");
-text("copy-opencode", "コピー", "Copy", "复制");
-text("copy-codex", "コピー", "Copy", "复制");
+$("token-hint").textContent = t("次回からは rdsh setup --web を実行すると、自動でつながった状態で開きます。", "Next time, run rdsh setup --web and the page opens already connected.", "下次运行 rdsh setup --web 时，页面会自动连接。");
+text("step-label-ready", "準備", "Check", "准备");
+text("step-label-connect", "AIとつなぐ", "Connect AI", "连接模型");
+text("step-label-finish", "完了", "Done", "完成");
+text("ready-title", "まずは準備を確認します", "First, a quick check", "先检查一下环境");
+text("ready-lead", "必要なものがそろっているか、自動で調べました。", "We checked what is already installed.", "已自动检查所需组件。");
+text("recheck", "もう一度確認", "Check again", "重新检查");
+text("ready-next", "次へ", "Next", "下一步");
+text("connect-title", "使うAIを選びましょう", "Choose your AI", "选择要使用的 AI");
+text("connect-lead", "どれか1つつなげば始められます。迷ったら一番上がおすすめです。", "Connect any one to start. If unsure, use the first option.", "连接任意一个即可开始。不确定时选第一个。");
+text("h2", "DeepSeek の APIキー", "DeepSeek API key", "DeepSeek API 密钥");
+text("deepseek-saved", "保存済み", "Saved", "已保存");
+text("kh", "キーをお持ちなら貼り付けてください。このPCの dsh 設定に保存します。", "Paste your key if you have one. It is saved to dsh on this PC.", "如有密钥请粘贴，它会保存到本机的 dsh 设置。");
 text("save-key", "保存", "Save", "保存");
-text("refresh", "更新", "Refresh", "刷新");
-text("done", "閉じる", "Close", "关闭");
-function statusLabel(value) {
-  const labels = {ok:["接続済み","Connected","已连接"],import:["インポート","Import","导入"],refresh:["更新","Refresh","刷新"],missing:["未設定","Not configured","未配置"],invalid:["無効","Invalid","无效"],unavailable:["未取得","Unavailable","未获取"]};
-  return labels[value] ? t(...labels[value]) : value;
+text("issue", "キーを発行する（DeepSeek）", "Get a key (DeepSeek)", "获取密钥（DeepSeek）");
+text("other-keys-summary", "ほかの APIキー（OpenAI・Anthropic）", "Other API keys (OpenAI, Anthropic)", "其他 API 密钥（OpenAI、Anthropic）");
+text("save-other-key", "保存", "Save", "保存");
+text("show-more", "ほかの方法でつなぐ", "Connect another way", "使用其他方式连接");
+$("key").addEventListener("input", function () { $("save-key").classList.toggle("primary", !!$("key").value.trim()); });
+$("key").addEventListener("keydown", function (e) { if (e.key === "Enter") setupAction(save); });
+text("detail-summary", "くわしい情報（上級者向け）", "Details (advanced)", "详细信息（高级）");
+text("h0", "dsh が使うモデル", "Models dsh will use", "dsh 将使用的模型");
+text("h-records", "見つかったログイン", "Logins found", "找到的登录");
+text("hs", "コマンドで設定する場合", "Using the command line", "使用命令行设置");
+text("connect-back", "戻る", "Back", "返回");
+text("connect-skip", "あとで設定する", "Set up later", "稍后设置");
+text("connect-next", "次へ", "Next", "下一步");
+text("finish-title", "準備ができました", "You're all set", "准备就绪");
+text("finish-lead", "さっそく AI に話しかけてみましょう。", "Say hello to your AI.", "现在就和 AI 对话吧。");
+text("finish-cmd-hint", "うまく開かないときは、ターミナルで次のコマンドを実行してください。", "If nothing opens, run this in a terminal.", "如果没有打开，请在终端运行以下命令。");
+text("hx", "追加機能（必要なときだけ）", "Extras (only if you need them)", "附加功能（按需）");
+text("khx", "ふだんは不要です。使いたいものだけ、押してオンにできます。", "Usually unnecessary. Click one to turn it on.", "通常不需要。点击即可开启。");
+text("finish-back", "戻る", "Back", "返回");
+text("done", "セットアップを終える", "Finish setup", "完成设置");
+document.querySelectorAll(".cmd .link").forEach(function (b) { b.textContent = t("コピー", "Copy", "复制"); });
+
+function toast(message) { var box = $("toast"); box.textContent = message; box.classList.add("show"); clearTimeout(toast.timer); toast.timer = setTimeout(function () { box.classList.remove("show"); }, 3600); }
+function showSetupError(error) { toast(t("うまくいきませんでした：", "Something went wrong: ", "操作失败：") + friendlyError(error.message)); }
+function friendlyError(message) {
+  var map = {
+    "login helper is not installed": t("ログイン用のツールが見つかりません", "the login tool is not installed", "未找到登录工具"),
+    "credential is not available to share": t("このログインは見つかりませんでした。もう一度ログインしてください", "that login was not found; log in again", "未找到该登录，请重新登录"),
+    "DeepSeek Harness (dsh) is not installed": t("DeepSeek Harness がまだ入っていません", "DeepSeek Harness is not installed yet", "尚未安装 DeepSeek Harness"),
+    "empty or oversized value": t("キーが空か、長すぎます", "the key is empty or too long", "密钥为空或过长")
+  };
+  return map[message] || message;
 }
-function showSetupError(error) { const bar=document.getElementById("okbar"); bar.style.display="block"; bar.textContent=t("操作に失敗しました: ","Operation failed: ","操作失败：")+error.message; }
-async function setupAction(action) { try { await action(); } catch(error) { showSetupError(error); } }
-function cp(b){ var value = b.parentNode.querySelector("code").textContent; function ok(){ b.textContent = t("済", "done", "已复制"); setTimeout(function(){ b.textContent = t("コピー", "copy", "复制"); }, 1200); } if (navigator.clipboard) { navigator.clipboard.writeText(value).then(ok, function(){ prompt(t("コピー:", "copy:", "复制："), value); }); } else { prompt(t("コピー:", "copy:", "复制："), value); } }
-async function connectSetup(candidateInput){ var candidate = typeof candidateInput === "string" ? candidateInput : document.getElementById("setup-token").value.trim(); var warning = document.getElementById("okbar"); try { var response = await fetch("/api/status", {headers: {"X-RDSH-Token": candidate}}); if (!response.ok) throw new Error(t("トークンを確認できません。ファイルの内容を確認してください。", "Token rejected. Check the handoff file contents.", "令牌被拒绝。请检查交接文件内容。")); setupToken = candidate; sessionStorage.setItem("rdsh_setup_token", setupToken); document.getElementById("setup-token").value = ""; document.getElementById("token-box").style.display = "none"; document.getElementById("token-hint").style.display = "none"; warning.style.display = "none"; await load(); await loadExtras(); startRefresh(); } catch(e) { warning.style.display = "block"; warning.textContent = e.message; document.getElementById("token-box").style.display = "flex"; document.getElementById("token-hint").style.display = "block"; } }
-async function load(){ var response = await fetch("/api/status", {headers: {"X-RDSH-Token": setupToken}}); if (!response.ok) { var warning = document.getElementById("okbar"); warning.style.display = "block"; warning.textContent = t("保護済みトークンファイルの内容を入力してください", "Enter the contents of the protected token handoff file", "请输入受保护令牌交接文件的内容"); document.getElementById("token-box").style.display = "flex"; document.getElementById("token-hint").style.display = "block"; return; } var r = await response.json(); var el = document.getElementById("list"); el.innerHTML = ""; (r.records || []).forEach(function(x){ var d = document.createElement("div"); d.className = "row"; var good = x.action === "ok"; var dot = document.createElement("span"); dot.className = "dot " + (good ? "on" : "off"); var nm = document.createElement("span"); nm.textContent = x.provider; var sm = document.createElement("small"); sm.textContent = x.from + " / " + statusLabel(x.action); d.appendChild(dot); d.appendChild(nm); d.appendChild(sm); el.appendChild(d); }); showSharing(r.sharing || {}); var df = document.getElementById("defs"); df.innerHTML = ""; (r.defaults || []).forEach(function(x){ var d = document.createElement("div"); d.className = "row"; var good = x.state === "ok"; var dot = document.createElement("span"); dot.className = "dot " + (good ? "on" : "off"); var nm = document.createElement("span"); nm.textContent = x.profile + " " + x.provider + "/" + x.model; var sm = document.createElement("small"); sm.textContent = x.via + " / " + statusLabel(x.state); d.appendChild(dot); d.appendChild(nm); d.appendChild(sm); df.appendChild(d); }); var bar = document.getElementById("okbar"); if (!r.needed) { bar.style.display = "block"; bar.textContent = t("接続OK — この画面は閉じてOKです", "Connected — you can close this page", "已连接 — 可以关闭此页面"); document.getElementById("done").style.display = ""; } else { bar.style.display = "none"; document.getElementById("done").style.display = "none"; } }
-var EXTRAS = [{id: "serve", ja: "ダッシュボード（rdsh serve）", en: "dashboard (rdsh serve)", zh: "仪表板（rdsh serve）"}, {id: "search-web", ja: "Web検索（rdsh search-web）", en: "web search (rdsh search-web)", zh: "网页搜索（rdsh search-web）"}];
-async function loadExtras(){ var response = await fetch("/api/extras", {headers: {"X-RDSH-Token": setupToken}}); if (!response.ok) return; var r = await response.json(); var on = (r && r.enable) || []; var el = document.getElementById("extras"); el.innerHTML = ""; EXTRAS.forEach(function(x){ var d = document.createElement("div"); d.className = "row"; var good = on.indexOf(x.id) >= 0; var dot = document.createElement("span"); dot.className = "dot " + (good ? "on" : "off"); var nm = document.createElement("span"); nm.textContent = t(x.ja, x.en, x.zh); var sm = document.createElement("small"); sm.textContent = good ? t("有効", "on", "已启用") : t("無効", "off", "已禁用"); d.appendChild(dot); d.appendChild(nm); d.appendChild(sm); d.style.cursor = "pointer"; d.onclick = function(){ setupAction(function(){ return toggleExtra(x.id, !good); }); }; el.appendChild(d); }); }
+async function setupAction(action) { try { await action(); } catch (error) { showSetupError(error); } }
+function cp(b) {
+  var value = b.parentNode.querySelector("code").textContent;
+  function ok() { b.textContent = t("コピーしました", "Copied", "已复制"); setTimeout(function () { b.textContent = t("コピー", "Copy", "复制"); }, 1400); }
+  if (navigator.clipboard) navigator.clipboard.writeText(value).then(ok, function () { prompt(t("コピー:", "Copy:", "复制："), value); });
+  else prompt(t("コピー:", "Copy:", "复制："), value);
+}
+function cmdRow(command) { var row = el("div", "cmd"); var code = el("code", "", command); var b = el("button", "link", t("コピー", "Copy", "复制")); b.onclick = function () { cp(b); }; row.append(code, b); return row; }
+async function api(method, path, body) {
+  var init = {method: method, headers: {"X-RDSH-Token": setupToken}};
+  if (body !== undefined) { init.headers["Content-Type"] = "application/json"; init.body = JSON.stringify(body); }
+  var response = await fetch(path, init);
+  var data = await response.json().catch(function () { return {}; });
+  if (!response.ok) throw new Error(data.error || String(response.status));
+  return data;
+}
+
+function go(step) {
+  current = step;
+  ["token", "ready", "connect", "finish"].forEach(function (name) { $("step-" + name).hidden = name !== step; });
+  $("steps").hidden = step === "token";
+  var order = ["ready", "connect", "finish"];
+  var at = order.indexOf(step);
+  document.querySelectorAll("#steps li").forEach(function (li) {
+    var i = order.indexOf(li.dataset.step);
+    li.className = i < at ? "done" : (i === at ? "now" : "");
+    if (i === at) li.setAttribute("aria-current", "step"); else li.removeAttribute("aria-current");
+  });
+  if (step === "finish") { renderFinish(); setupAction(loadExtras); }
+  window.scrollTo({top: 0, behavior: "smooth"});
+  var heading = document.querySelector("#step-" + step + " h1");
+  if (heading) { heading.tabIndex = -1; heading.focus({preventScroll: true}); }
+}
+
+function checkRow(ok, title, sub, extra) {
+  var li = el("li", "check");
+  var mark = el("span", "mark " + (ok ? "ok" : "todo"), ok ? "✓" : "!");
+  mark.setAttribute("aria-label", ok ? t("OK", "OK", "正常") : t("要対応", "Action needed", "需处理"));
+  var p = el("p"); p.append(el("strong", "", title));
+  li.append(mark, p, el("p", "small", sub));
+  if (extra) { var box = el("div", "extra"); box.append(extra); li.append(box); }
+  return li;
+}
+async function loadEnv() {
+  ENV = await api("GET", "/api/env");
+  var list = $("checks"); list.replaceChildren();
+  list.append(checkRow(true, "rdsh", t("インストール済み（v", "Installed (v", "已安装（v") + ENV.rdsh + t("）", ")", "）")));
+  var nodeOk = ENV.node.found && ENV.node.supported;
+  var nodeLink = el("a", "linkish", t("Node.js をダウンロード（公式サイト）", "Download Node.js (official site)", "下载 Node.js（官网）"));
+  nodeLink.href = JA ? "https://nodejs.org/ja/download" : "https://nodejs.org/en/download"; nodeLink.target = "_blank"; nodeLink.rel = "noopener noreferrer";
+  list.append(checkRow(nodeOk, "Node.js 22+",
+    nodeOk ? t("見つかりました（", "Found (", "已找到（") + ENV.node.version + t("）", ")", "）")
+      : (ENV.node.found ? t("バージョンが古いです（", "Too old (", "版本过旧（") + (ENV.node.version || "?") + t("）。新しい版を入れてください。", "). Please update.", "）。请更新。")
+        : t("DeepSeek Harness を動かすのに必要です。", "Needed to run DeepSeek Harness.", "运行 DeepSeek Harness 需要它。")),
+    nodeOk ? null : nodeLink));
+  list.append(checkRow(ENV.dsh.found, "DeepSeek Harness",
+    ENV.dsh.found ? t("見つかりました", "Found", "已找到") : t("AIとの会話に使います。下のコマンドで入れられます。", "Used for conversations. Install it with this command.", "用于与 AI 对话。可用下面的命令安装。"),
+    ENV.dsh.found ? null : cmdRow("npm install -g @deepseek-ai/dsh")));
+  var allOk = nodeOk && ENV.dsh.found;
+  $("ready-next").textContent = allOk ? t("次へ", "Next", "下一步") : t("このまま進む", "Continue anyway", "继续");
+  if (!allOk) $("ready-lead").textContent = t("足りないものがあります。あとから入れても大丈夫です。", "Something is missing. You can install it later.", "缺少一些组件，之后再安装也可以。");
+  else text("ready-lead", "必要なものはそろっています。", "Everything you need is installed.", "所需组件已就绪。");
+  if (STATUS) renderOptions();
+}
+
+function statusLabel(value) {
+  var labels = {ok: ["接続済み", "Connected", "已连接"], import: ["取り込み可能", "Importable", "可导入"], importable: ["取り込み可能", "Importable", "可导入"], refresh: ["更新あり", "Refresh", "可刷新"], missing: ["未設定", "Not configured", "未配置"], invalid: ["無効", "Invalid", "无效"], unavailable: ["未取得", "Unavailable", "未获取"], not_selected: ["未選択", "Not selected", "未选择"]};
+  return labels[value] ? t.apply(null, labels[value]) : value;
+}
+var PROVIDER_NAMES = {"openai-codex": "ChatGPT (OpenAI)", anthropic: "Claude (Anthropic)", "github-copilot": "GitHub Copilot", google: "Gemini (Google)"};
+function providerName(id) { return PROVIDER_NAMES[id] || id; }
+
+async function load() {
+  var response = await fetch("/api/status", {headers: {"X-RDSH-Token": setupToken}});
+  if (!response.ok) { go("token"); return; }
+  STATUS = await response.json();
+  renderOptions();
+  renderDetails();
+  var connected = !STATUS.needed;
+  $("okbar").hidden = !connected;
+  $("okbar").textContent = "✓ " + t("AIとつながりました。「次へ」で最初の会話へ進めます。", "Connected. Press Next to start your first conversation.", "已连接。点击“下一步”开始第一次对话。");
+  if (connected && !wasConnected) $("step-connect").classList.add("is-connected");
+  if (!connected) $("step-connect").classList.remove("is-connected");
+  wasConnected = connected;
+  $("connect-next").disabled = !connected;
+  $("connect-skip").hidden = connected;
+  $("deepseek-saved").hidden = (STATUS.refs_stored || []).indexOf("DEEPSEEK_API_KEY") < 0;
+  $("deepseek-option").classList.toggle("connected", !$("deepseek-saved").hidden);
+}
+
+function oauthItems(from) {
+  var seen = {};
+  return ((STATUS.sharing && STATUS.sharing.inventory) || []).filter(function (item) {
+    if (item.kind !== "oauth" || item.from !== from || seen[item.selector]) return false;
+    seen[item.selector] = true; return true;
+  });
+}
+function waitLine(message) { return el("span", "wait", message); }
+function shareButton(item, label, secondary) {
+  var b = el("button", secondary ? "" : "primary", label);
+  b.onclick = function () { setupAction(async function () { b.disabled = true; await api("POST", "/api/share", {selector: item.selector}); toast(t("つなぎました", "Connected", "已连接")); await load(); }); };
+  return b;
+}
+function loginButton(tool, label, secondary) {
+  var b = el("button", secondary ? "" : "primary", label);
+  b.onclick = function () { setupAction(async function () { await api("POST", "/api/login", {tool: tool}); pendingLogin = tool; renderOptions(); }); };
+  return b;
+}
+function optionCard(title, sub, badge) {
+  var box = el("div", "option"); var head = el("div", "head"); head.append(el("h2", "", title));
+  if (badge) head.append(el("span", "badge", badge));
+  box.append(head, el("p", "small", sub));
+  var actions = el("div", "row-actions"); box.append(actions);
+  return {box: box, head: head, actions: actions};
+}
+function markConnected(card) { card.box.classList.add("connected"); card.head.append(el("span", "badge ok", "✓ " + t("つながっています", "Connected", "已连接"))); }
+
+function renderOptions() {
+  var root = $("options"); root.replaceChildren();
+  if (!STATUS || STATUS.sharing && STATUS.sharing.policy_error) return;
+  var env = ENV || {};
+  var codex = oauthItems("codex").filter(function (i) { return i.provider === "openai-codex"; })[0];
+  var gpt = optionCard(t("ChatGPT のアカウント", "Your ChatGPT account", "ChatGPT 账号"), t("ChatGPT Plus / Pro をお使いなら、APIキーなしで使えます。", "With ChatGPT Plus or Pro, no API key is needed.", "如有 ChatGPT Plus / Pro，无需 API 密钥。"), t("おすすめ", "Recommended", "推荐"));
+  if (codex && codex.selected && codex.action === "ok") markConnected(gpt);
+  else if (codex) {
+    if (pendingLogin === "codex") { pendingLogin = ""; setupAction(async function () { await api("POST", "/api/share", {selector: codex.selector}); toast(t("ログインを確認してつなぎました", "Login found and connected", "已确认登录并连接")); await load(); }); }
+    gpt.actions.append(shareButton(codex, t("このアカウントを使う", "Use this account", "使用此账号")));
+    gpt.actions.append(el("span", "small", t("Codex でのログインが見つかりました", "Found your Codex login", "找到 Codex 登录")));
+  } else if (pendingLogin === "codex") {
+    gpt.actions.append(waitLine(t("開いた画面でログインを完了してください。終わると自動でつながります…", "Finish logging in in the window that opened. This page updates automatically…", "请在打开的窗口中完成登录，完成后会自动连接…")));
+  } else if (env.codex) {
+    gpt.actions.append(loginButton("codex", t("ChatGPT でログイン", "Log in with ChatGPT", "使用 ChatGPT 登录")));
+  } else {
+    gpt.box.append(el("p", "small", t("ログインには Codex（OpenAI 公式ツール）を使います。先に入れてください：", "Logging in uses Codex, OpenAI's tool. Install it first:", "登录需要 OpenAI 的 Codex 工具，请先安装：")));
+    gpt.box.append(cmdRow("npm install -g @openai/codex"));
+  }
+  root.append(gpt.box);
+
+  var opencode = oauthItems("opencode");
+  if (opencode.length || env.opencode) {
+    var oc = optionCard(t("OpenCode のログイン", "Your OpenCode login", "OpenCode 登录"), t("OpenCode でログイン済みのアカウントを、そのまま使えます。", "Reuse an account you already logged in to with OpenCode.", "直接使用已在 OpenCode 中登录的账号。"));
+    var anyOn = false;
+    opencode.forEach(function (item) {
+      if (item.selected && item.action === "ok") { anyOn = true; oc.actions.append(el("span", "badge ok", "✓ " + providerName(item.provider))); }
+      else oc.actions.append(shareButton(item, providerName(item.provider) + t(" を使う", " — use", " — 使用"), true));
+    });
+    if (anyOn) oc.box.classList.add("connected");
+    if (pendingLogin === "opencode" && !opencode.length) oc.actions.append(waitLine(t("開いたウィンドウでログインを完了してください…", "Finish logging in in the new window…", "请在新窗口中完成登录…")));
+    else if (!opencode.length && env.opencode) oc.actions.append(loginButton("opencode", t("OpenCode でログイン", "Log in with OpenCode", "使用 OpenCode 登录"), true));
+    if (pendingLogin === "opencode" && opencode.length) pendingLogin = "";
+    root.append(oc.box);
+  }
+}
+
+function renderDetails() {
+  var el1 = $("list"); el1.replaceChildren();
+  (STATUS.records || []).forEach(function (x) { el1.append(listRow(x.action === "ok", providerName(x.provider), x.from + " / " + statusLabel(x.action))); });
+  if (!el1.children.length) el1.append(el("p", "hint", t("見つかりませんでした", "None found", "未找到")));
+  var df = $("defs"); df.replaceChildren();
+  (STATUS.defaults || []).forEach(function (x) { df.append(listRow(x.state === "ok", x.profile + " · " + x.provider + "/" + x.model, x.via + " / " + statusLabel(x.state))); });
+  if (!df.children.length) df.append(el("p", "hint", t("プロファイルが見つかりません（dsh を一度起動すると作られます）", "No profiles yet (created on first dsh launch)", "尚无配置文件（首次启动 dsh 时创建）")));
+  showSharing(STATUS.sharing || {});
+}
+function listRow(good, name, note) {
+  var d = el("div", "row"); d.append(el("span", "dot " + (good ? "on" : "off")), el("span", "", name), el("small", "", note)); return d;
+}
 function sharingPolicyError(value) {
-  const messages = {
+  var messages = {
     "credential sharing policy is unreadable; imports are disabled": ["認証情報の共有ポリシーを読み取れません。インポートは無効です", "credential sharing policy is unreadable; imports are disabled", "无法读取凭据共享策略；已禁用导入"],
     "credential sharing policy is oversized; imports are disabled": ["認証情報の共有ポリシーが大きすぎます。インポートは無効です", "credential sharing policy is oversized; imports are disabled", "凭据共享策略过大；已禁用导入"],
     "invalid credential sharing policy; imports are disabled": ["認証情報の共有ポリシーが無効です。インポートは無効です", "invalid credential sharing policy; imports are disabled", "凭据共享策略无效；已禁用导入"],
-    "unsupported credential sharing policy; imports are disabled": ["認証情報の共有ポリシーは未対応です。インポートは無効です", "unsupported credential sharing policy; imports are disabled", "凭据共享策略不受支持；已禁用导入"],
+    "unsupported credential sharing policy; imports are disabled": ["認証情報の共有ポリシーは未対応です。インポートは無効です", "unsupported credential sharing policy; imports are disabled", "凭据共享策略不受支持；已禁用导入"]
   };
-  return Object.hasOwn(messages, value) ? t(...messages[value]) : value;
+  return Object.hasOwn(messages, value) ? t.apply(null, messages[value]) : value;
 }
 function showSharing(sharing) {
-  var list = document.getElementById("sharing");
-  list.replaceChildren();
+  var list = document.getElementById("sharing"); list.replaceChildren();
   var hint = document.getElementById("sharehint");
-  hint.textContent = t("永続保存先: ", "Persistent destination: ", "持久保存位置：") + (sharing.persistent_destination || "") + t("。保存内容は同じDSH_HOMEの全プロファイルで利用できます。選択解除は今後の取込を止め、保存済みのコピーは残します。利用を止めるにはDSHを停止して該当record/refを削除します。発行元での失効は別途必要です。", ". Copies are available to every profile in this DSH_HOME. Unselect stops future imports and retains existing copies. Stop DSH and remove the named record/ref to stop using a copy. Provider revocation is separate.", "。此 DSH_HOME 中所有配置文件都可使用副本。取消选择会停止将来导入，并保留现有副本。要停止使用副本，请停止 DSH 并删除对应 record/ref。在提供方撤销需要单独进行。");
+  hint.textContent = t("保存先: ", "Saved to: ", "保存位置：") + (sharing.persistent_destination || "") + t("。同じ DSH_HOME の全プロファイルで使えます。選択を外すと今後の取り込みは止まり、保存済みのコピーは残ります。発行元での失効は別に必要です。", ". Copies are available to every profile in this DSH_HOME. Unselect stops future imports and retains existing copies. Provider revocation is separate.", "。此 DSH_HOME 中所有配置文件都可使用。取消选择会停止将来导入并保留现有副本。在提供方撤销需要单独进行。");
   if (sharing.policy_error) {
     hint.textContent += " " + sharingPolicyError(sharing.policy_error);
+    document.getElementById("detail-box").open = true;
     return;
   }
   var seen = new Set();
-  (sharing.inventory || []).forEach(function(item) {
+  (sharing.inventory || []).forEach(function (item) {
     if (seen.has(item.selector)) return;
     seen.add(item.selector);
-    var row = document.createElement("div");
-    row.className = "cmd";
-    var code = document.createElement("code");
-    code.textContent = "rdsh auth --" + (item.selected ? "unselect " : "select ") + item.selector + (item.selected ? "" : " --import");
-    var button = document.createElement("button");
-    button.className = "link";
-    button.textContent = t("コピー", "Copy", "复制");
-    button.onclick = function() { cp(button); };
-    row.append(code, button);
-    list.appendChild(row);
+    list.append(cmdRow("rdsh auth --" + (item.selected ? "unselect " : "select ") + item.selector + (item.selected ? "" : " --import")));
   });
-  (sharing.environment_references || []).forEach(function(item) {
-    var note = document.createElement("p");
-    note.className = "hint";
-    note.textContent = item.name + t(": 環境変数として利用中。ファイル保存なし。DSHを停止し、次回起動前に環境変数を解除すると共有が止まります。", ": inherited environment reference; no file write. Stop DSH and unset it before the next launch to stop sharing.", "：继承的环境变量引用；未写入文件。要停止共享，请停止 DSH 并在下次启动前取消环境变量。");
-    list.appendChild(note);
+  (sharing.environment_references || []).forEach(function (item) {
+    list.append(el("p", "hint", item.name + t(": 環境変数として利用中（ファイル保存なし）", ": used from the environment (not saved to a file)", "：从环境变量使用（未写入文件）")));
   });
 }
-async function toggleExtra(id, want){ var r = await (await fetch("/api/extras", {headers: {"X-RDSH-Token": setupToken}})).json(); var on = (r && r.enable) || []; if (want && on.indexOf(id) < 0) on.push(id); if (!want) on = on.filter(function(y){ return y !== id; }); await fetch("/api/extras", {method: "POST", headers: {"Content-Type": "application/json", "X-RDSH-Token": setupToken}, body: JSON.stringify({enable: on})}); loadExtras(); }
-async function save(){ var v = document.getElementById("key").value; var r = await (await fetch("/api/key", {method: "POST", headers: {"Content-Type": "application/json", "X-RDSH-Token": setupToken}, body: JSON.stringify({name: "DEEPSEEK_API_KEY", value: v})})).json(); if (r.stored) { document.getElementById("key").value = ""; load(); } else { alert(t("保存に失敗しました: ", "save failed: ", "保存失败：") + (r.error || "?")); } }
-async function bye(){ var r = await fetch("/api/done", {method: "POST", headers: {"X-RDSH-Token": setupToken}, body: "{}"}); if (!r.ok) return; document.body.innerHTML = "<p style=\"text-align:center;margin-top:22vh;opacity:.55\">" + t("完了 — このタブを閉じてください", "done — close this tab", "完成 — 请关闭此标签页") + "</p>"; }
-function startRefresh(){ if (setupToken) setInterval(function(){ setupAction(load); setupAction(loadExtras); }, 5000); }
-if (setupToken) connectSetup(setupToken); else { document.getElementById("token-box").style.display = "flex"; document.getElementById("token-hint").style.display = "block"; }
+
+function startButton(kind, title, sub, primary) {
+  var b = el("button", "start" + (primary ? " primary" : ""));
+  var label = el("span"); label.append(el("strong", "", title), el("span", "small", sub)); b.append(label);
+  b.onclick = function () { setupAction(async function () { await api("POST", "/api/start", {kind: kind}); toast(t("開いています…", "Opening…", "正在打开…")); }); };
+  return b;
+}
+function renderFinish() {
+  var env = ENV || {dsh: {}};
+  var connected = STATUS && !STATUS.needed;
+  var missing = [];
+  if (!connected) missing.push("ai");
+  if (!env.dsh.found) missing.push("dsh");
+  text("finish-title", missing.length ? "あと少しです" : "準備ができました", missing.length ? "Almost there" : "You're all set", missing.length ? "还差一点" : "准备就绪");
+  document.querySelector(".done-mark").hidden = !!missing.length;
+  text("finish-lead", missing.length ? missing.length > 1 ? "あと2つで使えるようになります。" : "あと1つで使えるようになります。" : "さっそく AI に話しかけてみましょう。", missing.length ? missing.length > 1 ? "Two more steps and you're ready." : "One more step and you're ready." : "Say hello to your AI.", missing.length ? missing.length > 1 ? "再完成两步即可使用。" : "再完成一步即可使用。" : "现在就和 AI 对话吧。");
+  $("done").classList.toggle("primary", !missing.length);
+  var starts = $("starts"); starts.replaceChildren();
+  $("finish-cmd-hint").hidden = !env.dsh.found;
+  $("finish-cmd").hidden = !env.dsh.found;
+  if (!connected) {
+    var link = el("button", "primary", t("AIをつなぐ", "Connect an AI", "连接 AI"));
+    link.onclick = function () { go("connect"); };
+    starts.append(link);
+  }
+  if (!env.dsh.found) {
+    var box = el("div", "option");
+    box.append(el("h2", "", t("DeepSeek Harness を入れましょう", "Install DeepSeek Harness", "安装 DeepSeek Harness")));
+    box.append(el("p", "small", t("AIとの会話に使います。ターミナルで次のコマンドを実行してください。", "It runs your conversations. Run this in a terminal.", "它用于与 AI 对话。请在终端运行以下命令。")));
+    box.append(cmdRow("npm install -g @deepseek-ai/dsh"));
+    var again = el("button", connected ? "primary" : "", t("入れたので確認する", "I've installed it", "已安装，重新检查"));
+    again.onclick = function () { setupAction(async function () { await loadEnv(); renderFinish(); if (!ENV.dsh.found) toast(t("まだ見つかりません。ターミナルを開き直すと見つかることがあります。", "Not found yet. Reopening the terminal can help.", "仍未找到。重新打开终端可能会有帮助。")); }); };
+    var actions = el("div", "row-actions"); actions.append(again); box.append(actions);
+    starts.append(box);
+  }
+  if (env.desktop) starts.append(startButton("desktop", t("DeepSeek Harness アプリを開く", "Open the DeepSeek Harness app", "打开 DeepSeek Harness 应用"), t("いちばん簡単です", "The easiest way", "最简单的方式"), true));
+  if (env.dsh.found) {
+    starts.append(startButton("tui", t("ターミナルで会話をはじめる", "Chat in a terminal", "在终端中对话"), t("Codex や Claude Code と同じ使い方です", "Works like Codex or Claude Code", "用法与 Codex、Claude Code 相同"), !env.desktop));
+    starts.append(startButton("web", t("ブラウザで使う", "Use it in your browser", "在浏览器中使用"), t("画面で操作したい方に", "If you prefer a visual interface", "适合喜欢图形界面的用户"), false));
+  }
+  var model = (STATUS && STATUS.defaults || []).filter(function (d) { return d.state === "ok"; })[0];
+  $("model-line").textContent = model ? t("使うモデル：", "Model: ", "使用模型：") + model.provider + " / " + model.model : "";
+}
+
+var EXTRAS = [{id: "serve", ja: "ダッシュボード（rdsh serve）", en: "dashboard (rdsh serve)", zh: "仪表板（rdsh serve）"}, {id: "search-web", ja: "Web検索（rdsh search-web）", en: "web search (rdsh search-web)", zh: "网页搜索（rdsh search-web）"}];
+async function loadExtras() {
+  var r = await api("GET", "/api/extras");
+  var on = (r && r.enable) || [];
+  var box = $("extras"); box.replaceChildren();
+  EXTRAS.forEach(function (x) {
+    var good = on.indexOf(x.id) >= 0;
+    var d = listRow(good, t(x.ja, x.en, x.zh), good ? t("有効", "on", "已启用") : t("無効", "off", "已禁用"));
+    d.setAttribute("role", "button"); d.tabIndex = 0;
+    d.onclick = function () { setupAction(function () { return toggleExtra(x.id, !good); }); };
+    d.onkeydown = function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); d.onclick(); } };
+    box.append(d);
+  });
+}
+async function toggleExtra(id, want) {
+  var r = await api("GET", "/api/extras");
+  var on = (r && r.enable) || [];
+  if (want && on.indexOf(id) < 0) on.push(id);
+  if (!want) on = on.filter(function (y) { return y !== id; });
+  await api("POST", "/api/extras", {enable: on});
+  await loadExtras();
+}
+async function storeKey(name, input) {
+  var r = await api("POST", "/api/key", {name: name, value: input.value});
+  if (!r.stored) throw new Error(r.error || "?");
+  input.value = "";
+  toast(t("保存しました", "Saved", "已保存"));
+  await load();
+}
+async function save() { await storeKey("DEEPSEEK_API_KEY", $("key")); }
+async function saveOther() { await storeKey($("other-key-name").value, $("other-key")); }
+async function bye() {
+  var r = await fetch("/api/done", {method: "POST", headers: {"X-RDSH-Token": setupToken}, body: "{}"});
+  if (!r.ok) return;
+  clearInterval(timer);
+  document.querySelector(".card").innerHTML = "";
+  var p = el("p", "lead", t("セットアップを終えました。このタブは閉じて大丈夫です。", "Setup finished. You can close this tab.", "设置已完成，可以关闭此标签页。"));
+  p.style.textAlign = "center"; p.style.margin = "24px 0";
+  document.querySelector(".card").append(p);
+  $("steps").hidden = true;
+}
+function startRefresh() { clearInterval(timer); timer = setInterval(function () { if (current === "connect" || current === "finish") setupAction(load); }, 3000); }
+async function connectSetup(candidateInput) {
+  var candidate = typeof candidateInput === "string" ? candidateInput : $("setup-token").value.trim();
+  var response = await fetch("/api/status", {headers: {"X-RDSH-Token": candidate}}).catch(function () { return {ok: false}; });
+  if (!response.ok) {
+    go("token");
+    if (typeof candidateInput !== "string") toast(t("確認できませんでした。ファイルの中身をそのまま貼り付けてください。", "That didn't match. Paste the file contents exactly.", "无法确认，请原样粘贴文件内容。"));
+    return;
+  }
+  setupToken = candidate;
+  sessionStorage.setItem("rdsh_setup_token", setupToken);
+  $("setup-token").value = "";
+  await Promise.all([setupAction(loadEnv), setupAction(load)]);
+  go(STATUS && !STATUS.needed ? "finish" : "ready");
+  startRefresh();
+}
+$("setup-token").addEventListener("keydown", function (e) { if (e.key === "Enter") connectSetup(); });
+if (setupToken) connectSetup(setupToken); else go("token");
 </script>
 </body>
 </html>

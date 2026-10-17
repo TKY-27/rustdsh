@@ -173,6 +173,16 @@ rdsh-dashboard open --harness
 rdsh-dashboard stop --harness
 ```
 
+### Simple and detailed views
+
+The project dashboard opens in its **simple view**: the current state, what is
+waiting for you, screens the agent presented, tasks and progress reports, in one
+readable column. **くわしく表示 / Detailed view** in the header brings back every
+other panel (devices, diagnostics, budgets, profiles, metrics, review evidence,
+GitHub status and more); the choice is remembered per browser in
+`localStorage` (`rdsh_dashboard_view`). Panels are only hidden, never removed, so
+deep links and existing integrations keep working in either view.
+
 On native Windows the installed launcher starts `project` and `harness` in the
 notification area without keeping a console window open. Right-click the icon for
 **Open / 開く** or **Exit / 終了**; double-click also opens the authenticated page.

@@ -1,5 +1,6 @@
 // Real local criterion execution and multilingual outcome cards; no model calls.
 import assert from 'node:assert/strict';
+import {detailedView} from './detailed-view.mjs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
@@ -16,6 +17,7 @@ const recordFlow=process.env.RDSH_OUTCOME_RECORD_FLOW==='1';
 const output=path.resolve(process.env.RDSH_OUTCOME_LANGUAGES_OUTPUT || path.join(repo,'target/e2e/outcome-languages'));await fs.mkdir(output,{recursive:true});
 const root=await fs.mkdtemp(path.join(os.tmpdir(),'rdsh-outcome-languages-'));
 const browser=await chromium.launch({headless:true,...(process.env.RDSH_CHROME_PATH ? {executablePath:process.env.RDSH_CHROME_PATH} : {})});
+detailedView(browser);
 const report={scope:'real local HTTP+Chromium and actual synthetic criterion processes; no provider/model/Tailscale/production',cases:[],source_files:[]};
 for(const name of ['dashboard/server.mjs','dashboard/task-outcomes-ui.mjs','dashboard/app.mjs','dashboard/locale.mjs','dashboard/ui.html'])report.source_files.push({path:name,sha256:createHash('sha256').update(await fs.readFile(path.join(repo,name))).digest('hex')});
 try{

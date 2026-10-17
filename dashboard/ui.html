@@ -15,6 +15,12 @@
             : window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
         } catch {}
         document.documentElement.dataset.theme = theme;
+        // Simple view by default; the detailed view keeps every panel.
+        let view = "simple";
+        try {
+          if (localStorage.getItem("rdsh_dashboard_view") === "full") view = "full";
+        } catch {}
+        document.documentElement.dataset.view = view;
       })();
     </script>
     <link rel="icon" type="image/png" href="./icon.png" />
@@ -1006,10 +1012,12 @@
         max-height: 65vh;
         margin: auto;
         object-fit: contain;
+      }
       #approvals .event,
       #policy-checks .event,
       #tasks details {
         overflow-wrap: anywhere;
+      }
       .notification-list {
         display: grid;
         gap: 10px;
@@ -1862,6 +1870,290 @@
           transition: none;
         }
       }
+
+      /* ---- Comfort layer -------------------------------------------------
+         Typography and spacing tuned for Japanese text, one calm accent, and
+         the simple view. Panels hidden here stay in the page and return with
+         the detailed view (html[data-view="full"]). */
+      body {
+        font-family:
+          "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont,
+          "Hiragino Sans", "Hiragino Kaku Gothic ProN", "BIZ UDPGothic",
+          "Noto Sans JP", "Noto Sans CJK JP", "Yu Gothic UI", Meiryo,
+          system-ui, sans-serif;
+        font-size: 15px;
+        line-height: 1.8;
+        letter-spacing: 0.02em;
+        font-feature-settings: "palt" 1;
+        -webkit-font-smoothing: antialiased;
+        text-rendering: optimizeLegibility;
+      }
+      html:lang(en) body {
+        letter-spacing: 0;
+        font-feature-settings: normal;
+      }
+      code,
+      pre,
+      kbd {
+        font-family: ui-monospace, "Cascadia Code", "SFMono-Regular", Menlo, Consolas, monospace;
+        letter-spacing: 0;
+      }
+      h1 {
+        font-size: 26px;
+        line-height: 1.4;
+        letter-spacing: 0.01em;
+      }
+      h2 {
+        font-size: 18px;
+        line-height: 1.5;
+        letter-spacing: 0.02em;
+      }
+      h3 {
+        font-size: 15.5px;
+        line-height: 1.55;
+      }
+      .sub {
+        font-size: 13px;
+        line-height: 1.7;
+      }
+      header {
+        position: sticky;
+        top: 0;
+        z-index: 6;
+        margin: -32px -32px 24px;
+        padding: 16px 32px 14px;
+        background: color-mix(in srgb, var(--bg) 88%, transparent);
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
+        border-bottom: 1px solid var(--line-soft);
+      }
+      header img {
+        border-radius: 10px;
+      }
+      button,
+      a.button {
+        border-radius: 10px;
+        font-weight: 600;
+        font-size: 14px;
+        transition: background 0.15s, border-color 0.15s, transform 0.08s, box-shadow 0.15s;
+      }
+      button:active,
+      a.button:active {
+        transform: scale(0.98);
+      }
+      .card,
+      .summary-card {
+        border-radius: 16px;
+        border-color: var(--line-soft);
+        box-shadow: var(--shadow-1);
+      }
+      .fold > summary,
+      #attention-history > summary,
+      #answered > summary {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 13px 16px;
+        border-radius: 12px;
+        border-color: var(--line-soft);
+        list-style: none;
+        font-weight: 600;
+        cursor: pointer;
+        transition: background 0.15s, border-color 0.15s;
+      }
+      .fold > summary::-webkit-details-marker,
+      #attention-history > summary::-webkit-details-marker,
+      #answered > summary::-webkit-details-marker {
+        display: none;
+      }
+      .fold > summary::before,
+      #attention-history > summary::before,
+      #answered > summary::before {
+        content: "›";
+        display: inline-block;
+        color: var(--mut);
+        font-size: 18px;
+        line-height: 1;
+        transition: transform 0.2s cubic-bezier(0.2, 0.8, 0.25, 1);
+      }
+      .fold[open] > summary::before,
+      #attention-history[open] > summary::before,
+      #answered[open] > summary::before {
+        transform: rotate(90deg);
+      }
+      .fold > summary:hover {
+        background: var(--raised);
+      }
+      details[open] > :not(summary) {
+        animation: comfort-reveal 0.24s cubic-bezier(0.2, 0.8, 0.25, 1);
+      }
+      .workspace-pane > *,
+      .intro-card {
+        animation: comfort-reveal 0.32s cubic-bezier(0.2, 0.8, 0.25, 1) both;
+      }
+      @keyframes comfort-reveal {
+        from {
+          opacity: 0;
+          transform: translateY(6px);
+        }
+      }
+      .intro-card {
+        min-height: 0;
+        padding: 18px 22px;
+        background: var(--info-bg);
+        border-color: var(--info-line);
+        box-shadow: none;
+      }
+      .intro-card .intro-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+      .intro-card h2 {
+        margin: 0;
+        font-size: 16px;
+      }
+      .intro-card p {
+        margin: 6px 0;
+      }
+      .intro-card ol {
+        margin: 6px 0 0;
+      }
+      #questions > .empty,
+      #tasks > .empty,
+      #events > .empty {
+        margin: 0;
+        padding: 18px;
+        border: 1px dashed var(--line);
+        border-radius: 12px;
+        color: var(--mut);
+        font-size: 14px;
+        text-align: center;
+      }
+      header > div:first-child {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr);
+        column-gap: 14px;
+        align-items: center;
+      }
+      header > div:first-child > img {
+        grid-row: span 3;
+      }
+      header > div:first-child > :not(img) {
+        grid-column: 2;
+      }
+      header h1 {
+        margin: 0;
+      }
+
+      /* Simple view: one readable column with only what a person acts on. */
+      html[data-view="simple"] main {
+        max-width: 880px;
+      }
+      html[data-view="simple"] .workspace-grid,
+      html[data-view="simple"] .workspace-grid[data-layout] {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 8px;
+      }
+      html[data-view="simple"] .workspace-pane > h2 {
+        margin: 28px 0 12px;
+        font-size: 13px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        color: var(--mut);
+      }
+      html[data-view="simple"] #palette-toggle,
+      html[data-view="simple"] #device-detail,
+      html[data-view="simple"] #connection-detail,
+      html[data-view="simple"] .workspace-settings,
+      html[data-view="simple"] #workspace-layout-status,
+      html[data-view="simple"] .workspace-pane-nav,
+      html[data-view="simple"] section[aria-labelledby="update-summary-heading"],
+      html[data-view="simple"] section[aria-labelledby="run-diagnostics-heading"],
+      html[data-view="simple"] #cross-project-overview,
+      html[data-view="simple"] #cross-project-search,
+      html[data-view="simple"] #operation-detail,
+      html[data-view="simple"] #notification-panel,
+      html[data-view="simple"] #observed-cli-panel,
+      html[data-view="simple"] #provider-status-detail,
+      html[data-view="simple"] #github-status-detail,
+      html[data-view="simple"] #budget-admission,
+      html[data-view="simple"] #model-routing,
+      html[data-view="simple"] #profiles-detail,
+      html[data-view="simple"] #execution-plans,
+      html[data-view="simple"] #metrics-detail,
+      html[data-view="simple"] #model-catalog-detail,
+      html[data-view="simple"] #review-evidence-detail,
+      html[data-view="simple"] #instruction-detail,
+      html[data-view="simple"] #reply-detail,
+      html[data-view="simple"] #human-annotation-detail,
+      html[data-view="simple"] #decision-log-detail,
+      html[data-view="simple"] #change-records-detail,
+      html[data-view="simple"] section[aria-labelledby="timeline-heading"],
+      html[data-view="simple"] #project-overview > .sub,
+      html[data-view="simple"] #pending-note,
+      html[data-view="simple"] .attention-toolbar label,
+      html[data-view="simple"] #attention-sort,
+      html[data-view="simple"] #attention-heading + .sub,
+      html[data-view="simple"] .summary-facts > :nth-child(3),
+      html[data-view="simple"] .summary-facts > :nth-child(4),
+      html[data-view="simple"] .summary-facts > :nth-child(9),
+      html[data-view="simple"] .summary-facts > :nth-child(10),
+      html[data-view="simple"] #agent-ui-detail > .sub,
+      html[data-view="simple"] header details,
+      html[data-view="simple"] #tasks-heading,
+      html[data-view="simple"] #milestones-heading,
+      html[data-view="simple"] #task-milestones,
+      html[data-view="simple"] #progress-detail > h3,
+      html[data-view="simple"] #tasks-detail > .sub,
+      html[data-view="simple"] footer {
+        display: none;
+      }
+      html[data-view="simple"] #tasks-detail > summary,
+      html[data-view="simple"] #progress-detail > summary,
+      html[data-view="simple"] #agent-ui-detail > summary {
+        border: 0;
+        background: none;
+        padding: 4px 0;
+        pointer-events: none;
+        font-size: 15.5px;
+      }
+      html[data-view="simple"] #tasks-detail > summary::before,
+      html[data-view="simple"] #progress-detail > summary::before,
+      html[data-view="simple"] #agent-ui-detail > summary::before {
+        content: none;
+      }
+      @media (min-width: 701px) {
+        html[data-view="simple"] #quick-actions {
+          display: none;
+        }
+        html[data-view="simple"] main {
+          padding-bottom: 64px;
+        }
+      }
+      @media (max-width: 600px) {
+        header {
+          margin: -18px -14px 20px;
+          padding: 12px 14px;
+          flex-wrap: wrap;
+        }
+        h1 {
+          font-size: 22px;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        details[open] > :not(summary),
+        .workspace-pane > *,
+        .intro-card {
+          animation: none;
+        }
+        button,
+        a.button,
+        .fold > summary::before {
+          transition: none;
+        }
+      }
     </style>
   </head>
   <body>
@@ -1879,6 +2171,7 @@
           </details>
         </div>
         <div class="header-actions">
+          <button id="view-toggle" type="button" aria-pressed="false">くわしく表示</button>
           <!-- #61: 主要操作をキーボードで呼ぶ入口。Ctrl/⌘+K でも開きます。 -->
           <button
             id="palette-toggle"
@@ -1903,8 +2196,11 @@
       <div id="connection" class="sub" role="status" aria-live="polite">
         <span data-i18n="chrome.connecting">接続中…</span>
       </div>
-      <section class="card" aria-labelledby="first-visit-heading">
-        <h2 id="first-visit-heading">はじめての方へ</h2>
+      <section class="card intro-card" id="first-visit" aria-labelledby="first-visit-heading">
+        <div class="intro-head">
+          <h2 id="first-visit-heading">はじめての方へ</h2>
+          <button id="first-visit-dismiss" type="button">わかった</button>
+        </div>
         <p>
           この画面は、AIの作業の「いま」と「お願い」を見る場所です。
           見るのは下の「いまの状況」と「未回答の質問」だけで大丈夫です。
@@ -2098,7 +2394,7 @@
               <div id="update-summary"></div>
             </section>
         <section aria-labelledby="attention-heading">
-          <h3 id="attention-heading">判断待ちインボックス</h3>
+          <h3 id="attention-heading">あなたの確認待ち</h3>
           <p class="sub">未回答と停止・失敗の報告をまとめています。開くと理由と対応先を確認できます。期限は対応の目安です。</p>
           <div class="attention-toolbar">
             <label for="attention-sort">並べ替え</label>
@@ -2539,5 +2835,6 @@
       </footer>
     </main>
     <script type="module" src="./app.mjs"></script>
+    <script type="module" src="./view-mode.mjs"></script>
   </body>
 </html>

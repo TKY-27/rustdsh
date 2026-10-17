@@ -1,5 +1,6 @@
 // Real project HTTP server and browser; isolated tasks and local check commands.
 import assert from "node:assert/strict";
+import { detailedView } from "./detailed-view.mjs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
@@ -139,6 +140,7 @@ try {
       ? { executablePath: process.env.RDSH_CHROME_PATH }
       : {}),
   });
+  detailedView(browser);
   const makePage = async (viewport) => {
     const ctx = await browser.newContext({ viewport, locale: "ja-JP" });
     contexts.push(ctx);
