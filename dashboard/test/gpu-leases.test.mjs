@@ -1,4 +1,4 @@
-import { requiresCanonicalTempRoot, requiresGpuLock } from "./ownership-support.mjs";
+import { requiresGpuLock } from "./ownership-support.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -48,7 +48,10 @@ async function waitFor(check, timeout = 10000) {
 }
 async function setup(t, { shortPaths = false } = {}) {
   const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "rdsh-gpu-"));
-  let root = fixtureRoot,
+  // macOS exposes /var through /private/var. Trusted GPU state directories
+  // reject any realpath mismatch, so fixtures use the canonical path while
+  // cleanup still guards the mkdtemp result.
+  let root = await fs.realpath(fixtureRoot),
     hasShortAlias = false;
   if (shortPaths) {
     const { default: koffi } = await import("koffi");
@@ -919,7 +922,7 @@ test("a different kernel descriptor or host observation cannot reclaim an expire
   assert.equal((await leases.read()).leases.length, 1);
 });
 
-test("an ordinal/disabled visibility mask cannot be widened by a GPU request", requiresCanonicalTempRoot, async (t) => {
+test("an ordinal/disabled visibility mask cannot be widened by a GPU request", async (t) => {
   const { ledger, leases, command, env } = await setup(t);
   for (const mask of ["0", "-1", ""])
     await assert.rejects(

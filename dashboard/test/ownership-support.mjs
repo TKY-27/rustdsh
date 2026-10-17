@@ -80,22 +80,3 @@ export const requiresGpuLock = {
     ? false
     : `${process.platform} has no GPU lock binding; GPU leases require Linux flock or the Windows file lock`,
 };
-// Some GPU request fixtures write under os.tmpdir() and keep that exact path in
-// their own cleanup guards and expectations, while the GPU state directory
-// rejects a symlinked ancestor (macOS /var -> /private/var). On macOS they run
-// when the temporary root is already canonical (for example TMPDIR=/private/tmp).
-function canonicalTempRoot() {
-  // Only Darwin's /var link is in scope; Windows 8.3 aliases are handled by
-  // the fixtures and must keep running in CI.
-  if (process.platform !== "darwin") return true;
-  try {
-    return realpathSync(os.tmpdir()) === path.resolve(os.tmpdir());
-  } catch {
-    return false;
-  }
-}
-export const requiresCanonicalTempRoot = {
-  skip: canonicalTempRoot()
-    ? false
-    : "the temporary root is behind a symlink (set TMPDIR to its real path, e.g. /private/tmp on macOS)",
-};
