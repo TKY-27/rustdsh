@@ -359,6 +359,21 @@ fn map_path(base: &str, url_path: &str) -> String {
     format!("{base}{path}{query}")
 }
 
+fn forwarded_headers(source: &HeaderMap) -> HeaderMap {
+    let mut headers = source.clone();
+    for connection in source.get_all(header::CONNECTION) {
+        if let Ok(value) = connection.to_str() {
+            for name in value.split(',') {
+                headers.remove(name.trim());
+            }
+        }
+    }
+    for name in HOP_BY_HOP {
+        headers.remove(*name);
+    }
+    headers
+}
+
 fn json_error(status: StatusCode, message: &str) -> Response {
     let body = serde_json::json!({
         "error": { "message": message, "type": "serial_proxy_error" }
@@ -682,12 +697,7 @@ async fn proxy(State(state): State<Arc<ProxyState>>, request: Request<Body>) -> 
         wait_ms += rpm_started.elapsed().as_millis();
     }
 
-    let mut headers = HeaderMap::new();
-    for (name, value) in &parts.headers {
-        if !HOP_BY_HOP.contains(&name.as_str()) {
-            headers.append(name.clone(), value.clone());
-        }
-    }
+    let mut headers = forwarded_headers(&parts.headers);
     let authority = upstream_authority(&state.upstream);
     if let Ok(host) = HeaderValue::from_str(&authority) {
         headers.insert(header::HOST, host);
@@ -735,11 +745,7 @@ async fn proxy(State(state): State<Arc<ProxyState>>, request: Request<Body>) -> 
     let mut response = Response::new(Body::empty());
     *response.status_mut() =
         StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
-    for (name, value) in upstream.headers() {
-        if !HOP_BY_HOP.contains(&name.as_str()) {
-            response.headers_mut().append(name.clone(), value.clone());
-        }
-    }
+    *response.headers_mut() = forwarded_headers(upstream.headers());
     let upstream_body = Box::pin(upstream.bytes_stream());
     let stream = stream::unfold(
         Some((
