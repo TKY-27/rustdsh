@@ -48,13 +48,7 @@ impl Api {
         let raw = response
             .header("set-cookie")
             .ok_or_else(|| anyhow!("token exchange did not set a session cookie"))?;
-        let cookie = raw
-            .split(';')
-            .next()
-            .map(str::trim)
-            .filter(|pair| pair.contains('='))
-            .ok_or_else(|| anyhow!("malformed Set-Cookie: {raw}"))?
-            .to_string();
+        let cookie = session_cookie(raw)?;
         Ok(Self {
             origin: host.origin.clone(),
             cookie,
@@ -129,5 +123,50 @@ impl Api {
     /// Model catalog used by the composer's model picker.
     pub fn model_catalog(&self) -> Result<Value> {
         self.unary("session/modelCatalog", json!({}))
+    }
+}
+
+/// The first `name=value` pair of a Set-Cookie header.
+///
+/// The failure message describes the header's shape instead of repeating it:
+/// the raw header carries the signed session cookie, and this error reaches the
+/// user through the `{error:#}` printer in main.rs.
+fn session_cookie(raw: &str) -> Result<String> {
+    raw.split(';')
+        .next()
+        .map(str::trim)
+        .filter(|pair| pair.contains('='))
+        .map(str::to_string)
+        .ok_or_else(|| {
+            anyhow!(
+                "malformed Set-Cookie header ({} bytes, {} semicolon-separated fields): the first field has no '='",
+                raw.len(),
+                raw.split(';').count()
+            )
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::session_cookie;
+
+    #[test]
+    fn keeps_the_first_cookie_pair() {
+        let raw = "dsh-auth-abc=v1.payload.signature; Path=/; HttpOnly; SameSite=Lax";
+        assert_eq!(
+            session_cookie(raw).unwrap(),
+            "dsh-auth-abc=v1.payload.signature"
+        );
+    }
+
+    #[test]
+    fn malformed_cookie_error_does_not_echo_the_header() {
+        // The failure path must stay diagnosable without printing the value.
+        let raw = "secret-token-value; Path=/; HttpOnly";
+        let error = format!("{:#}", session_cookie(raw).unwrap_err());
+        assert!(error.contains("malformed Set-Cookie"));
+        assert!(error.contains("36 bytes"));
+        assert!(error.contains("3 semicolon-separated fields"));
+        assert!(!error.contains("secret-token-value"));
     }
 }
