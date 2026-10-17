@@ -525,3 +525,28 @@ test(
     }
   },
 );
+
+test("a launch rejected before ownership stops as not_running instead of unconfirmed", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "rdsh-adapter-no-scope-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  // A rejected spawnOwnedProcess leaves launchAttempted true with no owned
+  // scope, exactly as on a host without an owned process-scope backend. It
+  // must not turn into a stop_unconfirmed that masks the original launch
+  // error behind a cleanup_unconfirmed ledger failure (#548).
+  const adapter = createCliAdapter({
+    command: [process.execPath, fixture],
+    cwd: root,
+    env: { ...process.env, RDSH_ADAPTER_FIXTURE_MODE: "normal" },
+    requestTimeout: 1500,
+    stopTimeout: 150,
+    owner_id: "not-a-valid-owner",
+  });
+  await assert.rejects(adapter.start(), error("invalid_launch"));
+  assert.equal(adapter.launchAttempted, true);
+  assert.ok(!adapter.ownedScope);
+  assert.ok(!adapter.child);
+  assert.deepEqual(await adapter.stop(), {
+    status: "not_running",
+    confirmed: true,
+  });
+});

@@ -149,6 +149,7 @@ class CliAdapter extends EventEmitter {
     this.disabled = new Set();
     this.stopping = false;
     this.stopped = false;
+    this.launching = false;
     this.nextSequence = 0;
   }
 
@@ -425,19 +426,24 @@ class CliAdapter extends EventEmitter {
     this.processVersion = this.version;
     // ACP is a shipped DSH profile; --from-default-profile is for custom targets.
     this.launchAttempted = true;
-    this.ownedScope = await spawnOwnedProcess({
-      command: [
-        ...this.command,
-        "--profile",
-        this.profile,
-        ...(this.patch === null ? [] : ["--patch", this.patch]),
-      ],
-      cwd: this.cwd,
-      env: this.env,
-      owner_id: this.owner_id,
-      onStage: this.onStopStage,
-      dockerWorker: this.dockerWorker,
-    });
+    this.launching = true;
+    try {
+      this.ownedScope = await spawnOwnedProcess({
+        command: [
+          ...this.command,
+          "--profile",
+          this.profile,
+          ...(this.patch === null ? [] : ["--patch", this.patch]),
+        ],
+        cwd: this.cwd,
+        env: this.env,
+        owner_id: this.owner_id,
+        onStage: this.onStopStage,
+        dockerWorker: this.dockerWorker,
+      });
+    } finally {
+      this.launching = false;
+    }
     this.child = this.ownedScope.child;
     // Never forward stderr or peer error strings; either can contain secrets.
     this.child.stderr.resume();
@@ -909,7 +915,12 @@ class CliAdapter extends EventEmitter {
   async stop() {
     if (this.cli !== "dsh") throw new AdapterError("unsupported", "stop");
     if (!this.child) {
-      if (this.launchAttempted)
+      // A spawn that rejected before returning a scope never owned a kernel
+      // group, as on a host without an owned process-scope backend. Reporting
+      // stop_unconfirmed there hides the real launch error behind a
+      // cleanup_unconfirmed ledger failure (#548); only an in-flight or
+      // acquired scope leaves the stop genuinely unconfirmed.
+      if (this.launching || this.ownedScope)
         throw new AdapterError("stop_unconfirmed", "stop");
       return { status: "not_running", confirmed: true };
     }
