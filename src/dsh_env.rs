@@ -482,8 +482,9 @@ pub(crate) fn approve_builds_command(version: Option<&str>) -> Option<String> {
 /// dropping the separators and the "[]" array suffix, so both the camelCase and
 /// the INI kebab-case spelling count.
 pub(crate) fn build_approval_in(config: &str) -> bool {
-    config.lines().any(|line| {
-        let line = line.trim();
+    let lines: Vec<&str> = config.lines().collect();
+    lines.iter().enumerate().any(|(index, raw)| {
+        let line = raw.trim();
         if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
             return false;
         }
@@ -503,14 +504,81 @@ pub(crate) fn build_approval_in(config: &str) -> bool {
             .trim_matches('"')
             .trim_matches('\'')
             .to_ascii_lowercase();
-        match key.as_str() {
-            // The key alone records the decision: a YAML map or list header has
-            // an empty value on its own line.
-            "onlybuiltdependencies" | "allowbuilds" => true,
+        let block = |predicate: &dyn Fn(&str) -> bool| {
+            block_has(&lines, index + 1, indent_of(raw), predicate)
+        };
+        let approved = match key.as_str() {
+            // pnpm 10: a list of the packages whose scripts may run. An empty
+            // list approves nothing.
+            "onlybuiltdependencies" => {
+                let inline = value
+                    .trim_matches(|character| "[]{}".contains(character))
+                    .trim()
+                    .to_string();
+                !inline.is_empty()
+                    || block(&|candidate| {
+                        candidate.starts_with('-')
+                            && !candidate.trim_start_matches('-').trim().is_empty()
+                    })
+            }
+            // pnpm 11: package -> bool. Only an explicit "true" approves, and
+            // pnpm's "set this to true or false" placeholder does not.
+            "allowbuilds" => {
+                let inline = value
+                    .trim_matches(|character| "{}".contains(character))
+                    .split(',')
+                    .any(|entry| {
+                        entry
+                            .split_once(':')
+                            .is_some_and(|(_, flag)| approves(flag))
+                    });
+                inline
+                    || block(&|candidate| {
+                        candidate
+                            .split_once(':')
+                            .is_some_and(|(_, flag)| approves(flag))
+                    })
+            }
             "dangerouslyallowallbuilds" => value != "false" && value != "0",
             _ => false,
-        }
+        };
+        approved
     })
+}
+
+/// An allowBuilds value approves only when it is exactly `true`, quoted or not,
+/// with any trailing YAML comment dropped.
+fn approves(flag: &str) -> bool {
+    let flag = flag.split(" #").next().unwrap_or_default().trim();
+    flag.trim_matches(|quote| quote == '"' || quote == '\'') == "true"
+}
+
+/// Indentation of a raw line: the block under a key is indented further.
+fn indent_of(line: &str) -> usize {
+    line.len() - line.trim_start().len()
+}
+
+/// True when the indented block after a key holds a line the caller accepts.
+/// Blank lines and comments never end the block; a dedent does.
+fn block_has(
+    lines: &[&str],
+    start: usize,
+    header_indent: usize,
+    predicate: &dyn Fn(&str) -> bool,
+) -> bool {
+    for raw in lines.iter().skip(start) {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
+            continue;
+        }
+        if indent_of(raw) <= header_indent {
+            return false;
+        }
+        if predicate(line) {
+            return true;
+        }
+    }
+    false
 }
 
 fn env_build_approval() -> bool {
@@ -1140,6 +1208,56 @@ mod tests {
             "registry=https://registry.npmjs.org/
 "
         ));
+    }
+
+    #[test]
+    fn build_approval_ignores_rejections_and_empty_lists() {
+        let config = |lines: &[&str]| lines.join("\n");
+        // pnpm 11 records every ignored build in allowBuilds, so the key alone
+        // or a placeholder must not read as an approval.
+        assert!(!build_approval_in(&config(&[
+            "allowBuilds:",
+            "  esbuild: false"
+        ])));
+        assert!(!build_approval_in(&config(&[
+            "allowBuilds:",
+            "  esbuild: \"set this to true or false\""
+        ])));
+        assert!(!build_approval_in("allowBuilds: {esbuild: false}"));
+        assert!(!build_approval_in("allowBuilds:"));
+        // A dedented key is outside the block, so it cannot approve.
+        assert!(!build_approval_in(&config(&[
+            "allowBuilds:",
+            "esbuild: true"
+        ])));
+        // An empty pnpm 10 list approves nothing.
+        assert!(!build_approval_in("onlyBuiltDependencies: []"));
+        assert!(!build_approval_in("onlyBuiltDependencies: {}"));
+        assert!(!build_approval_in("onlyBuiltDependencies:"));
+        // The positive forms still count, inline and in the block.
+        assert!(build_approval_in("allowBuilds: {sharp: true}"));
+        assert!(build_approval_in(&config(&[
+            "allowBuilds:",
+            "  sharp: true"
+        ])));
+        assert!(build_approval_in("onlyBuiltDependencies: [sharp]"));
+        // A trailing comment or single quotes do not hide an explicit approval.
+        assert!(build_approval_in(&config(&[
+            "allowBuilds:",
+            "  sharp: true  # needed for image builds"
+        ])));
+        assert!(build_approval_in(&config(&[
+            "allowBuilds:",
+            "  sharp: 'true'"
+        ])));
+        assert!(!build_approval_in(&config(&[
+            "allowBuilds:",
+            "  esbuild: false  # true would run postinstall"
+        ])));
+        assert!(build_approval_in(&config(&[
+            "onlyBuiltDependencies:",
+            "  - sharp"
+        ])));
     }
 
     #[test]
