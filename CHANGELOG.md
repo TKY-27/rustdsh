@@ -5,8 +5,21 @@ Format follows Keep a Changelog, versioning follows Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-18
+
 ### Added
 
+- Native desktop app: `apps/rdsh-desktop` is a Rust/GPUI window that follows
+  the upstream design tokens and drives the same HTTP/WebSocket API, so day-to-day
+  conversation work no longer needs the Electron shell, a bundled Chromium or a
+  local web server. It has a project-grouped sidebar with real conversation
+  titles, a provider-grouped model picker, live assistant streaming with stop,
+  approval prompts and user questions (`$events` waterfall), tool and reasoning
+  rows, and new conversations. `cargo run --release` starts the window; the
+  `--dump-ui`, `--dump-titles`, `--probe` and `--dump-live` modes verify
+  the same data headlessly. Linux uses the Wayland/Vulkan backend (xkbcommon and
+  xkbcommon-x11 at build time); Windows and macOS use the default GPUI features.
+  The release archives do not ship it yet (#752, #765, #771, #776).
 - First-run wizard: `rdsh setup --web` is now a three-step page (check,
   connect AI, done) that opens already connected through a protected local
   launcher file, so the token never reaches argv or the terminal and nobody
@@ -15,16 +28,16 @@ Format follows Keep a Changelog, versioning follows Semantic Versioning.
   `--select SOURCE:CREDENTIAL --import` path); starts `codex login` /
   `opencode auth login` in a new terminal window; saves DeepSeek, OpenAI or
   Anthropic keys; and starts the first conversation (Desktop app, `rdsh tui`
-  or the web profile). The token-paste box remains as the fallback.
+  or the web profile). The token-paste box remains as the fallback (#753).
 - Installers open that wizard after an interactive install (`install.ps1
   -NoSetup` / `install.sh --no-setup` skip it, as does `CI`). On Windows the
   installer also offers `npm install -g @deepseek-ai/dsh` when dsh is missing
-  and adds an "rdsh setup" Start menu shortcut.
+  and adds an "rdsh setup" Start menu shortcut (#753).
 - Project dashboard: a simple view (default) shows only the current state,
   what waits for the person, the agent's screens, tasks and reports;
   "くわしく表示 / Detailed view" brings back every other panel. Typography
   uses a Japanese system font stack with calmer sizes and light motion that
-  respects reduced-motion settings.
+  respects reduced-motion settings (#738, #753).
 - `rdsh provider add commandcode` registers Command Code's Provider API
   (`https://api.commandcode.ai/provider/v1`, OpenAI-compatible,
   `COMMANDCODE_API_KEY`) as a profile route; `--discover` reads its
@@ -34,31 +47,76 @@ Format follows Keep a Changelog, versioning follows Semantic Versioning.
   a hand-declared route) without a fixed three-name list, and still refuse
   anything undeclared or malformed before writing. `docs/PROVIDERS.md`
   documents the endpoints, the Go-plan `403 upgrade_required`, the
-  `/messages`-only Claude models and the ZDR header left to #484 (#450).
+  `/messages`-only Claude models and the ZDR header left to #484 (#450, #762).
+- `docs/PHILOSOPHY.md` and `docs/PHILOSOPHY.ja.md` explain why rdsh keeps the
+  upstream Node.js agent runtime and hardens only the hot boundary, with the
+  measured launch and hook costs cited from `docs/BENCHMARKS.md`. Both READMEs
+  and `docs/ARCHITECTURE.md` link to it (#777).
+- `docs/ZDR.md` defines the zero-data-retention route requirements: what rdsh
+  guarantees, what it leaves to the provider, and the hand-maintained route
+  table with its evidence fields. This is a requirements document with no
+  implementation yet (#763).
+- `rdsh provider list` and the static adapter catalog moved to native Rust, and
+  the dashboard server now loads only when a dashboard actually starts
+  (#699).
 
 ### Fixed
 
+- Privacy defaults: `features.telemetry` and `features.discord` now default
+  off. Delegated `dsh` runs receive `DSH_TELEMETRY_DISABLED=1` unless
+  `RDSH_TELEMETRY=on` is set, an existing value is never overwritten, and the
+  bundled settings plugin keeps `features.discord` and the legacy
+  `discord.enabled` in step. `docs/PRIVACY.md` records the limits (#735).
 - Project dashboard stylesheet: two unclosed rules made browsers drop roughly
   the last 1,100 lines of CSS (workspace grid, attention inbox, mobile layout
-  and more). A unit test now keeps the stylesheet balanced.
-
-- `features.telemetry` (default off) and `RDSH_TELEMETRY=on`: delegated `dsh`
-  runs now receive `DSH_TELEMETRY_DISABLED=1` by default, so upstream session
-  telemetry (OpenTelemetry) is not sent unless the user opts in. A
-  `DSH_TELEMETRY_DISABLED` already present in the environment is never
-  overwritten (#585).
-
-- `docs/PRIVACY.md` documents what rustdsh keeps off by default, how to
-  enable it, and the limits (network filtering and the Electron desktop
-  runtime are outside rustdsh's control). README.md, README.ja.md and
-  docs/RDSH-SETTINGS.md link to it (#585).
+  and more). A unit test now keeps the stylesheet balanced (#753).
+- Setup wizard: on Windows the `start` command read the bare `rdsh` as the
+  window title, so the login and chat terminals never ran the intended
+  `cmd.exe /k <program>`; an empty title is now passed (#753).
+- Desktop app: a failed `Set-Cookie` parse embedded the raw header (the signed
+  session cookie) in the error, which `main.rs` logged; failures now report the
+  byte length and field count only (#775).
+- Agent UI: the Windows surface rename retries `EPERM` and concurrent surface
+  writes are isolated instead of overwriting each other (#759, #769).
+- Dashboard: macOS exact-container binding in the worker boundary, watched
+  Store PowerShell aliases, review-evidence directory canonicalization,
+  closing interrupted Harness proxy streams, and the tray launch through a
+  Windows Store alias (#739, #756, #757, #760).
+- Windows runtime JSON replacement keeps its retry bound without replaying a
+  completed write (#749).
+- `dsh-env` accepts a commented, single-quoted or command-line
+  `dangerouslyAllowAllBuilds` value instead of treating it as a full approval
+  (#748, #764, #773).
+- Serial proxy: `Connection`-nominated headers are no longer forwarded
+  (#761).
+- `rdsh doctor` accepts a quoted Windows JS entry path, and pnpm 9 no longer
+  points at a fix that never prints (#734, #746).
+- `guard.deny` keeps the Rust-side limit (#745).
+- worker-git benchmark: the native sample is pinned into a dedicated execution
+  copy with its source and SHA-256 recorded, JavaScript and native calls are
+  dispatched directly, and every operation row carries seven unrounded samples
+  plus a `measurementBoundary`; the macOS arm64 release evidence is stored in
+  `docs/evidence` (#778).
+- worker-git benchmark: `dirtyPaths` gets its own 30 ms Windows budget because a
+  single `git status` never amortises the bridge process start; the multi-Git
+  operations keep the 20 ms budget and `RDSH_BENCH_MAX_OVERHEAD_MS` still
+  overrides every operation (#779).
+- Test flake: macOS `accept` inherits the listener's `O_NONBLOCK`, so the
+  provider fixture header read could panic with `WouldBlock`; the flag is
+  cleared before reading (#780).
 
 ### Changed
 
-- Discord Rich Presence is now off by default: `features.discord` and the
-  legacy `discord.enabled` both default to false, and the bundled settings
-  plugin keeps the two in step (`features.discord` wins when written).
-  Existing `rdsh.json` files with an explicit `true` stay enabled (#585).
+- The beginner setup wizard now stores a shared Codex/OpenCode login and
+  refuses undeclared or malformed key names before writing, and the dashboard
+  view keeps calmer Japanese typography with reduced-motion support
+  (#753).
+- Test suites that depended on fixed paths, roots or backend assumptions were
+  made native and portable: Windows fixtures use native identity and canonical
+  temp paths, the dashboard GPU/Colima fixtures are gated on macOS, and the
+  hermetic direct-model SDK suites run in CI (#750, #754, #772).
+- CI: the plugin-security job isolates registry acquisition and retries
+  offline (#737).
 
 ## [0.7.0] - 2026-10-17
 
