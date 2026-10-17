@@ -89,14 +89,18 @@ still open.
   the `v0.5.0` milestone).
 - Cargo workspace split into `rdsh-cli` / `rdsh-guard` / `rdsh-core` /
   `rdsh-web` (#703).
-- Routing experiments: the decision for #87 is an opt-in plan
-  (`features.route_plan`, default off) with five measurement steps and five
-  falsification conditions in `docs/proposals/provider-quota-routing.md`
-  (#513, #742); `src/route_plan.rs` is not implemented yet. The child issues
-  Command Code as a provider (#450) and the ZDR-only mode (#484) are open.
-- Translated answers on screen: Step 1 (#664) and Step 2 (#718) replace the
-  model-visible surface (#448, closed). Replacing what the screen shows needs
-  a DSH-side API (assistant-node display or a per-message display slot).
+- Routing experiments: #87 closed with a provisional opt-in plan
+  (proposed `features.route_plan`, default off) with five measurement steps
+  and five falsification conditions in
+  `docs/proposals/provider-quota-routing.md` (#513, #742). The command name,
+  placement, `route_plan` section and pricing schema still wait for the 87-1
+  decision, and nothing is implemented yet. The child issues Command Code as
+  a provider (#450) and the ZDR-only mode (#484) are open.
+- Translated answers on screen: Step 1 (#664) only shows a translation and
+  leaves the conversation and the next model input unchanged; Step 2 (#718)
+  replaces the model-visible surface (#448, closed). Replacing what the
+  screen shows needs a DSH-side API (assistant-node display or a per-message
+  display slot).
 - Codex headless exit: the opt-in pinned runtime exits 157-281 ms after
   `turn_end` (#505; #488, closed). Fixing the stock install needs upstream
   APIs (an awaitable cleanup, an unref'd idle timer and a DSH disposal
@@ -109,7 +113,10 @@ still open.
   moves after the workspace split (#703; #516, closed).
 - Windows `routing probe` exec deadline (win32 60000 ms): the tray wait
   follows observed startup progress (#717; #209, closed), but the probe has
-  no progress to observe, so only runner load can exceed it.
+  no progress to observe and keeps its fixed deadline. #209's root cause is
+  not established (`docs/evidence/windows-startup/README.md`), so a probe
+  timeout still needs investigation rather than being attributed to runner
+  load.
 - Windows worker Git `dirtyPaths` is 1.35x the JS baseline; settle the
   benchmark fallback rule (#586).
 - `rdsh-docs` skill acceptance: measure skill selection and body loading at
