@@ -143,7 +143,9 @@ fn terminal_command(program: &Path, args: &[&str]) -> anyhow::Result<std::proces
     let home = crate::inspect::home_dir().unwrap_or_else(|| ".".to_string());
     let mut command = std::process::Command::new(&cmd);
     command
-        .args(["/c", "start", "rdsh", "/D"])
+        // `start` reads only a quoted first argument as the window title; a bare
+        // word would be launched as the program, so pass an empty title.
+        .args(["/c", "start", "", "/D"])
         .arg(&home)
         .arg(&cmd)
         .arg("/k")
@@ -225,7 +227,11 @@ mod tests {
                     .get_args()
                     .map(|a| a.to_string_lossy().into_owned())
                     .collect();
-                if cfg!(target_os = "macos") {
+                if cfg!(windows) {
+                    assert_eq!(args[..4], ["/c", "start", "", "/D"], "{args:?}");
+                    assert!(args.iter().any(|a| a.ends_with("cmd.exe")), "{args:?}");
+                    assert_eq!(args[args.len() - 2..], ["/opt/tools/codex", "login"]);
+                } else if cfg!(target_os = "macos") {
                     assert!(args
                         .iter()
                         .any(|a| a.contains("'/opt/tools/codex' 'login'")));
