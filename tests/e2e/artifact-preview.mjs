@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { detailedView } from "./detailed-view.mjs";
 import fs from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
@@ -44,6 +45,7 @@ try {
   browser = await chromium.launch({ headless: true,
     ...(process.env.RDSH_CHROME_PATH ? { executablePath: process.env.RDSH_CHROME_PATH } : {}),
   });
+  detailedView(browser);
   const context = await browser.newContext({ viewport: { width: 1280, height: 900 },
     recordVideo: { dir: output, size: { width: 1280, height: 900 } },
   });

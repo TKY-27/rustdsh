@@ -1,5 +1,6 @@
 // Real Rust servers and the project CLI/MCP in isolated directories.
 import assert from 'node:assert/strict';
+import {detailedView} from './detailed-view.mjs';
 import {spawn,execFileSync} from 'node:child_process';
 import {mkdtemp,mkdir,readFile,writeFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
@@ -42,21 +43,22 @@ async function screenshot(page,name){await page.evaluate(async()=>{window.scroll
 async function freePort(){const server=net.createServer();await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(0,'127.0.0.1',resolve);});const port=server.address().port;await new Promise(resolve=>server.close(resolve));return String(port);}
 async function check(page,title){assert.match(await page.title(),title);assert.ok((await page.locator('body').innerText()).trim().length>100);assert.equal(await page.locator('html').getAttribute('lang'),language);assert.equal(await page.locator('vite-error-overlay,nextjs-portal').count(),0);assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth <= innerWidth+1),'page overflow');}
 const browser=await chromium.launch({headless:true,...(process.env.RDSH_CHROME_PATH?{executablePath:process.env.RDSH_CHROME_PATH}:{})});
+detailedView(browser);
 report.environment.browser=browser.version();
 try{
  const setup=await launch(binary,['setup','--web','--port','0'],/(http:\/\/127\.0\.0\.1:\d+\/)[\s\S]*?(?:token handoff file|トークン引き渡しファイル|令牌交接文件): ([^\r\n]+)/);handoffFiles.push(setup.tokenFile);assert.equal(new URL(setup.url).hash,'');
- const page=await pageFor(browser,setup.url);await page.locator('#token-box').waitFor({state:'visible'});await page.locator('#setup-token').fill((await readFile(setup.tokenFile,'utf8')).trim());await page.getByRole('button',{name:copy.connect}).click();await page.locator('#extras .row').first().waitFor();await check(page,/rdsh setup/);
+ const page=await pageFor(browser,setup.url);await page.locator('#token-box').waitFor({state:'visible'});await page.locator('#setup-token').fill((await readFile(setup.tokenFile,'utf8')).trim());await page.getByRole('button',{name:copy.connect}).click();await page.locator('#step-ready h1').waitFor();await page.evaluate(()=>go('finish'));await page.locator('#hx').click();await page.locator('#extras .row').first().waitFor();await check(page,/rdsh setup/);
  assert.equal(new URL(page.url()).hash,'');await page.locator('#extras .row').filter({hasText:'rdsh serve'}).click();
  await page.waitForFunction(value=>document.querySelector('#extras .row')?.textContent.includes(value),copy.enabled);
  assert.deepEqual(JSON.parse(await readFile(path.join(env.DSH_HOME,'rdsh.json'),'utf8')).extras.enable,['serve']);
- await page.reload();await page.waitForFunction(value=>document.querySelector('#extras .row')?.textContent.includes(value),copy.enabled);
+ await page.reload();await page.locator('#step-ready h1').waitFor();await page.evaluate(()=>go('finish'));await page.locator('#hx').click();await page.waitForFunction(value=>document.querySelector('#extras .row')?.textContent.includes(value),copy.enabled);
  await screenshot(page,'setup-desktop');await page.setViewportSize(report.viewports[1]);await check(page,/rdsh setup/);await screenshot(page,'setup-mobile');
  const sharingFile=path.join(env.DSH_HOME,'rdsh-auth-sharing.json');await writeFile(sharingFile,'{broken policy');await page.evaluate(()=>load());
  const policyCopy={en:'invalid credential sharing policy; imports are disabled','zh-CN':'凭据共享策略无效；已禁用导入',ja:'認証情報の共有ポリシーが無効です。インポートは無効です'}[language];
  assert.ok((await page.locator('#sharehint').innerText()).includes(policyCopy));
  const rawPolicy=await page.evaluate(async()=>{const response=await fetch('/api/status',{headers:{'X-RDSH-Token':setupToken}});return(await response.json()).sharing.policy_error;});
  assert.equal(rawPolicy,'invalid credential sharing policy; imports are disabled');assert.equal(await readFile(sharingFile,'utf8'),'{broken policy');await screenshot(page,'setup-policy-error-mobile');await rm(sharingFile);await page.evaluate(()=>load());assert.ok(!(await page.locator('#sharehint').innerText()).includes(policyCopy));
- await page.close();await stop(setup.child);await rm(setup.tokenFile,{force:true});report.flows.push('setup: protected token handoff -> Extras enable -> file readback -> reload retained -> corrupt sharing policy localized with canonical API JSON -> repair');
+ await page.close();await stop(setup.child);await rm(setup.tokenFile,{force:true});report.flows.push('setup: protected token handoff -> wizard steps -> Extras enable -> file readback -> reload retained -> corrupt sharing policy localized with canonical API JSON -> repair');
 
  const session=path.join(env.DSH_HOME,'sessions','example','session-one');await mkdir(session,{recursive:true});await writeFile(path.join(session,'messages.jsonl'),'synthetic session');
  const skills=path.join(env.DSH_HOME,'skills','e2e-skill');await mkdir(skills,{recursive:true});await writeFile(path.join(skills,'SKILL.md'),'# Synthetic skill');

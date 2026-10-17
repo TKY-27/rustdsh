@@ -84,6 +84,7 @@ mod search;
 mod serial_proxy;
 mod serve;
 mod setup_web;
+mod setup_wizard;
 mod shutdown;
 mod slim;
 mod subagent_plan;

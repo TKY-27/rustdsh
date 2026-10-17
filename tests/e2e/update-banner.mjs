@@ -1,4 +1,5 @@
 import { chromium } from 'playwright';
+import { detailedView } from "./detailed-view.mjs";
 import { build } from 'esbuild';
 import { createServer } from 'node:http';
 import { mkdtemp, mkdir, writeFile, rename, rm } from 'node:fs/promises';
@@ -95,6 +96,7 @@ try {
   }
   report.flows.push('State and event routes reject unauthenticated and foreign-Origin requests');
   browser = await chromium.launch({ headless: true, ...(process.env.RDSH_CHROME_PATH ? { executablePath: process.env.RDSH_CHROME_PATH } : {}) });
+  detailedView(browser);
   if (baseline) {
     await setState(state());
     const old = await context(origin), page = await old.newPage();

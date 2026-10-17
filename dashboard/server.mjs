@@ -93,6 +93,7 @@ const dashboardAssets = new Set([
   "/github-status-ui.mjs",
   "/task-outcomes-ui.mjs",
   "/observed-cli-ui.mjs",
+  "/view-mode.mjs",
   "/observations.mjs",
   "/reports-view.mjs",
   "/question-cards-ui.mjs",
@@ -1048,6 +1049,7 @@ export async function startDashboard(options) {
           route === "/notifications-ui.mjs" ||
           route === "/task-outcomes-ui.mjs" ||
           route === "/observed-cli-ui.mjs" ||
+          route === "/view-mode.mjs" ||
           route === "/favicon.ico" ||
           route === "/icon.png" ||
           route === "/icon.svg");
@@ -1207,6 +1209,7 @@ export async function startDashboard(options) {
           "/notifications-ui.mjs",
           "/task-outcomes-ui.mjs",
           "/observed-cli-ui.mjs",
+          "/view-mode.mjs",
           "/ui/registry.mjs",
           "/ui/blocks.mjs",
           "/ui/state-adapter.mjs",

@@ -1,5 +1,6 @@
 // Real HTTP/browser and local QA; native receipts are explicit stored fixtures.
 import assert from "node:assert/strict";
+import { detailedView } from "./detailed-view.mjs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -110,6 +111,7 @@ try {
       ? { executablePath: process.env.RDSH_CHROME_PATH }
       : {}),
   });
+  detailedView(browser);
   const screenshots = [],
     errors = [],
     flows = [],

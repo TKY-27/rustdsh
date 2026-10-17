@@ -1694,7 +1694,7 @@ pub fn first_boot_banner(locale: crate::locale::Locale) {
         crate::locale::Locale::Japanese => {
             eprintln!("[rdsh] モデル接続がまだありません（初回セットアップが必要です）");
             eprintln!(
-                "[rdsh]   rdsh setup   … 対話ガイド：GPTサブスク(OAuth)かDeepSeekキーを接続します"
+                "[rdsh]   rdsh setup --web … ブラウザの画面で接続します（おすすめ・GPTサブスクならAPIキー不要）"
             );
             eprintln!(
                 "[rdsh]   サブスク利用ならAPIキーは不要です。詳しくは rdsh auth / rdsh doctor"
@@ -1702,12 +1702,14 @@ pub fn first_boot_banner(locale: crate::locale::Locale) {
         }
         crate::locale::Locale::Chinese => {
             eprintln!("[rdsh] 尚未连接模型（需要首次设置）");
-            eprintln!("[rdsh]   rdsh setup   … 引导连接 GPT 订阅（OAuth）或 DeepSeek 密钥");
+            eprintln!(
+                "[rdsh]   rdsh setup --web … 在浏览器页面中连接（推荐；GPT 订阅无需 API 密钥）"
+            );
             eprintln!("[rdsh]   使用订阅无需 API 密钥。另请参阅 rdsh auth / rdsh doctor");
         }
         crate::locale::Locale::English => {
             eprintln!("[rdsh] no model connection yet (first-run setup needed)");
-            eprintln!("[rdsh]   rdsh setup   … guided connect: GPT subscription (OAuth) or a DeepSeek key");
+            eprintln!("[rdsh]   rdsh setup --web … connect in your browser (recommended; GPT subscription needs no API key)");
             eprintln!("[rdsh]   subscriptions need no API key. See also rdsh auth / rdsh doctor");
         }
     }
@@ -2427,6 +2429,42 @@ pub(crate) fn setup_store_key(name: &str, value: &str) -> anyhow::Result<bool> {
         anyhow::bail!("empty or oversized value");
     }
     store_ref(name, v, crate::locale::Locale::English)
+}
+
+/// Share one external credential the person picked in the setup wizard:
+/// the same persistent `--select SOURCE:CREDENTIAL --import` path as the CLI,
+/// limited to a selector that the current scan actually offers.
+pub(crate) fn setup_share(selector: &str) -> anyhow::Result<Vec<String>> {
+    let scan = scan();
+    let offered = scan
+        .grants
+        .iter()
+        .map(|g| format!("{}:{}", g.from, g.provider))
+        .chain(scan.keys.iter().map(|k| format!("{}:{}", k.from, k.name)))
+        .any(|s| s == selector);
+    anyhow::ensure!(offered, "credential is not available to share");
+    let root = crate::inspect::dsh_home();
+    let select = vec![selector.to_string()];
+    let _lock = SharingLock::acquire(&root)?;
+    let mut policy = SharingPolicy::load(&root)?;
+    policy.change(&select, &[])?;
+    policy.save(&root)?;
+    apply_imports(&policy, true, crate::locale::Locale::English)
+}
+
+/// Login helpers the setup wizard may start (fixed argv, never user input).
+pub(crate) fn login_command(tool: &str) -> Option<(&'static str, &'static [&'static str])> {
+    let command: (&'static str, &'static [&'static str]) = match tool {
+        "codex" => ("codex", &["login"]),
+        "opencode" => ("opencode", &["auth", "login"]),
+        _ => return None,
+    };
+    which_bin(command.0).then_some(command)
+}
+
+/// True when `bin` resolves on PATH (setup wizard environment check).
+pub(crate) fn command_on_path(bin: &str) -> bool {
+    which_bin(bin)
 }
 
 /// Open a URL in the OS browser (best effort, used by `setup --web`).

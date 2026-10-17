@@ -59,9 +59,22 @@ pub fn cmd_setup_web(port: u16, locale: crate::locale::Locale) -> anyhow::Result
         }
     );
     use std::io::IsTerminal as _;
-    if std::io::stdin().is_terminal() {
-        // Keep the bearer token out of the browser-launch argv.
-        if let Err(e) = crate::auth::open_browser(&base, locale) {
+    // Keep the bearer token out of the browser-launch argv: open a protected
+    // local launcher page that forwards with the token in the fragment, so a
+    // first-time user lands on a connected page without pasting anything.
+    let mut _launcher = None;
+    if std::io::stdin().is_terminal() || std::env::var_os("RDSH_SETUP_OPEN").is_some() {
+        // The launcher lives until the server exits. Explorer can report a
+        // failure status after opening the page, so never open a second tab.
+        let opened = match crate::token_handoff::TokenHandoff::launcher(&base, &token, locale) {
+            Ok(launcher) => {
+                let result = crate::auth::open_browser(&launcher.path().to_string_lossy(), locale);
+                _launcher = Some(launcher);
+                result
+            }
+            Err(_) => crate::auth::open_browser(&base, locale),
+        };
+        if let Err(e) = opened {
             eprintln!(
                 "[rdsh setup] {} ({e:#}); {}",
                 match locale {
@@ -249,6 +262,40 @@ fn handle(
                     Cow::Owned(serde_json::json!({"error": e.to_string()}).to_string()),
                 ),
             },
+            ("GET", "/api/env") if !req.authorized(token) => (
+                401,
+                "application/json",
+                Cow::Borrowed("{\"error\":\"unauthorized\"}"),
+            ),
+            ("GET", "/api/env") => (
+                200,
+                "application/json",
+                Cow::Owned(crate::setup_wizard::env_json()),
+            ),
+            ("POST", "/api/share" | "/api/login" | "/api/start") if !req.authorized(token) => (
+                401,
+                "application/json",
+                Cow::Borrowed("{\"error\":\"unauthorized\"}"),
+            ),
+            ("POST", "/api/share" | "/api/login" | "/api/start")
+                if req.header("content-type") != Some("application/json") =>
+            {
+                (
+                    400,
+                    "application/json",
+                    Cow::Borrowed("{\"error\":\"JSON required\"}"),
+                )
+            }
+            ("POST", target @ ("/api/share" | "/api/login" | "/api/start")) => {
+                match wizard_action(target, &req.body) {
+                    Ok(value) => (200, "application/json", Cow::Owned(value.to_string())),
+                    Err(e) => (
+                        400,
+                        "application/json",
+                        Cow::Owned(serde_json::json!({"error": e.to_string()}).to_string()),
+                    ),
+                }
+            }
             ("POST", "/api/done") if !req.authorized(token) => (
                 401,
                 "application/json",
@@ -268,6 +315,26 @@ fn handle(
         done.store(true, Ordering::Relaxed);
     }
     Ok(())
+}
+
+/// Wizard buttons: each body names one allowlisted target, never a command.
+fn wizard_action(target: &str, body: &str) -> anyhow::Result<serde_json::Value> {
+    let v: serde_json::Value = serde_json::from_str(body)?;
+    let field = |name: &str| v.get(name).and_then(|x| x.as_str()).unwrap_or("");
+    match target {
+        "/api/share" => {
+            let wrote = crate::auth::setup_share(field("selector"))?;
+            Ok(serde_json::json!({"shared": true, "wrote": wrote}))
+        }
+        "/api/login" => {
+            crate::setup_wizard::start_login(field("tool"))?;
+            Ok(serde_json::json!({"started": true}))
+        }
+        _ => {
+            crate::setup_wizard::start_chat(field("kind"))?;
+            Ok(serde_json::json!({"started": true}))
+        }
+    }
 }
 
 fn store_extras_body(body: &str) -> anyhow::Result<Vec<String>> {
