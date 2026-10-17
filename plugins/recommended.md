@@ -24,10 +24,10 @@ Choose a set explicitly (or for CI) with `--recommended`:
 | `list` | print the catalog, essential tier first, then exit |
 | `id,id` | exactly the listed ids |
 
-Ids: `translation`, `compute`, `easy-work`, `subagents`, `sound`,
-`gitview`. The `RECOMMENDED` environment variable carries the same value for
-callers that only set the environment. An explicit spec replaces the
-`TRANSLATION`, `COMPUTE`, `EASY_WORK`, `SUBAGENTS`, `SOUND` and
+Ids: `translation`, `compute`, `easy-work`, `subagents`, `ui-comfort`,
+`sound`, `gitview`. The `RECOMMENDED` environment variable carries the same
+value for callers that only set the environment. An explicit spec replaces the
+`TRANSLATION`, `COMPUTE`, `EASY_WORK`, `SUBAGENTS`, `UI_COMFORT`, `SOUND` and
 `GITVIEW` defaults; `features.sound=false` / `features.gitview=false` in
 `rdsh.json` still veto those two, even under `--recommended=all`.
 
@@ -77,6 +77,7 @@ check its duplicate-ID behavior before migrating existing profiles.
 | `compute` | `rdsh-compute` | off | Web compute bridge (`rdsh features on compute`) |
 | `easy-work` | `rdsh-easy-work` | off | Guided file-organization workflow entry points |
 | `subagents` | `rdsh-subagent-optimizer` | off | Bounded exploration subagents |
+| `ui-comfort` | `rdsh-ui-comfort` | off | Deliberate Enter in the DSH Web chat: the composer sends on a second Enter within 1.5 s instead of the first, and the goal editor keeps Enter from committing the edit; both toggle live in the **rdsh 入力** settings section through `localStorage`. |
 | `sound` | `github:cwd514/dsh-sound-notifications` (MIT, (c) 2026 cwd514) | web, desktop | Effect sounds (Web Audio synthesis, no audio files) and desktop notifications for reply-done / approval-waiting / questions / errors / re-login. Zero dependencies, no build step. |
 | `gitview` | `github:yugapor/dsh-gitview` (MIT, (c) 2026 yugapor) | web, desktop | Git panel in the Web sidebar: working-tree changes, staging and commits, unified/side-by-side diffs, commit graph, branches, blame, reflog, and CI status. |
 
@@ -91,6 +92,11 @@ Notes:
   intended target. Desktop notifications additionally need a secure context
   (`127.0.0.1`/`localhost`/`https`) and the browser's notification
   permission; otherwise only the sounds play (see the upstream README).
+- `ui-comfort` is a Web client plugin that deliberately replaces the stock
+  Enter-to-send in the composer, so it stays **off** by default and never enters
+  the web/desktop default set: opt in with `--recommended=ui-comfort` (or
+  `UI_COMFORT=1`). It is bundled here, so no network fetch happens at install
+  time. See [its README](rdsh-ui-comfort/README.md).
 - `rdsh-easy-work` file organization executes on Linux; Windows and macOS
   preview only. `rdsh-subagent-optimizer` uses the native DSH `spawn`
   provider (0.2.0-rc.2). See their READMEs and the
