@@ -65,6 +65,15 @@ pinned revision):
 - hairline borders at 4%, 10% and 12% black
 - radii 4/8/12/16/20/28, body 14px with a 24px line box
 
+## Interaction
+
+- Sidebar shows every project group; the previous 60-row cap hid whole groups.
+- Scrolling: both the sidebar and the timeline scroll with the wheel or trackpad.
+- Model: the picker lists every provider (138 models here) with provider headers,
+  keeps the current provider first and marks the active model.
+- Model changes go through session/selectModel, so the host keeps them for the
+  conversation and the chip and header update immediately.
+
 ## Startup and weight
 
 The app paints its shell first and loads data in the background. It attaches to a
