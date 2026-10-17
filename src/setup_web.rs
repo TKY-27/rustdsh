@@ -374,3 +374,141 @@ fn store_key_body(body: &str) -> anyhow::Result<bool> {
     let value = v.get("value").and_then(|x| x.as_str()).unwrap_or("");
     crate::auth::setup_store_key(name, value)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Read as _, Write as _};
+
+    const TOKEN: &str = "test-token";
+
+    /// One request through `handle` over a real loopback socket.
+    fn call(request: impl FnOnce(u16) -> String) -> (u16, String, bool) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let mut client = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        let done = AtomicBool::new(false);
+        client.write_all(request(port).as_bytes()).unwrap();
+        handle(server, &done, TOKEN, port, crate::locale::Locale::Japanese).unwrap();
+        let mut bytes = Vec::new();
+        client.read_to_end(&mut bytes).unwrap();
+        let raw = String::from_utf8_lossy(&bytes);
+        let status = raw[9..12].parse().unwrap();
+        let body = raw
+            .split_once("\r\n\r\n")
+            .map(|(_, b)| b.to_string())
+            .unwrap_or_default();
+        (status, body, done.load(Ordering::Relaxed))
+    }
+
+    fn get(path: &'static str, token: Option<&'static str>) -> (u16, String, bool) {
+        call(move |port| {
+            let auth = token
+                .map(|t| format!("X-RDSH-Token: {t}\r\n"))
+                .unwrap_or_default();
+            format!(
+                "GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n{auth}Connection: close\r\n\r\n"
+            )
+        })
+    }
+
+    fn post(
+        path: &'static str,
+        ctype: &'static str,
+        body: &'static str,
+        token: bool,
+    ) -> (u16, String, bool) {
+        call(move |port| {
+            let auth = if token {
+                format!("X-RDSH-Token: {TOKEN}\r\n")
+            } else {
+                String::new()
+            };
+            format!(
+                "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n{auth}Content-Type: {ctype}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+        })
+    }
+
+    #[test]
+    fn page_is_localized_and_api_requires_the_token() {
+        let (status, page, _) = get("/", None);
+        assert_eq!(status, 200);
+        assert!(page.contains("<html lang=\"ja\" data-rdsh-locale=\"ja\">"));
+        for path in ["/api/status", "/api/env", "/api/extras"] {
+            assert_eq!(get(path, None).0, 401, "{path}");
+        }
+        for path in [
+            "/api/share",
+            "/api/login",
+            "/api/start",
+            "/api/key",
+            "/api/done",
+        ] {
+            assert_eq!(post(path, "application/json", "{}", false).0, 401, "{path}");
+        }
+        assert_eq!(get("/missing", Some(TOKEN)).0, 404);
+        assert_eq!(get("/icon.png", None).0, 200);
+    }
+
+    #[test]
+    fn untrusted_hosts_are_refused() {
+        let (status, _, _) =
+            call(|_| "GET / HTTP/1.1\r\nHost: evil.example\r\nConnection: close\r\n\r\n".into());
+        assert_eq!(status, 403);
+    }
+
+    #[test]
+    fn environment_and_status_documents_are_served() {
+        let (status, body, _) = get("/api/env", Some(TOKEN));
+        assert_eq!(status, 200);
+        let env: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(env["rdsh"], env!("CARGO_PKG_VERSION"));
+        let (status, body, _) = get("/api/status", Some(TOKEN));
+        assert_eq!(status, 200);
+        assert!(serde_json::from_str::<serde_json::Value>(&body).unwrap()["needed"].is_boolean());
+    }
+
+    #[test]
+    fn wizard_actions_need_json_and_refuse_unknown_targets() {
+        for path in ["/api/share", "/api/login", "/api/start"] {
+            assert_eq!(post(path, "text/plain", "{}", true).0, 400, "{path}");
+        }
+        let (status, body, _) = post(
+            "/api/login",
+            "application/json",
+            "{\"tool\":\"bash\"}",
+            true,
+        );
+        assert_eq!(status, 400);
+        assert!(body.contains("login helper is not installed"));
+        let (status, body, _) = post(
+            "/api/start",
+            "application/json",
+            "{\"kind\":\"shell\"}",
+            true,
+        );
+        assert_eq!(status, 400);
+        assert!(body.contains("unknown start target"));
+        let (status, body, _) = post(
+            "/api/share",
+            "application/json",
+            "{\"selector\":\"nowhere:none\"}",
+            true,
+        );
+        assert_eq!(status, 400);
+        assert!(body.contains("credential is not available to share"));
+        assert_eq!(
+            post("/api/share", "application/json", "not json", true).0,
+            400
+        );
+    }
+
+    #[test]
+    fn done_stops_the_server_after_answering() {
+        let (status, body, done) = post("/api/done", "application/json", "{}", true);
+        assert_eq!((status, body.as_str(), done), (200, "{\"ok\":true}", true));
+    }
+}

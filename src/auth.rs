@@ -2435,7 +2435,10 @@ pub(crate) fn setup_store_key(name: &str, value: &str) -> anyhow::Result<bool> {
 /// the same persistent `--select SOURCE:CREDENTIAL --import` path as the CLI,
 /// limited to a selector that the current scan actually offers.
 pub(crate) fn setup_share(selector: &str) -> anyhow::Result<Vec<String>> {
-    let scan = scan();
+    setup_share_in(selector, &scan(), &crate::inspect::dsh_home())
+}
+
+fn setup_share_in(selector: &str, scan: &Scan, root: &str) -> anyhow::Result<Vec<String>> {
     let offered = scan
         .grants
         .iter()
@@ -2443,13 +2446,12 @@ pub(crate) fn setup_share(selector: &str) -> anyhow::Result<Vec<String>> {
         .chain(scan.keys.iter().map(|k| format!("{}:{}", k.from, k.name)))
         .any(|s| s == selector);
     anyhow::ensure!(offered, "credential is not available to share");
-    let root = crate::inspect::dsh_home();
     let select = vec![selector.to_string()];
-    let _lock = SharingLock::acquire(&root)?;
-    let mut policy = SharingPolicy::load(&root)?;
+    let _lock = SharingLock::acquire(root)?;
+    let mut policy = SharingPolicy::load(root)?;
     policy.change(&select, &[])?;
-    policy.save(&root)?;
-    apply_imports(&policy, true, crate::locale::Locale::English)
+    policy.save(root)?;
+    apply_imports_from_scan(&policy, scan, true, crate::locale::Locale::English)
 }
 
 /// Login helpers the setup wizard may start (fixed argv, never user input).
@@ -2813,6 +2815,60 @@ mod tests {
         );
         std::fs::remove_file(&path).unwrap();
         std::fs::remove_dir(&dir).unwrap();
+    }
+
+    #[test]
+    fn setup_share_persists_the_selection_and_imports_only_that_credential() {
+        let root = std::env::temp_dir().join(format!(
+            "rdsh-setup-share-{}-{}",
+            std::process::id(),
+            crate::local_http::random_token().unwrap()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let root_text = root.to_string_lossy().into_owned();
+        let path = root
+            .join(".credentials.yaml")
+            .to_string_lossy()
+            .into_owned();
+        let scan = Scan {
+            grants: vec![test_grant("openai-codex", "codex")],
+            keys: vec![test_key("OPENAI_API_KEY", "codex")],
+            notes: Vec::new(),
+            doc: CredsDoc::default(),
+            decisions: Vec::new(),
+            path: path.clone(),
+        };
+        assert_eq!(
+            setup_share_in("opencode:anthropic", &scan, &root_text)
+                .unwrap_err()
+                .to_string(),
+            "credential is not available to share"
+        );
+        assert!(!std::path::Path::new(&path).exists());
+
+        let wrote = setup_share_in("codex:openai-codex", &scan, &root_text).unwrap();
+        assert!(!wrote.is_empty());
+        let policy = SharingPolicy::load(&root_text).unwrap();
+        assert!(policy.allows("codex", "openai-codex"));
+        assert!(!policy.allows("codex", "OPENAI_API_KEY"));
+        let doc = load_doc(&path);
+        assert!(doc
+            .grants
+            .contains_key(&format!("{RECORD_SCOPE}/openai-codex")));
+        assert!(!doc.refs.contains_key("OPENAI_API_KEY"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn login_helpers_are_a_fixed_allowlist() {
+        assert!(login_command("bash").is_none());
+        assert!(login_command("").is_none());
+        for tool in ["codex", "opencode"] {
+            if let Some((bin, _)) = login_command(tool) {
+                assert_eq!(bin, tool);
+                assert!(command_on_path(bin));
+            }
+        }
     }
 
     #[test]

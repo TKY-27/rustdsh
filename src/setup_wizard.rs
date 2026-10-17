@@ -130,56 +130,66 @@ fn linux_terminal() -> Option<PathBuf> {
 }
 
 /// Run `program args…` in a new, visible terminal window that stays open.
-#[cfg(windows)]
 fn open_terminal(program: &Path, args: &[&str]) -> anyhow::Result<()> {
+    terminal_command(program, args)?.spawn()?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn terminal_command(program: &Path, args: &[&str]) -> anyhow::Result<std::process::Command> {
     let system_root = std::env::var_os("SystemRoot")
         .ok_or_else(|| anyhow::anyhow!("SystemRoot is unavailable"))?;
     let cmd = PathBuf::from(system_root).join("System32").join("cmd.exe");
     let home = crate::inspect::home_dir().unwrap_or_else(|| ".".to_string());
-    std::process::Command::new(&cmd)
+    let mut command = std::process::Command::new(&cmd);
+    command
         .args(["/c", "start", "rdsh", "/D"])
         .arg(&home)
         .arg(&cmd)
         .arg("/k")
         .arg(program)
         .args(args)
-        .stdin(std::process::Stdio::null())
-        .spawn()?;
-    Ok(())
+        .stdin(std::process::Stdio::null());
+    Ok(command)
 }
 
 #[cfg(target_os = "macos")]
-fn open_terminal(program: &Path, args: &[&str]) -> anyhow::Result<()> {
-    let line = std::iter::once(program.to_string_lossy().into_owned())
-        .chain(args.iter().map(|a| a.to_string()))
-        .map(|part| shell_quote(&part))
-        .collect::<Vec<_>>()
-        .join(" ");
-    let script = format!(
-        "tell application \"Terminal\"\nactivate\ndo script \"{}\"\nend tell",
-        line.replace('\\', "\\\\").replace('"', "\\\"")
-    );
-    std::process::Command::new("/usr/bin/osascript")
+fn terminal_command(program: &Path, args: &[&str]) -> anyhow::Result<std::process::Command> {
+    let mut command = std::process::Command::new("/usr/bin/osascript");
+    command
         .arg("-e")
-        .arg(script)
+        .arg(terminal_script(program, args))
         .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .spawn()?;
-    Ok(())
+        .stdout(std::process::Stdio::null());
+    Ok(command)
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
-fn open_terminal(program: &Path, args: &[&str]) -> anyhow::Result<()> {
+fn terminal_command(program: &Path, args: &[&str]) -> anyhow::Result<std::process::Command> {
     let terminal = linux_terminal().ok_or_else(|| anyhow::anyhow!("no terminal emulator found"))?;
-    std::process::Command::new(terminal)
+    let mut command = std::process::Command::new(terminal);
+    command
         .arg("-e")
         .arg(program)
         .args(args)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()?;
-    Ok(())
+        .stderr(std::process::Stdio::null());
+    Ok(command)
+}
+
+/// AppleScript for Terminal.app: one shell-quoted command line.
+#[cfg(any(target_os = "macos", test))]
+fn terminal_script(program: &Path, args: &[&str]) -> String {
+    let line = std::iter::once(program.to_string_lossy().into_owned())
+        .chain(args.iter().map(|a| a.to_string()))
+        .map(|part| shell_quote(&part))
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!(
+        "tell application \"Terminal\"\nactivate\ndo script \"{}\"\nend tell",
+        line.replace('\\', "\\\\").replace('"', "\\\"")
+    )
 }
 
 #[cfg(any(target_os = "macos", test))]
@@ -204,6 +214,52 @@ mod tests {
         assert_eq!(v["rdsh"], env!("CARGO_PKG_VERSION"));
         assert!(v["dsh"]["found"].is_boolean());
         assert!(v["node"]["supported"].is_boolean());
+    }
+
+    #[test]
+    fn terminal_command_runs_the_program_with_fixed_arguments() {
+        let program = Path::new("/opt/tools/codex");
+        match terminal_command(program, &["login"]) {
+            Ok(command) => {
+                let args: Vec<String> = command
+                    .get_args()
+                    .map(|a| a.to_string_lossy().into_owned())
+                    .collect();
+                if cfg!(target_os = "macos") {
+                    assert!(args
+                        .iter()
+                        .any(|a| a.contains("'/opt/tools/codex' 'login'")));
+                } else {
+                    assert!(args.iter().any(|a| a == "login"), "{args:?}");
+                    assert!(args.iter().any(|a| a.contains("codex")), "{args:?}");
+                }
+            }
+            // Headless Linux runners have no terminal emulator.
+            Err(e) => assert_eq!(e.to_string(), "no terminal emulator found"),
+        }
+    }
+
+    #[test]
+    fn terminal_script_quotes_paths_for_applescript_and_the_shell() {
+        let script = terminal_script(Path::new("/Apps/My \"Tools\"/rdsh"), &["tui"]);
+        assert!(script.starts_with("tell application \"Terminal\""));
+        assert!(script.contains("do script \"'/Apps/My \\\"Tools\\\"/rdsh' 'tui'\""));
+    }
+
+    #[test]
+    fn node_version_rejects_programs_that_are_not_node() {
+        assert!(node_version("rdsh-definitely-missing-binary").is_none());
+    }
+
+    #[test]
+    fn login_and_chat_refuse_missing_helpers() {
+        assert_eq!(
+            start_login("bash").unwrap_err().to_string(),
+            "login helper is not installed"
+        );
+        assert!(!crate::auth::command_on_path(
+            "rdsh-definitely-missing-binary"
+        ));
     }
 
     #[test]
