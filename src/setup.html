@@ -199,6 +199,7 @@ details[open] > summary::before { transform: rotate(90deg); }
         <summary id="other-keys-summary">ほかの APIキー（OpenAI・Anthropic）</summary>
         <div class="field"><select id="other-key-name" aria-label="key"><option value="OPENAI_API_KEY">OpenAI</option><option value="ANTHROPIC_API_KEY">Anthropic</option></select></div>
         <div class="field"><input type="password" id="other-key" autocomplete="off" spellcheck="false" placeholder="API key"><button id="save-other-key" onclick="setupAction(saveOther)">保存</button></div>
+        <p class="hint" id="other-keys-hint" hidden></p>
       </details>
       <details id="detail-box">
         <summary id="detail-summary">くわしい情報（上級者向け）</summary>
@@ -274,7 +275,7 @@ text("deepseek-saved", "保存済み", "Saved", "已保存");
 text("kh", "キーをお持ちなら貼り付けてください。このPCの dsh 設定に保存します。", "Paste your key if you have one. It is saved to dsh on this PC.", "如有密钥请粘贴，它会保存到本机的 dsh 设置。");
 text("save-key", "保存", "Save", "保存");
 text("issue", "キーを発行する（DeepSeek）", "Get a key (DeepSeek)", "获取密钥（DeepSeek）");
-text("other-keys-summary", "ほかの APIキー（OpenAI・Anthropic）", "Other API keys (OpenAI, Anthropic)", "其他 API 密钥（OpenAI、Anthropic）");
+text("other-keys-summary", "ほかの APIキー（ルート別）", "Other API keys (by route)", "其他 API 密钥（按路由）");
 text("save-other-key", "保存", "Save", "保存");
 text("show-more", "ほかの方法でつなぐ", "Connect another way", "使用其他方式连接");
 $("key").addEventListener("input", function () { $("save-key").classList.toggle("primary", !!$("key").value.trim()); });
@@ -384,6 +385,7 @@ async function load() {
   STATUS = await response.json();
   renderOptions();
   renderDetails();
+  renderKeyNames();
   var connected = !STATUS.needed;
   $("okbar").hidden = !connected;
   $("okbar").textContent = "✓ " + t("AIとつながりました。「次へ」で最初の会話へ進めます。", "Connected. Press Next to start your first conversation.", "已连接。点击“下一步”开始第一次对话。");
@@ -396,6 +398,35 @@ async function load() {
   $("deepseek-option").classList.toggle("connected", !$("deepseek-saved").hidden);
 }
 
+// The "other API keys" select offers the built-in names plus every route key
+// the profiles declare (apiKeyEnv), so a Command Code or HAI key can be stored
+// from this page without hand-editing the credentials file.
+var BASE_KEY_NAMES = ["OPENAI_API_KEY", "ANTHROPIC_API_KEY"];
+var KEY_LABELS = {"OPENAI_API_KEY": "OpenAI", "ANTHROPIC_API_KEY": "Anthropic"};
+function renderKeyNames() {
+  if (!STATUS) return;
+  var names = BASE_KEY_NAMES.slice();
+  function add(name) { if (name && names.indexOf(name) < 0) names.push(name); }
+  (STATUS.declared_key_envs || []).forEach(add);
+  (STATUS.defaults || []).forEach(function (x) { add(x.api_key_env); });
+  var sel = $("other-key-name");
+  var previous = sel.value;
+  sel.replaceChildren();
+  names.forEach(function (name) {
+    var option = document.createElement("option");
+    option.value = name; option.textContent = KEY_LABELS[name] || name;
+    sel.appendChild(option);
+  });
+  if (names.indexOf(previous) >= 0) sel.value = previous;
+  var missing = [];
+  (STATUS.defaults || []).forEach(function (x) {
+    if (x.state !== "missing" || !x.api_key_env || missing.indexOf(x.api_key_env) >= 0) return;
+    missing.push(x.api_key_env);
+  });
+  var hint = $("other-keys-hint");
+  hint.textContent = missing.length ? t("未設定のキー: ", "Keys still missing: ", "仍未配置的密钥：") + missing.join(", ") : "";
+  hint.hidden = !missing.length;
+}
 function oauthItems(from) {
   var seen = {};
   return ((STATUS.sharing && STATUS.sharing.inventory) || []).filter(function (item) {

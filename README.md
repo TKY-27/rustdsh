@@ -310,10 +310,11 @@ rdsh settings get extras.enable
 | `serve` | `rdsh serve` (default :38080) | Local status page, localhost only, per-launch key. |
 | `search-web` | `rdsh search-web "query" --limit 5` | Needs SearXNG. |
 
-To connect an OpenAI-compatible endpoint that dsh does not ship (HAI, Sarashina, a home llama.cpp / vLLM / LM Studio / Ollama server), add it as a profile route:
+To connect an OpenAI-compatible endpoint that dsh does not ship (HAI, Command Code, Sarashina, a home llama.cpp / vLLM / LM Studio / Ollama server), add it as a profile route:
 
 ```sh
 rdsh provider add hai --model deepseek-v4-flash              # key from HAI_API_KEY or --key-stdin
+rdsh provider add commandcode --model deepseek/deepseek-v4-flash   # key from COMMANDCODE_API_KEY
 rdsh provider add sarashina                                  # key from SARASHINA_API_KEY; mini and nano built in
 rdsh provider add local-openai --base-url http://host:8080/v1 --discover --no-key
 rdsh provider list                                           # presets, per-profile route and key status
@@ -742,7 +743,7 @@ For startup, run `rdsh bench --n 5`. See
 | [docs/BENCHMARKS.md](docs/BENCHMARKS.md) | Benchmark methodology and reproduction steps |
 | [docs/RDSH-SETTINGS.md](docs/RDSH-SETTINGS.md) | Settings UI and CLI options |
 | [docs/PRIVACY.md](docs/PRIVACY.md) | What stays off by default and how to opt in |
-| [docs/PROVIDERS.md](docs/PROVIDERS.md) | `rdsh provider`: HAI, Sarashina and home LLM server routes |
+| [docs/PROVIDERS.md](docs/PROVIDERS.md) | `rdsh provider`: HAI, Command Code, Sarashina and home LLM server routes |
 | [docs/DESKTOP-INTEGRATION.md](docs/DESKTOP-INTEGRATION.md) | DeepSeek Harness Desktop (Electron) integration |
 | [docs/FEDORA.md](docs/FEDORA.md) | Fedora / RHEL packages, optional tools, and the Linux desktop reality |
 | [docs/PACKAGE-MANAGERS.md](docs/PACKAGE-MANAGERS.md) | Homebrew, Scoop and winget manifests, and how to update them |

@@ -304,10 +304,11 @@ rdsh settings get extras.enable
 `rdsh serve` は dsh の Web GUI（:3080）と競合しません。`--port 0` で空きポートを利用できます。
 API とダッシュボードの詳細については [Web UI](#web-ui) を参照してください。
 
-dsh が同梱していない OpenAI 互換エンドポイント（HAI、Sarashina、ローカル環境の llama.cpp / vLLM / LM Studio / Ollama など）は、プロファイルのルートとして追加できます：
+dsh が同梱していない OpenAI 互換エンドポイント（HAI、Command Code、Sarashina、ローカル環境の llama.cpp / vLLM / LM Studio / Ollama など）は、プロファイルのルートとして追加できます：
 
 ```sh
 rdsh provider add hai --model deepseek-v4-flash              # 鍵は HAI_API_KEY か --key-stdin
+rdsh provider add commandcode --model deepseek/deepseek-v4-flash   # 鍵は COMMANDCODE_API_KEY
 rdsh provider add sarashina                                  # 鍵は SARASHINA_API_KEY。mini と nano は組み込み
 rdsh provider add local-openai --base-url http://host:8080/v1 --discover --no-key
 rdsh provider list                                           # プリセットと各プロファイルの設定・鍵の状態

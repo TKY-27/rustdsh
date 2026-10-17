@@ -763,6 +763,95 @@ fn sarashina_key_from_env_is_stored_but_never_printed() {
     assert!(!text(&plain).contains(secret));
 }
 
+#[test]
+fn commandcode_add_writes_the_fixed_route_and_stores_its_key() {
+    let f = Fixture::new();
+    f.set_patch(PATCH);
+    let secret = "cmd-test-0123456789";
+    let envs = [("COMMANDCODE_API_KEY", secret)];
+    let args = [
+        "provider",
+        "add",
+        "commandcode",
+        "--profile",
+        "tui",
+        "--model",
+        "deepseek/deepseek-v4-flash",
+    ];
+
+    let dry = f.run_with(&[args.as_slice(), &["--dry-run"]].concat(), &envs, b"");
+    ok(&dry);
+    assert!(!text(&dry).contains(secret));
+    assert_eq!(f.patch(), PATCH);
+    assert!(f.creds().is_empty());
+
+    let out = f.run_with(&[args.as_slice(), &["--json"]].concat(), &envs, b"");
+    ok(&out);
+    assert!(!text(&out).contains(secret));
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["apiKeyEnv"], "COMMANDCODE_API_KEY");
+    assert_eq!(v["key"], "stored");
+    let patch = f.patch();
+    assert!(
+        patch.contains(
+            "      commandcode:\n        displayName: Command Code\n        apiKeyEnv: COMMANDCODE_API_KEY\n        api: openai-completions\n        baseURL: https://api.commandcode.ai/provider/v1\n"
+        ),
+        "{patch}"
+    );
+    assert!(
+        patch.contains("          - id: deepseek/deepseek-v4-flash\n"),
+        "{patch}"
+    );
+    assert!(f.creds().contains("COMMANDCODE_API_KEY"));
+
+    // Running it again is a no-op, and the slashed id survives a re-read.
+    let again = f.run_with(&[args.as_slice(), &["--json"]].concat(), &envs, b"");
+    ok(&again);
+    assert_eq!(f.patch(), patch);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&again.stdout).unwrap()["models"][0],
+        "deepseek/deepseek-v4-flash"
+    );
+
+    let list = f.run(&["provider", "list", "--json"]);
+    ok(&list);
+    let value: Value = serde_json::from_slice(&list.stdout).unwrap();
+    let preset = value["presets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["id"] == "commandcode")
+        .expect("commandcode preset is listed");
+    assert_eq!(preset["baseURL"], "https://api.commandcode.ai/provider/v1");
+    assert_eq!(preset["apiKeyEnv"], "COMMANDCODE_API_KEY");
+}
+
+#[test]
+fn setup_reports_declared_route_key_names_for_the_key_store() {
+    let f = Fixture::new();
+    f.set_patch(
+        "- id: llm-pi-ai\n  config:\n    providers:\n      custom-route:\n        apiKeyEnv: CUSTOM_ROUTE_KEY\n        models:\n          - id: x\n- id: agent-default-model\n  config:\n    provider: custom-route\n    model: x\n",
+    );
+    let v = setup_json(&f, &[], &[]);
+    let declared = v["declared_key_envs"].as_array().unwrap();
+    assert!(
+        declared.iter().any(|x| x == "CUSTOM_ROUTE_KEY"),
+        "declared key missing: {v}"
+    );
+    assert_eq!(v["defaults"][0]["api_key_env"], "CUSTOM_ROUTE_KEY");
+    assert_eq!(v["defaults"][0]["state"], "missing");
+
+    // Storing the ref makes the same route report ok.
+    fs::write(
+        f.0.join("dsh/.credentials.yaml"),
+        "version: 1\nrefs:\n  CUSTOM_ROUTE_KEY: 'sk-test'\n",
+    )
+    .unwrap();
+    let v = setup_json(&f, &[], &[]);
+    assert_eq!(v["defaults"][0]["state"], "ok");
+    assert_eq!(v["defaults"][0]["via"], "key CUSTOM_ROUTE_KEY");
+}
+
 fn setup_json(fixture: &Fixture, envs: &[(&str, &str)], extra: &[&str]) -> Value {
     let mut args = vec!["setup", "--json"];
     args.extend_from_slice(extra);
@@ -780,7 +869,12 @@ fn default_state(fixture: &Fixture, envs: &[(&str, &str)]) -> String {
 
 #[test]
 fn an_exported_route_key_without_a_route_is_not_a_connection() {
-    for key in ["HAI_API_KEY", "LOCAL_OPENAI_API_KEY", "SARASHINA_API_KEY"] {
+    for key in [
+        "HAI_API_KEY",
+        "LOCAL_OPENAI_API_KEY",
+        "SARASHINA_API_KEY",
+        "COMMANDCODE_API_KEY",
+    ] {
         let fixture = Fixture::new();
         fixture.set_patch(PATCH);
         let base = setup_json(&fixture, &[], &[]);
@@ -856,7 +950,12 @@ fn an_unrelated_ok_default_does_not_let_an_unregistered_route_key_skip_setup() {
         "{\"OPENAI_API_KEY\": \"sk-not-real\"}",
     )
     .unwrap();
-    for key in ["HAI_API_KEY", "LOCAL_OPENAI_API_KEY", "SARASHINA_API_KEY"] {
+    for key in [
+        "HAI_API_KEY",
+        "LOCAL_OPENAI_API_KEY",
+        "SARASHINA_API_KEY",
+        "COMMANDCODE_API_KEY",
+    ] {
         let without = setup_json(&fixture, &[], &[]);
         let with = setup_json(&fixture, &[(key, "sk-not-real")], &[]);
         assert_eq!(without["needed"], with["needed"], "{key}: {with}");
