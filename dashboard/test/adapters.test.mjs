@@ -1,4 +1,4 @@
-import { requiresOwnershipBackend } from "./ownership-support.mjs";
+import { requiresColima, requiresOwnedScope, requiresOwnershipBackend } from "./ownership-support.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -114,7 +114,7 @@ test("systemd-owned Linux scopes advertise their verified graceful termination c
   });
 });
 
-test("start/send/usage use versioned ACP requests and measurements instead of shell input", async (t) => {
+test("start/send/usage use versioned ACP requests and measurements instead of shell input", requiresOwnedScope, async (t) => {
   const { adapter, root, events, trace } = await setup(t);
   assert.equal(adapter.capabilities().health, "unverified");
   const start = await adapter.start();
@@ -256,7 +256,7 @@ test("unknown CLI version or malformed version disables capabilities before prof
   }
 });
 
-test("Docker version probe rejects a valid-looking version when the worker exits nonzero", { skip: process.platform !== "darwin" && "requires the macOS Colima Docker context" }, async (t) => {
+test("Docker version probe rejects a valid-looking version when the worker exits nonzero", requiresColima, async (t) => {
   const { adapter } = await setupDockerVersionProbe(
     t,
     'if (process.argv.includes("--version")) { console.log("0.2.0-rc.2"); process.exit(7); }',
@@ -265,7 +265,7 @@ test("Docker version probe rejects a valid-looking version when the worker exits
   assert.equal(adapter.capabilities().operations.start.supported, false);
 });
 
-test("Docker version probe rejects output beyond the native 4096-byte limit", { skip: process.platform !== "darwin" && "requires the macOS Colima Docker context" }, async (t) => {
+test("Docker version probe rejects output beyond the native 4096-byte limit", requiresColima, async (t) => {
   const { adapter } = await setupDockerVersionProbe(
     t,
     'if (process.argv.includes("--version")) { process.stdout.write("0".repeat(4097)); }',
@@ -274,7 +274,7 @@ test("Docker version probe rejects output beyond the native 4096-byte limit", { 
   assert.equal(adapter.capabilities().operations.start.supported, false);
 });
 
-test("Docker version probe times out and releases its exact worker container", { skip: process.platform !== "darwin" && "requires the macOS Colima Docker context" }, async (t) => {
+test("Docker version probe times out and releases its exact worker container", requiresColima, async (t) => {
   const { adapter } = await setupDockerVersionProbe(
     t,
     'if (process.argv.includes("--version")) setInterval(() => {}, 1000);',
@@ -304,7 +304,7 @@ const readline=require('readline');let a=process.argv.slice(2);if(a[0]==='--cont
   assert.equal(adapter.capabilities().operations.start.supported, false);
 });
 
-test("a changed executable version revokes capabilities on an already connected adapter", async (t) => {
+test("a changed executable version revokes capabilities on an already connected adapter", requiresOwnedScope, async (t) => {
   const { adapter } = await setup(t);
   const { session_id: id } = await adapter.start();
   adapter.env.RDSH_ADAPTER_FIXTURE_MODE = "new_version";
@@ -366,7 +366,7 @@ test(
   },
 );
 
-test("timeouts and early exit are failures, never successful starts", async (t) => {
+test("timeouts and early exit are failures, never successful starts", requiresOwnedScope, async (t) => {
   const a = await setup(t, "timeout");
   await assert.rejects(a.adapter.start(), (e) =>
     ["timeout_result_unknown", "protocol_mismatch"].includes(e.code),

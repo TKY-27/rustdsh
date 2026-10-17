@@ -1,3 +1,4 @@
+import { requiresGpuLock } from "./ownership-support.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -202,7 +203,7 @@ test("UUID inventory retains unavailable values and rejects malformed/duplicate/
   assert(!JSON.stringify(unavailable).includes("private-command-error"));
 });
 
-test("two actual processes competing across projects get exactly one exclusive reservation", async (t) => {
+test("two actual processes competing across projects get exactly one exclusive reservation", requiresGpuLock, async (t) => {
   const { project, leases, worker } = await setup(t);
   const [a, b] = await Promise.all([worker(), worker()]);
   const reads = [once(a, "message"), once(b, "message")];
@@ -246,7 +247,7 @@ test("two actual processes competing across projects get exactly one exclusive r
   assert.equal((await leases.read()).leases.length, 0);
 });
 
-test("an abruptly exited writer releases the OS lock without stale-file deletion", async (t) => {
+test("an abruptly exited writer releases the OS lock without stale-file deletion", requiresGpuLock, async (t) => {
   const { project, leases, worker } = await setup(t);
   const child = await worker(),
     locked = once(child, "message");
@@ -266,7 +267,7 @@ test("an abruptly exited writer releases the OS lock without stale-file deletion
   assert((await fs.stat(leases.lock)).isFile());
 });
 
-test("a live writer lock produces an explicit GPU admission wait without guessing capacity", async (t) => {
+test("a live writer lock produces an explicit GPU admission wait without guessing capacity", requiresGpuLock, async (t) => {
   const { project, leases, worker } = await setup(t);
   const child = await worker(),
     locked = once(child, "message");
@@ -292,7 +293,7 @@ test("a live writer lock produces an explicit GPU admission wait without guessin
   assert.equal(result.native_process_started, false);
 });
 
-test("shared VRAM requests subtract all reservations while showing driver usage separately", async (t) => {
+test("shared VRAM requests subtract all reservations while showing driver usage separately", requiresGpuLock, async (t) => {
   const { project, leases } = await setup(t);
   const first = await leases.acquire({
     project,
@@ -316,7 +317,7 @@ test("shared VRAM requests subtract all reservations while showing driver usage 
   await leases.cancelUnstarted(first.lease.lease_id);
 });
 
-test("capacity wait records the target and starts no version probe or ACP peer", async (t) => {
+test("capacity wait records the target and starts no version probe or ACP peer", requiresGpuLock, async (t) => {
   const { ledger, leases, command, env } = await setup(t);
   await assert.rejects(
     attachRecordedSession({
@@ -350,7 +351,7 @@ test("capacity wait records the target and starts no version probe or ACP peer",
   });
 });
 
-test("the original ACP peer sees a prior reservation, and resume restores its GPU request", async (t) => {
+test("the original ACP peer sees a prior reservation, and resume restores its GPU request", requiresGpuLock, async (t) => {
   const { ledger, leases, command, env, adapters } = await setup(t);
   const first = await attachRecordedSession({
     ledger,
@@ -401,7 +402,7 @@ test("the original ACP peer sees a prior reservation, and resume restores its GP
   );
 });
 
-test("losing a GPU run's request file cannot drop or replace its journaled requirement on resume", async (t) => {
+test("losing a GPU run's request file cannot drop or replace its journaled requirement on resume", requiresGpuLock, async (t) => {
   const { ledger, leases, command, env, adapters } = await setup(t);
   const first = await attachRecordedSession({
     ledger,
@@ -470,7 +471,7 @@ test("losing a GPU run's request file cannot drop or replace its journaled requi
   await resumed.adapter.stop();
 });
 
-test("retry-start explicitly retries the same never-dispatched GPU run after capacity recovers", async (t) => {
+test("retry-start explicitly retries the same never-dispatched GPU run after capacity recovers", requiresGpuLock, async (t) => {
   const { ledger, leases, command, env, adapters } = await setup(t);
   leases.observe = async () =>
     parseGpuInventory(`${device}, 16384, 15000, 1024`);
@@ -530,7 +531,7 @@ test("retry-start explicitly retries the same never-dispatched GPU run after cap
   );
 });
 
-test("resuming an existing GPU session can wait without probing and then resume its exact native ID", async (t) => {
+test("resuming an existing GPU session can wait without probing and then resume its exact native ID", requiresGpuLock, async (t) => {
   const { ledger, leases, command, env, adapters } = await setup(t);
   const first = await attachRecordedSession({
     ledger,
@@ -577,7 +578,7 @@ test("resuming an existing GPU session can wait without probing and then resume 
   await resumed.adapter.stop();
 });
 
-test("an abnormal root exit retains its GPU reservation while owned detached descendants live", async (t) => {
+test("an abnormal root exit retains its GPU reservation while owned detached descendants live", requiresGpuLock, async (t) => {
   const { root, ledger, leases, command, env, adapters } = await setup(t);
   const exitFile = path.join(root, "exit-root"),
     children = path.join(root, "owned-children.jsonl");
@@ -610,7 +611,7 @@ test("an abnormal root exit retains its GPU reservation while owned detached des
   assert.equal(attached.adapter.ownedScope.state.remaining_count, 0);
 });
 
-test("losing the durable lease blocks the next native send, and confirmed stop restores release", async (t) => {
+test("losing the durable lease blocks the next native send, and confirmed stop restores release", requiresGpuLock, async (t) => {
   const { ledger, leases, command, env, adapters } = await setup(t);
   const attached = await attachRecordedSession({
     ledger,
@@ -637,7 +638,7 @@ test("losing the durable lease blocks the next native send, and confirmed stop r
   assert.equal((await leases.read()).leases.length, 0);
 });
 
-test("N/A, missing devices and unavailable driver data produce waits rather than invented capacity", async (t) => {
+test("N/A, missing devices and unavailable driver data produce waits rather than invented capacity", requiresGpuLock, async (t) => {
   const { project, leases } = await setup(t);
   for (const [sample, reason] of [
     [
@@ -666,7 +667,7 @@ test("N/A, missing devices and unavailable driver data produce waits rather than
   assert.equal((await leases.read()).leases.length, 0);
 });
 
-test("expired heartbeat cannot release an alive owner or an unbound launch with an absent owner", async (t) => {
+test("expired heartbeat cannot release an alive owner or an unbound launch with an absent owner", requiresGpuLock, async (t) => {
   const { project, leases } = await setup(t);
   const reserved = await leases.acquire({
     project,
@@ -691,7 +692,7 @@ test("expired heartbeat cannot release an alive owner or an unbound launch with 
   assert.equal((await leases.read()).leases.length, 1);
 });
 
-test("reconciliation rotates retained leases so later reclaimable owners can recover capacity", async (t) => {
+test("reconciliation rotates retained leases so later reclaimable owners can recover capacity", requiresGpuLock, async (t) => {
   const { project, leases } = await setup(t);
   const sharedOneMiB = { ...request, requested_vram_mib: 1, mode: "shared" };
   leases.observe = async () => parseGpuInventory(`${device}, 16384, 16368, 16\n`);
@@ -822,7 +823,7 @@ async function durableReceipt(t, options) {
   assert.equal(result.checked[0].reason, "recorded_kernel_group_empty");
 }
 
-test("root absence and PID reuse need a matching durable kernel-empty receipt", (t) =>
+test("root absence and PID reuse need a matching durable kernel-empty receipt", requiresGpuLock, (t) =>
   durableReceipt(t));
 
 test(
@@ -831,7 +832,7 @@ test(
   (t) => durableReceipt(t, { shortPaths: true }),
 );
 
-test("corrupt or hard-linked ledger fails before native dispatch", async (t) => {
+test("corrupt or hard-linked ledger fails before native dispatch", requiresGpuLock, async (t) => {
   const { project, leases, ledger, command, env } = await setup(t);
   const held = await leases.acquire({
     project,
@@ -859,7 +860,7 @@ test("corrupt or hard-linked ledger fails before native dispatch", async (t) => 
   });
 });
 
-test("a different kernel descriptor or host observation cannot reclaim an expired reservation", async (t) => {
+test("a different kernel descriptor or host observation cannot reclaim an expired reservation", requiresGpuLock, async (t) => {
   const { project, leases } = await setup(t);
   const history = await RunHistory.open(project),
     id = run();
@@ -918,7 +919,7 @@ test("a different kernel descriptor or host observation cannot reclaim an expire
   assert.equal((await leases.read()).leases.length, 1);
 });
 
-test("an ordinal/disabled visibility mask cannot be widened by a GPU request", async (t) => {
+test("an ordinal/disabled visibility mask cannot be widened by a GPU request", requiresGpuLock, async (t) => {
   const { ledger, leases, command, env } = await setup(t);
   for (const mask of ["0", "-1", ""])
     await assert.rejects(
@@ -936,7 +937,7 @@ test("an ordinal/disabled visibility mask cannot be widened by a GPU request", a
   });
 });
 
-test("CLI inspection is read-only and an unavailable requested UUID produces a temporary wait", async (t) => {
+test("CLI inspection is read-only and an unavailable requested UUID produces a temporary wait", requiresGpuLock, async (t) => {
   const { project, env, root } = await setup(t);
   const inspected = JSON.parse(
     (await exec(process.execPath, [cli, "gpu", "inspect"], { env })).stdout,
