@@ -7,7 +7,7 @@
 class Rdsh < Formula
   desc "Fast, safe Rust launcher for DeepSeek Harness (dsh)"
   homepage "https://github.com/jimoto-no-llm/rustdsh"
-  version "0.6.0"
+  version "0.7.0"
   license "MIT"
 
   # Only the macOS archives are packaged for Homebrew; Linux and Windows users
@@ -16,13 +16,13 @@ class Rdsh < Formula
 
   on_macos do
     on_arm do
-      url "https://github.com/jimoto-no-llm/rustdsh/releases/download/v0.6.0/rdsh-macos-arm64.tar.gz"
-      sha256 "422ef3b9387406fa855ffd4ea1b873031fffbc951770ba1c4e54c5ea68efb703"
+      url "https://github.com/jimoto-no-llm/rustdsh/releases/download/v0.7.0/rdsh-macos-arm64.tar.gz"
+      sha256 "499c607effe9888bd11aa1680a680036afe507e725ccddff85be8f37f5cba709"
     end
 
     on_intel do
-      url "https://github.com/jimoto-no-llm/rustdsh/releases/download/v0.6.0/rdsh-macos-x64.tar.gz"
-      sha256 "d0f42fd6a462748804bc981358fe4644b3f2d7a5a134c51928e983adf5493a91"
+      url "https://github.com/jimoto-no-llm/rustdsh/releases/download/v0.7.0/rdsh-macos-x64.tar.gz"
+      sha256 "a17832d86257788e5f3f59c096f80226074369445eec21d1e39546099ab21960"
     end
   end
 
