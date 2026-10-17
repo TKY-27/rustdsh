@@ -10,8 +10,8 @@ installer and badge links use that owner. Keep historical evidence intact.
   generated PR/author list and Full Changelog.
 - Create version notes from `docs/releases/TEMPLATE.md`. Keep `Cargo.toml`,
   `Cargo.lock`, the dated CHANGELOG entry and `vX.Y.Z` tag consistent.
-- Release cadence: patch (`vX.Y.(Z+1)`) per user-visible change on `main`, not a
-  batch; minor for a milestone or a breaking change; every release empties `[Unreleased]`.
+- Release cadence: semver — an important addition takes a minor (e.g. `v0.7.0`)
+  and a fix-only release takes a patch (e.g. `v0.6.1`); every release empties `[Unreleased]`.
 - Before tagging, run `python3 scripts/prepare-release.py vX.Y.Z` and
   `python3 -m unittest discover -s tests -p 'test_release_*.py'`, followed by
   the verification matrix in `CONTRIBUTING.md`.
