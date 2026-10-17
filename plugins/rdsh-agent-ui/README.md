@@ -30,6 +30,8 @@ surface を削除すればパネルも消えます。
 - `client.js`：チャットのターン末尾に表示するパネル（React、DSHのテーマ変数を使用）
 - `test/store.test.mjs`：検証・保存・追記の単体テスト
 
+surface は保存ごとの専用ファイルに書き出してから置換します。並行して公開した場合は、最後に置換が完了した surface が残ります。
+
 ## 安全側の約束
 
 - 値はテキストまたはSVG要素としてのみ描画し、**エージェント由来のHTML/JSは実行しない**
@@ -47,5 +49,5 @@ dsh plugin --profile web add /path/to/rustdsh/plugins/rdsh-agent-ui
 ## 検証
 
 ```sh
-node --test plugins/rdsh-agent-ui/test/store.test.mjs
+node --test plugins/rdsh-agent-ui/test/*.test.mjs
 ```
