@@ -3,13 +3,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import {
-  dirtyPaths,
-  observeWorktree,
-  repository,
-  sourceSnapshot,
-  workerGitExecutable,
+  legacyWorkerGitRequest,
+  nativeWorkerGitRequest,
+  requireWorkerGitExecutable,
 } from "../dashboard/worker-git.mjs";
 
 const nativeBinary = process.env.RDSH_BENCH_BIN;
@@ -22,12 +21,23 @@ if (!nativeBinary || !path.isAbsolute(nativeBinary)) {
 // would demand sub-millisecond behavior; the budget is absolute instead. The
 // multi-Git operations are expected to beat the JavaScript baseline.
 // See docs/WORKER-WORKSPACES.md.
-const MAX_NATIVE_OVERHEAD_MS = 20;
+//
+// The benchmark's own regression tests drive a Node-based fake native whose
+// interpreter startup dominates the request, so they raise this budget through
+// RDSH_BENCH_MAX_OVERHEAD_MS. The dashboard job keeps the default.
+function nativeOverheadBudgetMs() {
+  const raw = process.env.RDSH_BENCH_MAX_OVERHEAD_MS;
+  if (raw === undefined) return 20;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value < 0) {
+    throw new Error("RDSH_BENCH_MAX_OVERHEAD_MS must be a non-negative number");
+  }
+  return value;
+}
+const MAX_NATIVE_OVERHEAD_MS = nativeOverheadBudgetMs();
 
 const fixture = await fs.mkdtemp(path.join(os.tmpdir(), "rdsh-worker-git-bench-"));
 const root = path.join(fixture, "repo");
-const fallbackBinary = path.join(fixture, "missing-rdsh");
-const originalBinary = process.env.RDSH_BIN;
 
 function runGit(args) {
   const result = spawnSync("git", args, { cwd: root, encoding: "utf8" });
@@ -37,9 +47,23 @@ function runGit(args) {
   return result.stdout.trim();
 }
 
-async function invoke(binary, operation) {
+async function withRDSHBinary(binary, operation) {
+  const originalBinary = process.env.RDSH_BIN;
   process.env.RDSH_BIN = binary;
-  return operation();
+  try {
+    return await operation();
+  } finally {
+    if (originalBinary === undefined) delete process.env.RDSH_BIN;
+    else process.env.RDSH_BIN = originalBinary;
+  }
+}
+
+async function requireNativeWorkerGit(binary) {
+  try {
+    return await withRDSHBinary(binary, () => requireWorkerGitExecutable());
+  } catch {
+    throw new Error("RDSH_BENCH_BIN must support worker-git");
+  }
 }
 
 function median(values) {
@@ -48,7 +72,26 @@ function median(values) {
   ];
 }
 
+async function prepareNativeBinary(sourcePath) {
+  const executionPath = path.join(
+    fixture,
+    process.platform === "win32" ? "rdsh.exe" : "rdsh",
+  );
+  const source = await fs.stat(sourcePath);
+  await fs.copyFile(sourcePath, executionPath);
+  if (process.platform !== "win32") {
+    await fs.chmod(executionPath, source.mode & 0o777);
+  }
+  return {
+    sourcePath,
+    executionPath,
+    sha256: createHash("sha256").update(await fs.readFile(executionPath)).digest("hex"),
+  };
+}
+
 try {
+  const nativeSourcePath = await requireNativeWorkerGit(nativeBinary);
+  const nativeBinaryMetadata = await prepareNativeBinary(nativeSourcePath);
   await fs.mkdir(root);
   runGit(["init", "-q"]);
   runGit(["config", "user.name", "RustDSH benchmark"]);
@@ -66,67 +109,101 @@ try {
     await fs.writeFile(path.join(root, name), `dirty ${index}\n`);
   }
 
-  const metadata = await invoke(fallbackBinary, () => repository(root));
+  const metadata = await legacyWorkerGitRequest({ op: "repository", root });
   const operations = [
-    ["repository", () => repository(root)],
-    ["sourceSnapshot", () => sourceSnapshot(root)],
-    ["dirtyPaths", () => dirtyPaths(root)],
+    [
+      "repository",
+      () => legacyWorkerGitRequest({ op: "repository", root }),
+      () =>
+        nativeWorkerGitRequest(
+          { op: "repository", root },
+          nativeBinaryMetadata.executionPath,
+        ),
+    ],
+    [
+      "sourceSnapshot",
+      () => legacyWorkerGitRequest({ op: "source-snapshot", root }),
+      () =>
+        nativeWorkerGitRequest(
+          { op: "source-snapshot", root },
+          nativeBinaryMetadata.executionPath,
+        ),
+    ],
+    [
+      "dirtyPaths",
+      () => legacyWorkerGitRequest({ op: "dirty-paths", root }),
+      () =>
+        nativeWorkerGitRequest(
+          { op: "dirty-paths", root },
+          nativeBinaryMetadata.executionPath,
+        ),
+    ],
     [
       "observeWorktree",
       () =>
-        observeWorktree(root, {
+        legacyWorkerGitRequest({
+          op: "observe-worktree",
+          root,
           git_common_dir: metadata.git_common_dir,
           branch: metadata.branch,
           base,
         }),
+      () =>
+        nativeWorkerGitRequest(
+          {
+            op: "observe-worktree",
+            root,
+            git_common_dir: metadata.git_common_dir,
+            branch: metadata.branch,
+            base,
+          },
+          nativeBinaryMetadata.executionPath,
+        ),
     ],
   ];
-  const modes = [
-    ["JS", fallbackBinary],
-    ["Rust", nativeBinary],
-  ];
-  const backends = {};
-  for (const [mode, binary] of modes) {
-    backends[mode] = await invoke(binary, workerGitExecutable);
-  }
-  if (backends.JS !== null) {
-    throw new Error(
-      `JS mode resolved a native bridge (${backends.JS}); the fallback baseline is invalid`,
-    );
-  }
-  if (backends.Rust !== nativeBinary) {
-    throw new Error(
-      `Rust mode did not select ${nativeBinary}; refusing to report a JavaScript fallback as native`,
-    );
-  }
   console.log(
     JSON.stringify({
       benchmark: "worker-git",
       platform: `${process.platform}-${process.arch}`,
       node: process.version,
       fixture: { tracked: 128, dirty: 8 },
-      backends,
+      backends: { JS: null, Rust: nativeBinaryMetadata.executionPath },
       maxNativeOverheadMs: MAX_NATIVE_OVERHEAD_MS,
       warmupsPerMode: 1,
       alternatingPairs: 7,
+      nativeBinary: nativeBinaryMetadata,
+      measurementBoundary: {
+        timingScope: "operation-request-only",
+        excludes: [
+          "native-binary-discovery",
+          "worker-git-capability-preflight",
+          "fixture-setup",
+          "output-parity-check",
+          "warmup",
+        ],
+      },
     }),
   );
 
   let failed = false;
-  for (const [name, operation] of operations) {
+  for (const [name, javascript, rust] of operations) {
     const timings = { JS: [], Rust: [] };
     const expected = {};
-    for (const [mode, binary] of modes) {
-      expected[mode] = await invoke(binary, operation);
+    const modes = [
+      ["JS", javascript],
+      ["Rust", rust],
+    ];
+    for (const [mode, operation] of modes) {
+      expected[mode] = await operation();
     }
     assert.deepEqual(expected.Rust, expected.JS, `${name} output differs`);
-    for (const [, binary] of modes) await invoke(binary, operation);
+    for (const [, operation] of modes) await operation();
 
     for (let pair = 0; pair < 7; pair++) {
       const order = pair % 2 === 0 ? modes : [...modes].reverse();
-      for (const [mode, binary] of order) {
+      for (const [mode, operation] of order) {
         const started = performance.now();
-        const result = await invoke(binary, operation);
+        const result = await operation();
         timings[mode].push(performance.now() - started);
         assert.deepEqual(result, expected.JS, `${name} output changed`);
       }
@@ -146,13 +223,13 @@ try {
         rustMinusJavascriptMs: Number(overheadMs.toFixed(2)),
         maxNativeOverheadMs: MAX_NATIVE_OVERHEAD_MS,
         verdict,
+        javascriptSamplesMs: timings.JS,
+        rustSamplesMs: timings.Rust,
         outputsMatch: true,
       }),
     );
   }
   if (failed) process.exitCode = 1;
 } finally {
-  if (originalBinary === undefined) delete process.env.RDSH_BIN;
-  else process.env.RDSH_BIN = originalBinary;
   await fs.rm(fixture, { recursive: true, force: true });
 }
