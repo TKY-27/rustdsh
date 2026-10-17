@@ -499,6 +499,7 @@ pub(crate) fn build_approval_in(config: &str) -> bool {
             .filter(char::is_ascii_alphanumeric)
             .map(|character| character.to_ascii_lowercase())
             .collect();
+        let raw_value = value;
         let value = value
             .trim()
             .trim_matches('"')
@@ -541,8 +542,15 @@ pub(crate) fn build_approval_in(config: &str) -> bool {
             }
             "dangerouslyallowallbuilds" => {
                 // A trailing YAML comment is not part of the value, so
-                // "false # temporarily disabled" still means false.
-                let flag = value.split(" #").next().unwrap_or_default().trim();
+                // "false # temporarily disabled" still means false. Drop it
+                // before the quotes: `"false" # note` must read as false.
+                let flag = raw_value
+                    .split(" #")
+                    .next()
+                    .unwrap_or_default()
+                    .trim()
+                    .trim_matches(|quote| quote == '"' || quote == '\'')
+                    .to_ascii_lowercase();
                 flag != "false" && flag != "0"
             }
             _ => false,
@@ -1248,6 +1256,16 @@ mod tests {
         // A trailing YAML comment is not part of the value.
         assert!(!build_approval_in(
             "dangerouslyAllowAllBuilds: false # not yet"
+        ));
+        // Quotes around a commented value do not turn it into an approval.
+        assert!(!build_approval_in(
+            "dangerouslyAllowAllBuilds: \"false\" # not yet"
+        ));
+        assert!(!build_approval_in(
+            "dangerouslyAllowAllBuilds: 'false'  # not yet"
+        ));
+        assert!(build_approval_in(
+            "dangerouslyAllowAllBuilds: \"true\" # reviewed"
         ));
         assert!(build_approval_in("onlyBuiltDependencies: [sharp]"));
         // A trailing comment or single quotes do not hide an explicit approval.
