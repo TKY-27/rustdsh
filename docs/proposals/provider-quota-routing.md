@@ -324,6 +324,90 @@ TMPDIR=/var/tmp rtk cargo test route_plan
 - 未検証として残るもの: 実際のプロバイダの課金・残量（Go 消費枠の残量を返す公式 API は未確認）、
   公式ページの取得（87-3）、DSH のセッション帰属（`x-opencode-session` の制約）。
 
+## 実験計画: opt-in の「安いルートを1プロバイダずつ」（#87 追記）
+
+この節は 2026-10-17 の追加調査で、87-1 の決定を待たずに計測できる**最小の実験**を設計する。
+上の Scope と Acceptance criteria は 87-2 の MVP 仕様で、この節はその前段にあたる。
+
+### 調査結果: 既存の選択機構に追加できる範囲
+
+- モデル選択・フォールバック・ターンピニングは DSH 本体が所有する
+  （[docs/MODEL-ROUTING.md](../MODEL-ROUTING.md)）。rdsh はランチャー／シムで、リクエストを中継しない。
+  dashboard の `model-routing.mjs` は run 単位の表明と承認であり、選択そのものの制御ではない。
+- rdsh 側でルートと鍵の状態を読む入口は2つある。`src/auth.rs` の
+  `provider_needs_in(grants, doc)`（全プロファイル走査）と、`src/providers.rs` のルート読取
+  （`rdsh provider list` / `rdsh models`）。どちらも前述のプロファイル単位の制約を持つ。
+- したがって「自動で安いルートへ切り替える」は DSH 本体かリクエスト中継の領域で、rdsh の
+  読み取り専用助言では実現できない。実験は**提案の提示と利用者による手動適用**までに限定する。
+  これは [docs/BUDGET-CONTROL.md](../BUDGET-CONTROL.md) の「自動ダウングレードをしない」とも整合する。
+
+このホストで計測した制約（2026-10-17。値は `rdsh 0.7.0` / `dsh 0.2.0-rc.2`）:
+
+| 観測 | 結果 | 実験への影響 |
+| --- | --- | --- |
+| `rdsh models`（web / tui） | `openai-codex` と `kimi-coding` を "unsupported inline or aliased mapping" として skipped | ルート読取の対応前に候補を出さない（fail-closed） |
+| `rdsh provider list --json`（web） | 非プリセットルート（`opencode-go` 等）が出ない。`headless` は `opencode-free` を `key: present` で出す | `provider list` 単独で候補を決めず、プロファイルの `cordis.patch.yml` と併読する |
+
+### 実験の範囲（最小）
+
+- 対象は1プロバイダ（OpenCode Go）の、同一プロファイル内のモデル比較だけ。プロバイダ横断は2社目まで待つ。
+- 読み取り専用・ネットワークなし。プロファイルと資格情報は1バイトも変えない。自動適用・自動フォールバックをしない。
+- 既定は無効。利用者が明示的に有効化したときだけ助言する（opt-in）。DSH の設定は読むだけで書かない。
+- 出力は候補ごとの状態（`eligible` / `unknown` / `excluded`）、`plan_pressure`、根拠URL、確認日、
+  推奨または `recommendation: null`。unlimited と unknown は上の規則どおり独立に扱う。
+
+### 設定スキーマ案
+
+置き場所は `$DSH_HOME/rdsh.json` の新セクションとし、既存の `features.<id>` スイッチに合わせる
+（`src/rdsh_config.rs`）。プロファイルの `cordis.patch.yml` は読むだけで、プラン区分は書かない。
+名称と要否は 87-1 で確定する。
+
+```json
+{
+  "schema": 1,
+  "features": { "route_plan": true },
+  "route_plan": {
+    "plan_tiers": { "opencode-go": "go" },
+    "table": "builtin",
+    "source_policy": "official_only",
+    "max_candidates": 8
+  }
+}
+```
+
+- `features.route_plan` は既定 `false`。無効時はサブコマンドを足さない（既存実行に影響させない）。
+- `plan_tiers` はプロバイダIDからプラン区分への明示入力。未指定のプロバイダは `unknown` とし、
+  既定プランを推測しない（Go と Go Plus の取り違えを防ぐ）。
+- `source_policy` は `official_only` だけを受け付ける。他の値は設定エラーとして拒否する。
+- `table` は `builtin`（同梱の公式表）または検証用の fixture パス。fixture でも `source_url` と
+  `checked_at` を必須にする。
+
+### 計測方法（何を測れば実験が成立するか）
+
+1. **入力の固定**: 隔離した `DSH_HOME`、fixture の `cordis.patch.yml` と fixture 料金表を置き、
+   `rdsh route plan --profile web --plan-tier go --json` の出力を記録する。ネットワークは使わない。
+2. **不変の確認**: 実行前後でプロファイル、`rdsh.json`、`.credentials.yaml` の SHA256 を比較し、
+   無変更であることをテストで確認する。資格情報の値は記録しない。
+3. **提案の的中**: 提案したルートと、利用者が実際に選んだルートを突き合わせる。実際の選択は
+   dashboard の run 記録（`dashboard/model-selection.mjs`）から読み、未観測なら `unknown` として
+   記録し、成功として扱わない。
+4. **枠への影響**: 公式表の `plan_pressure` の予測値だけを記録する。実際の課金・残量は未確認のまま
+   分けて書く（Budgets API の値で代用しない）。
+5. **反証条件**: 次のいずれかが起きたら実験は失敗とする。プロファイルや DSH の設定を書き換える／
+   ネットワークへ出る／`unknown` の候補を推奨に含める／プラン区分の不一致で推奨を出す／
+   `rdsh models` が skipped のプロファイルで候補を断定する。
+
+### 実装着手前に決めること
+
+- 87-1: コマンド名・置き場所（`rdsh route plan` 仮称）、`route_plan` セクションの採否、
+  料金表スキーマ、`unlimited` の順位規則。
+- 87-2: プロファイル単位の資格情報ラッパーと、`rdsh models` が skipped にする
+  「unsupported inline or aliased mapping」形状への対応方針（読取を直すか、非対応として除外表示するか）。
+- 計測の分担: 提案の出力を利用者にどう見せるか（CLI の読み取り専用表示に限定し、run の制御には触れない）。
+
+未検証として残るもの: 実際の課金と残量、公式ページの自動取得（87-3）、
+`x-opencode-session` によるセッション帰属、モデル品質の比較（本件は消費枠だけを扱う）。
+
 ## 根拠（事実と未確認）
 
 事実（この文書の作成時に確認したもの）:
