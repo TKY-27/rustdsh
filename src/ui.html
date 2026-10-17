@@ -428,6 +428,7 @@ for (const [key, ja, en, zh] of [
 ]) { (RDSH_UI_CATALOG[key] ||= {}) .ja = ja; RDSH_UI_CATALOG[key].en = en; RDSH_UI_CATALOG[key]["zh-CN"] = zh; }
 function t(key, values = {}) { return (RDSH_UI_CATALOG[key]?.[RDSH_UI_LOCALE] || key).replace(/\{(\w+)\}/g, (_, name) => String(values[name] ?? "{" + name + "}")); }
 function formatNumber(value) { return new Intl.NumberFormat(RDSH_UI_LOCALE).format(value); }
+function formatCompact(value) { return new Intl.NumberFormat(RDSH_UI_LOCALE, { notation: "compact", maximumFractionDigits: 1 }).format(value); }
 function formatBytes(value) {
   const bytes = Number(value) || 0;
   if (bytes <= 0) return "0 B";
@@ -624,7 +625,7 @@ async function sessions(){
       project.textContent = String(s.project || "");
       const meta = document.createElement("p");
       meta.className = "session-meta muted";
-      meta.textContent = t("sessions.updated", {time: formatSessionTime(String(s.mtime || ""))}) + " · " + formatBytes(s.bytes) + " · " + t("sessions.tokens", {tokens: formatNumber(Math.round((Number(s.bytes) || 0) / 4))});
+      meta.textContent = t("sessions.updated", {time: formatSessionTime(String(s.mtime || ""))}) + " · " + formatBytes(s.bytes) + " · " + t("sessions.tokens", {tokens: formatCompact(Math.round((Number(s.bytes) || 0) / 4))});
       li.append(id, project, meta);
       ul.append(li);
     }
