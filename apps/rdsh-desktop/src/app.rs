@@ -813,15 +813,14 @@ pub struct DesktopApp {
     input: String,
     focus: FocusHandle,
     live: Sender<LiveCmd>,
-    select: Sender<usize>,
     pending: Option<Pending>,
     client_id: Option<String>,
     streaming: String,
     running: bool,
     dirty: bool,
     picker: bool,
-    timeline_list: ListState,
-    sidebar_list: ListState,
+    sidebar_scroll: ScrollHandle,
+    timeline_scroll: ScrollHandle,
 }
 
 impl DesktopApp {
@@ -829,7 +828,6 @@ impl DesktopApp {
         let (update_tx, update_rx) = mpsc::channel();
         let (live_cmd_tx, live_cmd_rx) = mpsc::channel();
         let (live_evt_tx, live_evt_rx) = mpsc::channel();
-        let (select_tx, select_rx) = mpsc::channel();
 
         std::thread::spawn(move || {
             let progress = update_tx.clone();
@@ -885,31 +883,23 @@ impl DesktopApp {
             }
         });
 
-        poll(
-            cx,
-            update_rx,
-            live_evt_rx,
-            live_cmd_rx,
-            live_evt_tx,
-            select_rx,
-        );
+        poll(cx, update_rx, live_evt_rx, live_cmd_rx, live_evt_tx);
 
         Self {
             chat: None,
             titles: HashMap::new(),
-            status: "ハーネスに接続しています…".to_string(),
+            status: "ハーネスを起動しています…".to_string(),
             input: String::new(),
             focus: cx.focus_handle(),
             live: live_cmd_tx,
-            select: select_tx,
             pending: None,
             client_id: None,
             streaming: String::new(),
             running: false,
             dirty: false,
             picker: false,
-            timeline_list: ListState::new(0, ListAlignment::Bottom, px(600.)),
-            sidebar_list: ListState::new(0, ListAlignment::Top, px(600.)),
+            sidebar_scroll: ScrollHandle::new(),
+            timeline_scroll: ScrollHandle::new(),
         }
     }
 
@@ -1002,7 +992,6 @@ fn poll(
     live_events: Receiver<LiveEvent>,
     live_cmd: Receiver<LiveCmd>,
     live_out: Sender<LiveEvent>,
-    selects: Receiver<usize>,
 ) {
     cx.spawn(async move |this, cx| {
         // Startup: wait for the background connect, then start the live threads.
@@ -1057,18 +1046,6 @@ fn poll(
         let mut last_reload = Instant::now();
         loop {
             let mut changed = false;
-            while let Ok(index) = selects.try_recv() {
-                let _ = this.update(cx, |app, cx| {
-                    if let Some(chat) = app.chat.as_mut() {
-                        chat.select(index);
-                        app.status = format!("{} メッセージ", chat.messages.len());
-                    }
-                    app.running = false;
-                    app.streaming.clear();
-                    app.follow_selected();
-                    cx.notify();
-                });
-            }
             loop {
                 match live_events.try_recv() {
                     Ok(LiveEvent::Ready(client_id)) => {
@@ -1160,18 +1137,6 @@ fn poll(
     .detach();
 }
 
-#[derive(Clone, Debug)]
-enum SidebarRow {
-    Project(String),
-    Session {
-        index: usize,
-        title: String,
-        meta: String,
-        running: bool,
-        active: bool,
-    },
-}
-
 impl Render for DesktopApp {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let groups = self
@@ -1179,7 +1144,6 @@ impl Render for DesktopApp {
             .as_ref()
             .map(|chat| chat.groups())
             .unwrap_or_default();
-
         let selected = self.chat.as_ref().and_then(|chat| chat.selected);
         let messages = self
             .chat
@@ -1203,41 +1167,6 @@ impl Render for DesktopApp {
         let running = self.running;
         let picker = self.picker;
         let pending = self.pending.clone();
-
-        let mut sidebar_rows: Vec<SidebarRow> = Vec::new();
-        let mut row_budget = 60usize;
-        for group in groups.clone() {
-            if row_budget == 0 {
-                break;
-            }
-            sidebar_rows.push(SidebarRow::Project(group.path));
-            for (index, session) in group.sessions {
-                if row_budget == 0 {
-                    break;
-                }
-                row_budget -= 1;
-                let title = titles
-                    .get(&session.id)
-                    .cloned()
-                    .filter(|title| !title.is_empty())
-                    .or_else(|| (!session.title.is_empty()).then(|| session.title.clone()))
-                    .unwrap_or_else(|| {
-                        if session.blank {
-                            "新しい会話".to_string()
-                        } else {
-                            short_id(&session.id)
-                        }
-                    });
-                sidebar_rows.push(SidebarRow::Session {
-                    index,
-                    title,
-                    meta: format!("{} ・ {}", relative(session.updated), short_id(&session.id)),
-                    running: session.running,
-                    active: selected == Some(index),
-                });
-            }
-        }
-        self.sidebar_list.reset(sidebar_rows.len());
 
         let sidebar = div()
             .flex()
@@ -1289,7 +1218,8 @@ impl Render for DesktopApp {
                     .flex()
                     .flex_col()
                     .flex_1()
-                    .overflow_hidden()
+                    .overflow_y_scroll()
+                    .track_scroll(&self.sidebar_scroll)
                     .px(px(8.))
                     .when(loading, |element| {
                         element.children((0..8).map(|row| {
@@ -1305,32 +1235,35 @@ impl Render for DesktopApp {
                         }))
                     })
                     .when(!loading, |element| {
-                        let rows = sidebar_rows.clone();
-                        let select = self.select.clone();
-                        element.child(list(
-                            self.sidebar_list.clone(),
-                            move |index, _window, _cx| match rows.get(index).cloned() {
-                                Some(SidebarRow::Project(path)) => div()
-                                    .flex()
-                                    .items_center()
-                                    .h(px(theme::PROJECT_ROW_HEIGHT))
-                                    .px(px(10.))
-                                    .child(
-                                        div()
-                                            .text_size(theme::micro_size())
-                                            .font_weight(FontWeight::MEDIUM)
-                                            .text_color(theme::tertiary())
-                                            .child(path),
-                                    )
-                                    .into_any_element(),
-                                Some(SidebarRow::Session {
-                                    index,
-                                    title,
-                                    meta,
-                                    running,
-                                    active,
-                                }) => {
-                                    let select = select.clone();
+                        // Only the rows that fit the viewport are built; a long
+                        // history would otherwise create thousands of elements
+                        // on every frame.
+                        let mut budget = 60usize;
+                        element.children(groups.into_iter().filter_map(|group| {
+                            if budget == 0 {
+                                return None;
+                            }
+                            let rows: Vec<AnyElement> = group
+                                .sessions
+                                .into_iter()
+                                .take(budget)
+                                .map(|(index, session)| {
+                                    let active = selected == Some(index);
+                                    let title = titles
+                                        .get(&session.id)
+                                        .cloned()
+                                        .filter(|title| !title.is_empty())
+                                        .or_else(|| {
+                                            (!session.title.is_empty())
+                                                .then(|| session.title.clone())
+                                        })
+                                        .unwrap_or_else(|| {
+                                            if session.blank {
+                                                "新しい会話".to_string()
+                                            } else {
+                                                short_id(&session.id)
+                                            }
+                                        });
                                     div()
                                         .id(("session", index))
                                         .flex()
@@ -1344,16 +1277,26 @@ impl Render for DesktopApp {
                                         .cursor_pointer()
                                         .when(active, |element| element.bg(rgb(0xe9ecf1)))
                                         .hover(|style| style.bg(rgb(0xf1f2f5)))
-                                        .on_click(move |_event, _window, _app| {
-                                            let _ = select.send(index);
-                                        })
+                                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                                            if let Some(chat) = this.chat.as_mut() {
+                                                chat.select(index);
+                                                this.status = format!(
+                                                    "{} メッセージ",
+                                                    chat.messages.len()
+                                                );
+                                            }
+                                            this.running = false;
+                                            this.streaming.clear();
+                                            this.follow_selected();
+                                            cx.notify();
+                                        }))
                                         .child(
                                             div()
                                                 .flex()
                                                 .flex_row()
                                                 .items_center()
                                                 .gap(px(6.))
-                                                .when(running, |element| {
+                                                .when(session.running, |element| {
                                                     element.child(
                                                         div()
                                                             .w(px(6.))
@@ -1373,13 +1316,39 @@ impl Render for DesktopApp {
                                             div()
                                                 .text_size(theme::micro_size())
                                                 .text_color(theme::tertiary())
-                                                .child(meta),
+                                                .child(format!(
+                                                    "{} ・ {}",
+                                                    relative(session.updated),
+                                                    short_id(&session.id)
+                                                )),
                                         )
                                         .into_any_element()
-                                }
-                                None => div().into_any_element(),
-                            },
-                        ))
+                                })
+                                .collect();
+                            budget = budget.saturating_sub(rows.len());
+                            Some(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .mb(px(6.))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .h(px(theme::PROJECT_ROW_HEIGHT))
+                                        .px(px(10.))
+                                        .child(
+                                            div()
+                                                .text_size(theme::micro_size())
+                                                .font_weight(FontWeight::MEDIUM)
+                                                .text_color(theme::tertiary())
+                                                .child(group.path.clone()),
+                                        ),
+                                )
+                                .children(rows)
+                                .into_any_element(),
+                            )
+                        }))
                     }),
             )
             .child(
@@ -1573,86 +1542,16 @@ impl Render for DesktopApp {
             );
         }
 
-        let mut timeline_items: Vec<Message> = messages.clone();
-        if !streaming.is_empty() {
-            timeline_items.push(Message {
-                role: "assistant".to_string(),
-                text: streaming.clone(),
-            });
-        }
-        self.timeline_list.reset(timeline_items.len());
         let timeline = div()
+            .id("timeline")
             .flex()
             .flex_col()
             .flex_1()
-            .overflow_hidden()
+            .overflow_y_scroll()
+            .track_scroll(&self.timeline_scroll)
             .px(px(32.))
             .py(px(24.))
-            .when(timeline_items.is_empty(), |element| {
-                element.child(
-                    div()
-                        .text_size(theme::body_size())
-                        .text_color(theme::tertiary())
-                        .child("この会話にはまだメッセージがありません"),
-                )
-            })
-            .when(!timeline_items.is_empty(), |element| {
-                let items = timeline_items.clone();
-                element.child(list(
-                    self.timeline_list.clone(),
-                    move |index, _window, _cx| {
-                        let Some(message) = items.get(index).cloned() else {
-                            return div().into_any_element();
-                        };
-                        let is_user = message.role == "user";
-                        let bubble = div()
-                            .max_w(px(620.))
-                            .px(px(16.))
-                            .py(px(10.))
-                            .rounded(theme::radius_xl())
-                            .text_size(theme::body_size())
-                            .line_height(theme::body_line_height())
-                            .text_color(theme::label())
-                            .when(is_user, |element| element.bg(theme::user_bubble()))
-                            .when(message.role == "assistant", |element| {
-                                element.bg(theme::code_block())
-                            })
-                            .when(message.role == "reasoning", |element| {
-                                element
-                                    .bg(rgb(0xfafafa))
-                                    .text_color(theme::tertiary())
-                                    .border_l_1()
-                                    .border_color(theme::border())
-                            })
-                            .child(message.text.clone());
-                        let row = div()
-                            .flex()
-                            .w_full()
-                            .mb(px(14.))
-                            .when(is_user, |element| element.justify_end())
-                            .when(!is_user, |element| element.justify_start());
-                        if message.role == "tool" {
-                            return row
-                                .child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .gap(px(6.))
-                                        .px(px(10.))
-                                        .py(px(4.))
-                                        .rounded(theme::radius_sm())
-                                        .bg(rgb(0xf4f5f7))
-                                        .text_size(theme::micro_size())
-                                        .text_color(theme::secondary())
-                                        .child("tool")
-                                        .child(message.text.clone()),
-                                )
-                                .into_any_element();
-                        }
-                        row.child(bubble).into_any_element()
-                    },
-                ))
-            });
+            .children(rows);
 
         let banner = pending.as_ref().map(|pending| match pending {
             Pending::Approval { tool, reason, .. } => {
