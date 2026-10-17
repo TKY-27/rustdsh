@@ -6,9 +6,13 @@ import os from 'node:os';
 import path from 'node:path';
 
 const binary = path.resolve(process.env.BIN || `target/debug/rdsh${process.platform === 'win32' ? '.exe' : ''}`);
+// Windows keeps a just-executed .exe locked for a moment (the image unmap and
+// a Defender scan of the fresh copy), so removals retry instead of failing the
+// test in its own cleanup.
+const remove=target=>rmSync(target,{recursive:true,force:true,maxRetries:10,retryDelay:100});
 function fixture(t) {
   const root=mkdtempSync(path.join(os.tmpdir(),'rdsh-runtime-compat-'));
-  t.after(()=>rmSync(root,{recursive:true,force:true}));
+  t.after(()=>remove(root));
   const home=path.join(root,'home'), dsh=path.join(root,'dsh-home');
   mkdirSync(home);mkdirSync(dsh);
   const env={...process.env,HOME:home,USERPROFILE:home,DSH_HOME:dsh,XDG_DATA_HOME:root,XDG_CONFIG_HOME:root,XDG_CACHE_HOME:root};
@@ -54,7 +58,7 @@ test('metadata delegation uses the selected DSH tree interpreter, resolves alias
   copyFileSync(process.execPath,path.join(foreign,'bin',nodeName));
   copyFileSync(entry,path.join(foreign,'lib','bin.js'));
   check(path.join(foreign,'lib','bin.js'),systemNode);
-  rmSync(treeNode);check(entry,systemNode);
+  remove(treeNode);check(entry,systemNode);
   mkdirSync(treeNode);check(entry,systemNode);
   if (process.platform === 'win32') {
     const rootNode=path.join(tree,nodeName);copyFileSync(process.execPath,rootNode);

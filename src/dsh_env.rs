@@ -734,6 +734,15 @@ fn locale_text(
 /// exit status still depends on the original dsh alone.
 pub(crate) fn doctor_lines(report: &EnvReport, locale: Locale) -> Vec<String> {
     let mut out = Vec::new();
+    // pnpm 9 and older run dependency build scripts by default, so there is
+    // nothing to approve and no fix to point at. Reuse the same release rule
+    // the fix list uses, so the state line and the note cannot disagree.
+    let approve = approve_builds_command(
+        report
+            .pnpm
+            .as_ref()
+            .and_then(|pnpm| pnpm.version.as_deref()),
+    );
     match &report.node {
         Some(node) => {
             let path = node.path.clone();
@@ -807,6 +816,12 @@ pub(crate) fn doctor_lines(report: &EnvReport, locale: Locale) -> Vec<String> {
                     "全局配置允许构建脚本",
                     "グローバル設定でビルドスクリプトを許可済み",
                 ),
+                BuildScripts::Blocked if approve.is_none() => locale_text(
+                    locale,
+                    "build scripts run by default in this pnpm release",
+                    "此 pnpm 版本默认运行构建脚本",
+                    "このpnpmのバージョンではビルドスクリプトは既定で実行されます",
+                ),
                 _ => locale_text(
                     locale,
                     "build scripts not pre-approved (pnpm 10+ ignores them by default)",
@@ -845,7 +860,7 @@ pub(crate) fn doctor_lines(report: &EnvReport, locale: Locale) -> Vec<String> {
             "[rdsh] 修正: {command}"
         ));
     }
-    if report.build_scripts == BuildScripts::Blocked && report.pnpm.is_some() {
+    if report.build_scripts == BuildScripts::Blocked && report.pnpm.is_some() && approve.is_some() {
         out.push(localized_format!(
             locale,
             "[rdsh] note: if an install stops with ERR_PNPM_IGNORED_BUILDS, run the fix above",
@@ -1189,6 +1204,41 @@ mod tests {
             lines
                 .iter()
                 .any(|line| line.contains("allowed by the global config")),
+            "{lines:?}"
+        );
+        assert!(!lines.iter().any(|line| line.contains("fix:")), "{lines:?}");
+        assert!(
+            !lines
+                .iter()
+                .any(|line| line.contains("ERR_PNPM_IGNORED_BUILDS")),
+            "{lines:?}"
+        );
+    }
+
+    #[test]
+    fn doctor_lines_do_not_point_at_a_fix_that_pnpm_9_does_not_need() {
+        // pnpm 9 runs dependency build scripts by default: reporting them as
+        // "not pre-approved" and telling the reader to run the fix above names
+        // a command that is never printed for this release.
+        let report = report(
+            Some(ToolInfo {
+                path: "/usr/bin/node".to_string(),
+                version: Some("v22.10.0".to_string()),
+            }),
+            None,
+            None,
+            Some(ToolInfo {
+                path: "/home/u/.local/share/pnpm/pnpm".to_string(),
+                version: Some("9.15.0".to_string()),
+            }),
+            BuildScripts::Blocked,
+            &[],
+        );
+        let lines = doctor_lines(&report, Locale::English);
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("build scripts run by default in this pnpm release")),
             "{lines:?}"
         );
         assert!(!lines.iter().any(|line| line.contains("fix:")), "{lines:?}");
