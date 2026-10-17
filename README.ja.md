@@ -472,7 +472,7 @@ rdsh desktop verify                 # プロファイルに rdsh プラグイン
 プロファイルインストーラーや各種インストーラーからも同様に利用できます：
 
 ```sh
-PROFILE=desktop ./plugins/install.sh   # 推奨パッケージをすべて適切に転送して導入
+PROFILE=desktop ./plugins/install.sh   # Essential＋既定の推奨プラグインを正しく転送して導入
 ./install.sh --desktop                 # インストール時に rdsh プラグインを組み込み
 ```
 
@@ -599,8 +599,11 @@ rdsh が利用・改変・推薦している第三者製 DSH プラグインで�
 - [Smart-DSH](https://github.com/hikarioyama/Smart-DSH)（hikarioyama）—
   [`rdsh-mobile-ui`](plugins/rdsh-mobile-ui/README.md) として同梱するスマホ幅レイアウト
 - [dsh-sound-notifications](https://github.com/cwd514/dsh-sound-notifications)（cwd514）—
-  オプトインの効果音とデスクトップ通知（`SOUND=1`）
-- [dsh-gitview](https://github.com/yugapor/dsh-gitview)（yugapor）— 任意のサイドバー Git パネル
+  推奨プラグイン `sound`（効果音とデスクトップ通知）。web/desktop では既定で導入し、
+  `--recommended=none`／`SOUND=0`／`features.sound=false` でスキップできます
+- [dsh-gitview](https://github.com/yugapor/dsh-gitview)（yugapor）— 推奨プラグイン
+  `gitview`（サイドバー Git パネル）。web/desktop では既定で導入し、`--recommended=none`／
+  `GITVIEW=0`／`features.gitview=false` でスキップできます
 
 ## ライセンス
 
