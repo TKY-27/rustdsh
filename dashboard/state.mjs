@@ -9,6 +9,7 @@ import { isDeepStrictEqual } from "node:util";
 import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
+import { renameRuntimeFile } from "./runtime-json-rename.mjs";
 import { normalizeAttention, updateTaskAttention, validateAttentionState } from "./attention.mjs";
 import { identity, stateHome } from "./project-identity.mjs";
 import { prepareContract } from "./contracts.mjs";
@@ -101,14 +102,15 @@ export const metricNames = [
   "api_errors",
 ];
 export { identity, stateHome };
-export async function writeJson(file, value) {
+export async function writeJson(file, value, options) {
   await fs.mkdir(path.dirname(file), { recursive: true });
   const temp = `${file}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
   try {
     await fs.writeFile(temp, JSON.stringify(value, null, 2) + "\n", {
       mode: 0o600,
     });
-    await fs.rename(temp, file);
+    if (options?.retryWindowsRename === true) await renameRuntimeFile(temp, file);
+    else await fs.rename(temp, file);
   } catch (error) {
     await fs.rm(temp, { force: true }).catch(() => {});
     throw error;

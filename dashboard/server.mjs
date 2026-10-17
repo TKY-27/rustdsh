@@ -553,7 +553,7 @@ export async function startDashboard(options) {
       local_url: localUrl,
       mcp_token: mcpToken,
       share,
-    });
+    }, { retryWindowsRename: true });
     await writeOwnerCredentials(directory, {
       schema: 1,
       kind,
