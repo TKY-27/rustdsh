@@ -1,5 +1,6 @@
 // Real project server, criterion execution and browser; isolated fixture only.
 import assert from "node:assert/strict";
+import { detailedView } from "./detailed-view.mjs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
@@ -30,6 +31,7 @@ const browser = await chromium.launch({
     ? { executablePath: process.env.RDSH_CHROME_PATH }
     : {}),
 });
+detailedView(browser);
 const contexts = [],
   servers = [],
   errors = [];

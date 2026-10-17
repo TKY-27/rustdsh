@@ -1,5 +1,6 @@
 // Real HTTP/browser and published native LLM; only provider I/O is synthetic.
 import assert from "node:assert/strict";
+import { detailedView } from "./detailed-view.mjs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import net from "node:net";
@@ -155,6 +156,7 @@ const browser = await chromium.launch({
     ? { executablePath: process.env.RDSH_CHROME_PATH }
     : {}),
 });
+detailedView(browser);
 const contexts = [];
 const report = {
   baseline_frontend_commit: base,

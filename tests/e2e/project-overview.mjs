@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { detailedView } from "./detailed-view.mjs";
 import fs from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
@@ -92,6 +93,7 @@ try {
     tailscale: false,
   });
   browser = await chromium.launch({ headless: true });
+  detailedView(browser);
   context = await browser.newContext({
     viewport: { width: 1280, height: 900 },
     locale: "ja-JP",
