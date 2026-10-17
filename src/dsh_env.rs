@@ -530,13 +530,13 @@ pub(crate) fn build_approval_in(config: &str) -> bool {
                     .any(|entry| {
                         entry
                             .split_once(':')
-                            .is_some_and(|(_, flag)| flag.trim() == "true")
+                            .is_some_and(|(_, flag)| approves(flag))
                     });
                 inline
                     || block(&|candidate| {
                         candidate
                             .split_once(':')
-                            .is_some_and(|(_, flag)| flag.trim().trim_matches('"') == "true")
+                            .is_some_and(|(_, flag)| approves(flag))
                     })
             }
             "dangerouslyallowallbuilds" => value != "false" && value != "0",
@@ -544,6 +544,13 @@ pub(crate) fn build_approval_in(config: &str) -> bool {
         };
         approved
     })
+}
+
+/// An allowBuilds value approves only when it is exactly `true`, quoted or not,
+/// with any trailing YAML comment dropped.
+fn approves(flag: &str) -> bool {
+    let flag = flag.split(" #").next().unwrap_or_default().trim();
+    flag.trim_matches(|quote| quote == '"' || quote == '\'') == "true"
 }
 
 /// Indentation of a raw line: the block under a key is indented further.
@@ -1234,6 +1241,19 @@ mod tests {
             "  sharp: true"
         ])));
         assert!(build_approval_in("onlyBuiltDependencies: [sharp]"));
+        // A trailing comment or single quotes do not hide an explicit approval.
+        assert!(build_approval_in(&config(&[
+            "allowBuilds:",
+            "  sharp: true  # needed for image builds"
+        ])));
+        assert!(build_approval_in(&config(&[
+            "allowBuilds:",
+            "  sharp: 'true'"
+        ])));
+        assert!(!build_approval_in(&config(&[
+            "allowBuilds:",
+            "  esbuild: false  # true would run postinstall"
+        ])));
         assert!(build_approval_in(&config(&[
             "onlyBuiltDependencies:",
             "  - sharp"
