@@ -2,6 +2,7 @@
 
 `rdsh` is a fast Rust launcher for `dsh` (the DeepSeek Harness CLI).
 Design rule: **port only the hot paths, delegate everything else**.
+The reasoning behind this split is in [PHILOSOPHY.md](PHILOSOPHY.md).
 
 ## Big picture
 

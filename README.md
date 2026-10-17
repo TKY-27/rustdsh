@@ -27,6 +27,9 @@ It ports frequently used CLI operations (token calculation, code search, session
 - 🛠 **Fast Native Utilities**: Estimate tokens, search code, list sessions, and inspect local prerequisites (`rdsh doctor --json`) without starting Node.js.
 - 🛡 **Safe by Default**: Read-only commands never modify source files, credentials are never automatically synced or exported, and agent tools can be confined to explicitly shared files on Linux.
 
+The design rationale behind this hybrid split is documented in
+[docs/PHILOSOPHY.md](docs/PHILOSOPHY.md).
+
 ## Table of Contents
 
 - [Quick Start](#quick-start)
