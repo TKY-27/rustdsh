@@ -33,8 +33,12 @@ const NATIVE_OVERHEAD_MS = new Map([["dirtyPaths", 30]]);
 function nativeOverheadMs(operation) {
   const override = process.env.RDSH_BENCH_MAX_OVERHEAD_MS;
   if (override !== undefined) {
-    const value = Number(override);
-    if (!Number.isFinite(value) || value < 0) {
+    // An empty value ("VAR=" or an unexpanded CI variable) is not a number.
+    // Number("") is 0, which would silently zero every operation budget and
+    // report a performance regression instead of a configuration error.
+    const raw = override.trim();
+    const value = Number(raw);
+    if (raw === "" || !Number.isFinite(value) || value < 0) {
       throw new Error("RDSH_BENCH_MAX_OVERHEAD_MS must be a non-negative number");
     }
     return value;

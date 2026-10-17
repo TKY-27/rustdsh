@@ -251,3 +251,15 @@ test("benchmark CLI fails the run when the native overhead budget is exceeded", 
   assert.ok(rows.slice(1).every((row) => row.outputsMatch === true));
   assert.ok(rows.slice(1).some((row) => row.verdict === "fail"));
 });
+
+test("benchmark CLI rejects an empty or non-numeric overhead override", {
+  skip: process.platform === "win32",
+}, async (t) => {
+  const executable = await fakeRdsh(t, capableWorkerGit);
+  for (const value of ["", "  ", "abc"]) {
+    const result = run(executable, { RDSH_BENCH_MAX_OVERHEAD_MS: value });
+    assert.notEqual(result.status, 0, JSON.stringify(value));
+    assert.match(result.stderr, /must be a non-negative number/, JSON.stringify(value));
+    assert.equal(result.stdout.trim(), "", JSON.stringify(value));
+  }
+});
