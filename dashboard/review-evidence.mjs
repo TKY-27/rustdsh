@@ -4,7 +4,7 @@ import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import { repository, dirtyPaths, workerGit } from "./worker-git.mjs";
+import { canonicalFuture, repository, dirtyPaths, workerGit } from "./worker-git.mjs";
 import { samePath } from "./worker-scopes.mjs";
 
 const exec = promisify(execFile);
@@ -249,14 +249,16 @@ function validateStoredReport(report, projectId) {
 }
 
 export class ReviewEvidenceStore {
-  constructor(project, { now = Date.now } = {}) {
+  constructor(project, directory, { now = Date.now } = {}) {
     this.project = { ...project };
     this.now = now;
-    this.file = path.join(project.directory, "review-evidence.json");
-    this.lock = path.join(project.directory, "review-evidence.lock");
+    this.directory = directory;
+    this.file = path.join(directory, "review-evidence.json");
+    this.lock = path.join(directory, "review-evidence.lock");
   }
   static async open(project, options) {
-    const store = new ReviewEvidenceStore(project, options);
+    const directory = await canonicalFuture(project.directory);
+    const store = new ReviewEvidenceStore(project, directory, options);
     await store.read();
     return store;
   }
@@ -306,10 +308,10 @@ export class ReviewEvidenceStore {
   async write(document) {
     const bytes = Buffer.from(JSON.stringify(document, null, 2) + "\n");
     if (bytes.length > maximumBytes) fail("file_too_large");
-    await fs.mkdir(this.project.directory, { recursive: true, mode: 0o700 });
-    if (!samePath(await fs.realpath(this.project.directory), this.project.directory))
+    await fs.mkdir(this.directory, { recursive: true, mode: 0o700 });
+    if (!samePath(await fs.realpath(this.directory), this.directory))
       fail("storage_identity_changed");
-    const temporary = path.join(this.project.directory, `review-evidence-${randomUUID()}.tmp`);
+    const temporary = path.join(this.directory, `review-evidence-${randomUUID()}.tmp`);
     let handle;
     try {
       handle = await fs.open(temporary, "wx", 0o600);
@@ -319,7 +321,7 @@ export class ReviewEvidenceStore {
       handle = null;
       await fs.rename(temporary, this.file);
       if (process.platform !== "win32") {
-        const parent = await fs.open(this.project.directory, "r");
+        const parent = await fs.open(this.directory, "r");
         try {
           await parent.sync();
         } finally {
