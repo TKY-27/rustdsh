@@ -9,15 +9,20 @@ import { createHash } from "node:crypto";
 // (WindowsApps\pwsh.exe): a link whose packaged target stat() cannot open from
 // every logon session (EACCES over SSH), although CreateProcess launches the
 // alias itself. Skipping it would select a later, possibly unusable, PATH entry.
+// Other links with an unreadable target are skipped as before.
 function isPowershellCandidate(candidate) {
   try {
     return !statSync(candidate).isDirectory();
   } catch (error) {
     if (error.code !== "EACCES" && error.code !== "EPERM") return false;
     try {
+      if (!lstatSync(candidate).isSymbolicLink()) return false;
+      const target = readlinkSync(candidate);
+      const segments = target.split(/[\\/]/).map((part) => part.toLowerCase());
       return (
-        lstatSync(candidate).isSymbolicLink() &&
-        path.isAbsolute(readlinkSync(candidate))
+        path.isAbsolute(target) &&
+        segments.at(-1) === "pwsh.exe" &&
+        segments.includes("windowsapps")
       );
     } catch {
       return false;

@@ -105,38 +105,54 @@ test("tray helper is resolved from an absolute PATH entry, never the working dir
   }
 });
 
+// A pwsh.exe link on PATH whose target sits beneath a directory stat() cannot
+// traverse, as WindowsApps\pwsh.exe does for a Store PowerShell package.
+async function sealedLinkResolution(sealedName) {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "rdsh-tray-alias-"));
+  const alias = path.join(root, "alias");
+  const sealed = path.join(root, sealedName);
+  await fs.mkdir(alias);
+  await fs.mkdir(path.join(sealed, "Microsoft.PowerShell"), { recursive: true });
+  const target = path.join(sealed, "Microsoft.PowerShell", "pwsh.exe");
+  await fs.writeFile(target, "#!/bin/sh\n");
+  await fs.symlink(target, path.join(alias, "pwsh.exe"));
+  await fs.chmod(sealed, 0o000);
+  const searched = process.env.PATH;
+  process.env.PATH = alias + path.delimiter + searched;
+  try {
+    await assert.rejects(fs.stat(path.join(alias, "pwsh.exe")), {
+      code: "EACCES",
+    });
+    const f = fixture(async () => {});
+    f.child.stdout.write("ready\n");
+    (await f.pending).dispose();
+    return { alias: path.join(alias, "pwsh.exe"), selected: f.invocation[0] };
+  } finally {
+    process.env.PATH = searched;
+    await fs.chmod(sealed, 0o700);
+    await fs.rm(root, { recursive: true, force: true });
+  }
+}
+
+// chmod cannot deny traversal on Windows, and root ignores it.
+const sealedLinkSkip = process.platform === "win32" || process.getuid?.() === 0;
+
 test(
-  "tray selects an app execution alias whose target stat() cannot open",
-  {
-    // chmod cannot deny traversal on Windows, and root ignores it.
-    skip: process.platform === "win32" || process.getuid?.() === 0,
-  },
+  "tray selects an app execution alias whose WindowsApps target stat() cannot open",
+  { skip: sealedLinkSkip },
   async () => {
-    // WindowsApps\pwsh.exe is a link into a package directory that stat()
-    // reports as EACCES; the later empty placeholder would fail with EFTYPE.
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "rdsh-tray-alias-"));
-    const alias = path.join(root, "WindowsApps");
-    const sealed = path.join(root, "package");
-    await fs.mkdir(alias);
-    await fs.mkdir(sealed);
-    await fs.writeFile(path.join(sealed, "pwsh.exe"), "#!/bin/sh\n");
-    await fs.symlink(path.join(sealed, "pwsh.exe"), path.join(alias, "pwsh.exe"));
-    await fs.chmod(sealed, 0o000);
-    const searched = process.env.PATH;
-    process.env.PATH = alias + path.delimiter + searched;
-    try {
-      await assert.rejects(fs.stat(path.join(alias, "pwsh.exe")), {
-        code: "EACCES",
-      });
-      const f = fixture(async () => {});
-      f.child.stdout.write("ready\n");
-      (await f.pending).dispose();
-      assert.equal(f.invocation[0], path.join(alias, "pwsh.exe"));
-    } finally {
-      process.env.PATH = searched;
-      await fs.chmod(sealed, 0o700);
-      await fs.rm(root, { recursive: true, force: true });
-    }
+    // Skipping the alias would select the later empty placeholder (EFTYPE).
+    const { alias, selected } = await sealedLinkResolution("WindowsApps");
+    assert.equal(selected, alias);
+  },
+);
+
+test(
+  "tray skips another pwsh.exe link whose target stat() cannot open",
+  { skip: sealedLinkSkip },
+  async () => {
+    const { alias, selected } = await sealedLinkResolution("private");
+    assert.notEqual(selected, alias);
   },
 );
 
