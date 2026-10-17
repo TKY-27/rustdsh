@@ -2155,6 +2155,22 @@ fn parse_opencode_provider(
 // --- discovery -----------------------------------------------------------------
 
 /// `data[].id` (OpenAI) or `models[].name|model` (Ollama-style).
+/// Discovery writes OpenAI Chat Completions routes (`API`), so a listed model
+/// that declares its `supported_endpoints` is kept only when one of them is the
+/// Chat Completions path. Command Code lists Claude models that answer on
+/// `/v1/messages` only; a listing without the field is unchanged.
+fn serves_chat_completions(model: &Value) -> bool {
+    match model.get("supported_endpoints").and_then(Value::as_array) {
+        Some(endpoints) => endpoints.iter().filter_map(Value::as_str).any(|endpoint| {
+            endpoint
+                .trim()
+                .trim_end_matches('/')
+                .ends_with("chat/completions")
+        }),
+        None => true,
+    }
+}
+
 fn parse_listing(body: &str, locale: crate::locale::Locale) -> Result<Vec<Model>> {
     let doc: Value = serde_json::from_str(body).context(crate::locale::diagnostic(
         locale,
@@ -2164,6 +2180,7 @@ fn parse_listing(body: &str, locale: crate::locale::Locale) -> Result<Vec<Model>
     if let Some(data) = doc.get("data").and_then(Value::as_array) {
         ids.extend(
             data.iter()
+                .filter(|m| serves_chat_completions(m))
                 .filter_map(|m| m.get("id").and_then(Value::as_str))
                 .map(str::to_string),
         );
@@ -3290,6 +3307,22 @@ mod tests {
         )
         .unwrap();
         assert_eq!(b.len(), 2);
+        // A model that declares its endpoints is kept only when it serves Chat
+        // Completions; a listing without the field is unchanged.
+        let c = parse_listing(
+            r#"{"data":[
+                {"id":"openai/gpt-5","supported_endpoints":["/v1/chat/completions","/v1/responses"]},
+                {"id":"claude-sonnet-4-6","supported_endpoints":["/v1/messages"]},
+                {"id":"deepseek/deepseek-v4-flash","supported_endpoints":["chat/completions/"]},
+                {"id":"plain-model"}
+            ]}"#,
+            crate::locale::Locale::English,
+        )
+        .unwrap();
+        assert_eq!(
+            c.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+            ["openai/gpt-5", "deepseek/deepseek-v4-flash", "plain-model"]
+        );
         assert!(parse_listing("{}", crate::locale::Locale::English).is_err());
         assert!(parse_listing("nope", crate::locale::Locale::English).is_err());
     }
