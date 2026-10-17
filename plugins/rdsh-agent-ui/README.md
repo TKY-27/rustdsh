@@ -28,7 +28,7 @@ surface を削除すればパネルも消えます。
 - `store.js`：surface の検証と保存、操作の追記（重複は request_id で排除）
 - `index.js`：認証付きHTTPルート（`/api/rdsh-agent-ui/surface`、`/api/rdsh-agent-ui/action`）
 - `client.js`：チャットのターン末尾に表示するパネル（React、DSHのテーマ変数を使用）
-- `test/store.test.mjs`：検証・保存・追記の単体テスト
+- `test/*.test.mjs`：検証・保存・追記と surface 置換の単体テスト
 
 surface は保存ごとの専用ファイルに書き出してから置換します。並行して公開した場合は、最後に置換が完了した surface が残ります。
 
