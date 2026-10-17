@@ -296,6 +296,17 @@ git diff release-digests.tsv release-digests-windows.tsv
 Review both updated ledgers before announcing the new stable channel. Their
 `latest` rows must name the release GitHub marks Latest.
 
+The package-manager manifests in `packaging/` pin the same release, so refresh
+them in the same follow-up and review the regenerated files:
+
+```sh
+python3 scripts/update-packaging-manifests.py --version vX.Y.Z
+python3 -m unittest discover -s tests -p 'test_release_packaging_manifests.py'
+```
+
+[docs/PACKAGE-MANAGERS.md](PACKAGE-MANAGERS.md) describes the Homebrew, Scoop
+and winget channels and what each manifest pins.
+
 Test README installation commands in a clean environment. Announcements use the
 published notes. Failed builds leave staged artifacts; failed uploads or verification
 leave a draft. Never manually publish an incomplete draft.
