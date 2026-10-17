@@ -3053,8 +3053,10 @@ fn node_wrapper_warnings(
                     has_node |= base == "node" || base == "node.exe";
                     // An explicit `node /path/to/dsh/index.js` entry does not
                     // resolve the `dsh` command, so shadowing cannot break it.
-                    // docs/DOCTOR.md promises exactly this exclusion.
-                    let explicit_js_entry = token.contains('/') && token.ends_with(".js");
+                    // docs/DOCTOR.md promises exactly this exclusion. Do not
+                    // require a `/`: shell_words drops the backslashes inside
+                    // a quoted Windows path, so the separator is gone by now.
+                    let explicit_js_entry = token.ends_with(".js");
                     has_dsh |= token.contains("dsh") && !explicit_js_entry;
                 }
             }
@@ -4041,6 +4043,16 @@ mod doctor_wrapper_tests {
         };
         assert!(super::node_wrapper_warnings(
             &text("exec /usr/bin/node /opt/dsh/lib/bin.js \"$@\"\n"),
+            Path::new("unused"),
+            true,
+            &[],
+            crate::locale::Locale::English
+        )
+        .is_empty());
+        // A quoted Windows path loses its backslashes in shell_words, so the
+        // separator check must not require a `/`.
+        assert!(super::node_wrapper_warnings(
+            &text(r#"node "C:\Users\me\AppData\Roaming\npm\node_modules\@deepseek-ai\dsh\lib\bin.js" %*"#),
             Path::new("unused"),
             true,
             &[],
