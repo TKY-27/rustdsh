@@ -1,0 +1,45 @@
+[package]
+name = "rdsh-desktop"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+description = "Native (GPUI) desktop shell for rdsh: dashboard design, rdsh-speed data, no Electron or Node"
+license = "MIT"
+publish = false
+
+# Standalone workspace: the root crate keeps its build, test and release paths.
+[workspace]
+
+[[bin]]
+name = "rdsh-desktop"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0"
+env_logger = "0.11"
+log = "0.4"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+# Multiplexed stream transport (/api/remote.mux). Plain ws:// on loopback.
+tungstenite = "0.30"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Wayland keeps the Linux dependency surface small; the X11 backend additionally
+# needs the xkbcommon-x11 development symlink at link time.
+gpui = { version = "0.2.2", default-features = false, features = ["wayland", "font-kit"] }
+
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+gpui = "0.2.2"
+
+[build-dependencies]
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+strip = true
+
+# `zed-async-tar` (through `gpui_http_client`) pins `xattr` 0.2.3, which no longer
+# compiles on current Linux toolchains and has no fixed 0.2-compatible release.
+# The vendored shim implements the 0.2 API the dependency actually uses.
+[patch.crates-io]
+xattr = { path = "vendor/xattr" }

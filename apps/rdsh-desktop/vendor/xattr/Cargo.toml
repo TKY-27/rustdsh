@@ -1,0 +1,13 @@
+[package]
+name = "xattr"
+version = "0.2.3"
+edition = "2021"
+license = "MIT/Apache-2.0"
+description = "Minimal xattr shim (0.2 API) with the Linux ENOATTR build fix"
+
+[lib]
+name = "xattr"
+path = "src/lib.rs"
+
+[dependencies]
+libc = "0.2"
