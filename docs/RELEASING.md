@@ -25,6 +25,37 @@ in v0.2.0; do not drop contributors or manually copy a previous version's PRs.
 The script replaces any existing generated tail, so reruns do not duplicate it.
 Generation failure stops publication.
 
+## Release cadence
+
+Ship small: a user-visible change that lands on `main` gets its own patch
+release instead of waiting for a milestone.
+
+- **Patch `vX.Y.(Z+1)`** — the default. Any change users can see or run
+  differently: a fix, a CLI or UI behaviour change, a new flag, or an installer
+  change.
+- **Minor `vX.(Y+1).0`** — a coherent feature milestone, or a breaking change.
+  While the project is `0.x` there is no `1.0.0` yet, so breaking changes take a
+  minor bump, exactly as the existing `0.x` releases do.
+- **Major `v(X+1).0.0`** — `1.0.0` and later only.
+
+Every release empties `[Unreleased]`: promote the whole section into the dated
+`## [X.Y.Z] - YYYY-MM-DD` entry, then start appending to a fresh, empty
+`[Unreleased]` right away. An entry left behind never reaches that release's
+notes.
+
+[.github/workflows/release-cadence.yml](../.github/workflows/release-cadence.yml)
+runs daily and, once `[Unreleased]` has content, pushes `release/vX.Y.Z-prep`
+with the version bump, the CHANGELOG promotion and a notes skeleton, then opens
+the preparation pull request (or, while Actions cannot create pull requests, an
+issue naming the branch and the next step). It never tags.
+
+**Tag on the exact SHA whose required checks are green.** Create the annotated
+`vX.Y.Z` tag only after the preparation pull request is merged and that commit's
+required checks have passed; never tag a branch tip that changed after the checks
+ran, and never move or delete a published tag. The generated
+`docs/releases/vX.Y.Z.md` is a skeleton: review its summary and compatibility
+notes, and start the next `[Unreleased]` entry as soon as the release is out.
+
 ## Prepare and verify
 
 1. Create a release preparation PR against `main`. Update `Cargo.toml`, refresh
