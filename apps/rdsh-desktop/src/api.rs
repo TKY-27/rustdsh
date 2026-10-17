@@ -22,8 +22,16 @@ pub struct Api {
 }
 
 impl Api {
-    /// Exchange the process token for the signed browser-session cookie.
+    /// Exchange the process token for a signed cookie, or use the one the host
+    /// attach path already minted for a running service.
     pub fn connect(host: &Host) -> Result<Self> {
+        if let Some(cookie) = host.cookie.clone() {
+            return Ok(Self {
+                origin: host.origin.clone(),
+                cookie,
+                counter: Cell::new(0),
+            });
+        }
         let path = format!("/?token={}", host.token);
         let response = http::get(&host.origin, &path)
             .context("exchange the process token for a session cookie")?;

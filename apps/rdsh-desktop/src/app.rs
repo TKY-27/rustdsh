@@ -92,12 +92,16 @@ pub struct Chat {
     pub selected: Option<usize>,
     pub messages: Vec<Message>,
     pub catalog: Vec<CatalogEntry>,
+    pub reused: bool,
+    pub startup_ms: u128,
 }
 
 impl Chat {
     pub fn connect(mut progress: impl FnMut(&str)) -> anyhow::Result<Self> {
-        progress("ハーネスを起動しています…");
+        let started = std::time::Instant::now();
+        progress("ハーネスに接続しています…");
         let host = Host::start()?;
+        let reused = host.reused;
         progress("接続を認証しています…");
         let api = Api::connect(&host)?;
         let mut chat = Self {
@@ -108,6 +112,8 @@ impl Chat {
             selected: None,
             messages: Vec::new(),
             catalog: Vec::new(),
+            reused,
+            startup_ms: 0,
         };
         progress("モデル一覧を取得しています…");
         chat.catalog = chat.load_catalog();
@@ -115,6 +121,13 @@ impl Chat {
         chat.reload_sessions()?;
         progress("会話を読み込んでいます…");
         chat.load_conversation()?;
+        chat.startup_ms = started.elapsed().as_millis();
+        chat.status = format!(
+            "{} 件の会話 / 接続 {}ms{}",
+            chat.sessions.len(),
+            chat.startup_ms,
+            if chat.reused { "（ホスト再利用）" } else { "" }
+        );
         Ok(chat)
     }
 
@@ -463,22 +476,7 @@ impl Chat {
     }
 
     pub fn session_title(&self, session: &str) -> anyhow::Result<String> {
-        let mut mux = Mux::connect(&self.host.origin, self.api.cookie())?;
-        let address = serde_json::json!({ "kind": "session", "sessionId": session });
-        let stream = mux.open(
-            "session/follow",
-            serde_json::json!({ "request": { "address": address, "maxMessages": 1 } }),
-        )?;
-        let opening = mux.read()?;
-        let _ = mux.cancel(&stream);
-        let value = opening.get("value").cloned().unwrap_or(Value::Null);
-        Ok(value
-            .get("projections")
-            .and_then(|projections| projections.get("values"))
-            .and_then(|values| values.get("title"))
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string())
+        fetch_title(self.origin(), self.api.cookie(), session)
     }
 
     pub fn groups(&self) -> Vec<Group> {
@@ -496,6 +494,28 @@ impl Chat {
         }
         groups
     }
+}
+
+
+/// Read one conversation title over a short-lived socket. Free function so the
+/// title workers can run after the window already owns the connection.
+pub fn fetch_title(origin: &str, cookie: &str, session: &str) -> anyhow::Result<String> {
+    let mut mux = Mux::connect(origin, cookie)?;
+    let address = serde_json::json!({ "kind": "session", "sessionId": session });
+    let stream = mux.open(
+        "session/follow",
+        serde_json::json!({ "request": { "address": address, "maxMessages": 1 } }),
+    )?;
+    let opening = mux.read()?;
+    let _ = mux.cancel(&stream);
+    let value = opening.get("value").cloned().unwrap_or(Value::Null);
+    Ok(value
+        .get("projections")
+        .and_then(|projections| projections.get("values"))
+        .and_then(|values| values.get("title"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string())
 }
 
 fn model_of(values: &Value) -> Model {
@@ -799,6 +819,8 @@ pub struct DesktopApp {
     running: bool,
     dirty: bool,
     picker: bool,
+    sidebar_scroll: ScrollHandle,
+    timeline_scroll: ScrollHandle,
 }
 
 impl DesktopApp {
@@ -820,12 +842,45 @@ impl DesktopApp {
                     return;
                 }
             };
+            // Ready arrives before titles: the sidebar shows the list at once and
+            // titles stream in from worker threads while the window is usable.
+            let origin = chat.origin().to_string();
+            let cookie = chat.cookie().to_string();
+            let pending: Vec<String> = chat
+                .sessions
+                .iter()
+                .filter(|session| session.title.is_empty())
+                .take(80)
+                .map(|session| session.id.clone())
+                .collect();
             let titles = update_tx.clone();
-            let _ = update_tx.send(Update::Step("会話のタイトルを読み込んでいます…".to_string()));
-            chat.fill_titles(80, |batch| {
-                let _ = titles.send(Update::Titles(batch));
-            });
             let _ = update_tx.send(Update::Ready(Box::new(chat)));
+            if !pending.is_empty() {
+                std::thread::spawn(move || {
+                    let queue = std::sync::Arc::new(std::sync::Mutex::new(pending));
+                    let mut workers = Vec::new();
+                    for _ in 0..4 {
+                        let queue = queue.clone();
+                        let titles = titles.clone();
+                        let origin = origin.clone();
+                        let cookie = cookie.clone();
+                        workers.push(std::thread::spawn(move || loop {
+                            let next = queue.lock().ok().and_then(|mut queue| queue.pop());
+                            let Some(id) = next else {
+                                break;
+                            };
+                            if let Ok(title) = fetch_title(&origin, &cookie, &id) {
+                                if !title.is_empty() {
+                                    let _ = titles.send(Update::Titles(vec![(id, title)]));
+                                }
+                            }
+                        }));
+                    }
+                    for worker in workers {
+                        let _ = worker.join();
+                    }
+                });
+            }
         });
 
         poll(cx, update_rx, live_evt_rx, live_cmd_rx, live_evt_tx);
@@ -843,6 +898,8 @@ impl DesktopApp {
             running: false,
             dirty: false,
             picker: false,
+            sidebar_scroll: ScrollHandle::new(),
+            timeline_scroll: ScrollHandle::new(),
         }
     }
 
@@ -1161,7 +1218,8 @@ impl Render for DesktopApp {
                     .flex()
                     .flex_col()
                     .flex_1()
-                    .overflow_hidden()
+                    .overflow_y_scroll()
+                    .track_scroll(&self.sidebar_scroll)
                     .px(px(8.))
                     .when(loading, |element| {
                         element.children((0..8).map(|row| {
@@ -1177,10 +1235,18 @@ impl Render for DesktopApp {
                         }))
                     })
                     .when(!loading, |element| {
-                        element.children(groups.into_iter().map(|group| {
+                        // Only the rows that fit the viewport are built; a long
+                        // history would otherwise create thousands of elements
+                        // on every frame.
+                        let mut budget = 60usize;
+                        element.children(groups.into_iter().filter_map(|group| {
+                            if budget == 0 {
+                                return None;
+                            }
                             let rows: Vec<AnyElement> = group
                                 .sessions
                                 .into_iter()
+                                .take(budget)
                                 .map(|(index, session)| {
                                     let active = selected == Some(index);
                                     let title = titles
@@ -1259,6 +1325,8 @@ impl Render for DesktopApp {
                                         .into_any_element()
                                 })
                                 .collect();
+                            budget = budget.saturating_sub(rows.len());
+                            Some(
                             div()
                                 .flex()
                                 .flex_col()
@@ -1278,7 +1346,8 @@ impl Render for DesktopApp {
                                         ),
                                 )
                                 .children(rows)
-                                .into_any_element()
+                                .into_any_element(),
+                            )
                         }))
                     }),
             )
@@ -1478,7 +1547,8 @@ impl Render for DesktopApp {
             .flex()
             .flex_col()
             .flex_1()
-            .overflow_hidden()
+            .overflow_y_scroll()
+            .track_scroll(&self.timeline_scroll)
             .px(px(32.))
             .py(px(24.))
             .children(rows);

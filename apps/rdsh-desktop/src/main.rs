@@ -6,6 +6,7 @@
 
 mod api;
 mod app;
+mod cookies;
 mod host;
 mod http;
 mod live;
@@ -61,6 +62,34 @@ fn main() {
             Ok(report) => println!("{report}"),
             Err(error) => {
                 eprintln!("[rdsh-desktop] send failed: {error:#}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+
+    if args.iter().any(|arg| arg == "--dump-titles") {
+        let limit = args
+            .iter()
+            .position(|arg| arg == "--limit")
+            .and_then(|index| args.get(index + 1))
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(20);
+        match dump_titles(limit) {
+            Ok(report) => println!("{report}"),
+            Err(error) => {
+                eprintln!("[rdsh-desktop] dump-titles failed: {error:#}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+
+    if args.iter().any(|arg| arg == "--stop-host") {
+        match host::stop_cached() {
+            Ok(message) => println!("{message}"),
+            Err(error) => {
+                eprintln!("[rdsh-desktop] stop-host failed: {error:#}");
                 std::process::exit(1);
             }
         }
@@ -179,6 +208,24 @@ fn main() {
 
 
 
+
+
+/// Verify that conversation titles resolve (the window fills them in the
+/// background; this mode does the same work sequentially).
+fn dump_titles(limit: usize) -> anyhow::Result<String> {
+    use std::time::Instant;
+    let mut chat = app::Chat::connect(|_step| {})?;
+    let started = Instant::now();
+    let mut titles = Vec::new();
+    chat.fill_titles(limit, |batch| titles.extend(batch));
+    Ok(serde_json::to_string_pretty(&serde_json::json!({
+        "requested": limit,
+        "loaded": titles.len(),
+        "ms": started.elapsed().as_millis(),
+        "reused": chat.reused,
+        "sample": titles.iter().take(5).map(|(_, title)| title.clone()).collect::<Vec<_>>(),
+    }))?)
+}
 
 /// Create one conversation through the host and report its id.
 fn dump_new_session() -> anyhow::Result<String> {
@@ -305,14 +352,14 @@ fn dump_session(session: Option<&str>) -> anyhow::Result<String> {
 /// The exact sidebar/header state the window renders, without a display. This is
 /// how the layout and label rules are verified in CI.
 fn dump_ui() -> anyhow::Result<String> {
-    let mut chat = app::Chat::connect(|_step| {})?;
-    // The window fills titles in the background; the dump does the same so the
-    // reported list matches the rendered one.
-    let _ = chat.fill_titles(40, |_batch| {});
+    let chat = app::Chat::connect(|_step| {})?;
     let groups = chat.groups();
     let current = chat.selected_session().cloned();
     let report = serde_json::json!({
         "sessions": chat.sessions.len(),
+        "startupMs": chat.startup_ms,
+        "hostReused": chat.reused,
+        "titlesLoaded": chat.sessions.iter().filter(|session| !session.title.is_empty()).count(),
         "status": chat.status,
         "groups": groups
             .iter()

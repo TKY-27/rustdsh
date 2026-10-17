@@ -26,12 +26,14 @@ Electron, no bundled Chromium, no local web server.
 
 ~~~sh
 cd apps/rdsh-desktop
-cargo run                      # window
+cargo run --release            # window (recommended: the dev build is slower)
 cargo run -- --dump-ui         # sidebar/header state as JSON (headless)
+cargo run -- --dump-titles     # resolve conversation titles (headless)
 cargo run -- --dump-live       # both live sockets, 8s (headless)
 cargo run -- --new-session     # create a conversation and print its id
 cargo run -- --dump-session    # raw opening snapshot of one conversation
 cargo run -- --probe           # session list, model catalog, history
+cargo run -- --stop-host       # stop the detached harness host
 ~~~
 
 RDSH_DESKTOP_DSH points at the harness launcher (defaults to dsh on PATH).
@@ -62,6 +64,25 @@ pinned revision):
 - accent: (4176e6)
 - hairline borders at 4%, 10% and 12% black
 - radii 4/8/12/16/20/28, body 14px with a 24px line box
+
+## Startup and weight
+
+The app paints its shell first and loads data in the background. It attaches to a
+host that is already listening, and only starts one when nothing answers:
+
+- attach (normal): about 0.6s, and no extra Node process. The app mints the
+  signed browser cookie from the credentials secret, so an already running
+  service (or a previous launch) is used directly.
+- first launch without a host: about 9s once. The app starts a detached host and
+  caches its ready URL, so the next launch attaches in under a second.
+- --stop-host stops the detached host; RDSH_DESKTOP_ORIGIN forces one origin.
+
+Use --release: the debug binary is about 500MB and renders slowly, while the
+release build is 19MB. The dev profile keeps the app crate at opt-level 1 but
+builds dependencies at opt-level 3, which keeps dev runs responsive.
+
+Measured with --dump-ui: attach 606ms (release) / 949ms (dev), cold 9.4s,
+app RSS about 52MB.
 
 ## Notes
 

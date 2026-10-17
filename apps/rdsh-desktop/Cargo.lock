@@ -4420,9 +4420,11 @@ dependencies = [
  "anyhow",
  "env_logger",
  "gpui",
+ "hmac",
  "log",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tungstenite",
 ]
 
